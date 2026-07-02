@@ -1,37 +1,140 @@
 using my.bookshop from '../db/schema';
 
 service CatalogService {
-  entity Books   as projection on bookshop.Books;
+
+  @odata.draft.enabled
+  entity Books as projection on bookshop.Books {
+    *,
+    author : redirected to Authors
+  } actions {
+    action restock(quantity: Integer) returns String;
+  };
+
   entity Authors as projection on bookshop.Authors;
 
-  action restock(book: UUID, quantity: Integer) returns String;
 }
 
 annotate CatalogService.Books with @(
   UI: {
-    LineItem: [
-      { Value: title,       Label: 'Title' },
-      { Value: author.name, Label: 'Author' },
-      { Value: stock,       Label: 'In Stock' },
-      { Value: stockStatus, Label: 'Availability', Criticality: criticality }
-    ],
+
     SelectionFields: [ title, stock ],
-    HeaderInfo: {
-      TypeName: 'Book',
-      TypeNamePlural: 'Books',
-      Title:       { Value: title },
-      Description: { Value: author.name }
-    },
-    Facets: [
-      { $Type: 'UI.ReferenceFacet', Label: 'Book Details', Target: '@UI.FieldGroup#Main' }
+
+    LineItem: [
+      { Value: title,       Label: 'Title'    },
+      { Value: author.name, Label: 'Author'   },
+      { Value: stock,       Label: 'In Stock' },
+      {
+        $Type       : 'UI.DataFieldWithCriticality',
+        Value       : stockStatus,
+        Criticality : criticality,
+        Label       : 'Availability'
+      }
     ],
-    FieldGroup #Main: {
+
+    Identification: [
+      {
+        $Type              : 'UI.DataFieldForAction',
+        Action             : 'CatalogService.restock',
+        Label              : 'Restock',
+        InvocationGrouping : #ChangeSet
+      }
+    ],
+
+    HeaderInfo: {
+      TypeName       : 'Book',
+      TypeNamePlural : 'Books',
+      Title          : { Value: title },
+      Description    : { Value: author_ID }
+    },
+
+    Facets: [
+      {
+        $Type  : 'UI.ReferenceFacet',
+        ID     : 'BookDetailsFacet',
+        Label  : 'Book Details',
+        Target : '@UI.FieldGroup#BookDetails'
+      },
+      {
+        $Type  : 'UI.ReferenceFacet',
+        ID     : 'StockFacet',
+        Label  : 'Stock Information',
+        Target : '@UI.FieldGroup#StockInfo'
+      }
+    ],
+
+    FieldGroup #BookDetails: {
       Data: [
-        { Value: title },
-        { Value: author.name, Label: 'Author' },
-        { Value: stock },
-        { Value: stockStatus, Criticality: criticality }
+        { Value: ID,        Label: 'Book ID' },
+        { Value: title,     Label: 'Title'   },
+        { Value: author_ID, Label: 'Author'  }
+      ]
+    },
+
+    FieldGroup #StockInfo: {
+      Data: [
+        { Value: stock, Label: 'Stock Count' }
       ]
     }
+
   }
 );
+
+annotate CatalogService.Books with {
+  ID          @Core.Immutable;
+  title       @mandatory;
+  stock       @mandatory;
+  stockStatus @Core.Computed;
+  criticality @Core.Computed;
+}
+
+annotate CatalogService.Books with {
+  author @(
+    Common: {
+      Text            : author.name,
+      TextArrangement : #TextOnly,
+      ValueList: {
+        CollectionPath : 'Authors',
+        Parameters     : [
+          {
+            $Type             : 'Common.ValueListParameterOut',
+            LocalDataProperty : author_ID,
+            ValueListProperty : 'ID'
+          },
+          {
+            $Type             : 'Common.ValueListParameterDisplayOnly',
+            ValueListProperty : 'name'
+          }
+        ]
+      }
+    }
+  );
+}
+
+annotate CatalogService.Authors with @(
+  UI.LineItem: [
+    { Value: ID,   Label: 'ID'     },
+    { Value: name, Label: 'Author' }
+  ]
+);
+
+annotate CatalogService.Authors with {
+  ID   @Core.Immutable;
+  name @mandatory;
+}
+
+annotate CatalogService.Books actions {
+  restock(
+    quantity @(
+      title               : 'Quantity',
+      Common.FieldControl : #Mandatory
+    )
+  );
+}
+
+annotate CatalogService.Books with actions {
+  restock @(
+    Common.SideEffects: {
+      TargetProperties: ['stock']
+    }
+  );
+};

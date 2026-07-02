@@ -9,3 +9,23 @@ POST http://localhost:4004/odata/v4/catalog/Books
 Content-Type: application/json
 
 { "ID": "104", "title": "Foundation", "stock": 7 }
+
+### Restock Book 101
+POST http://localhost:4004/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)/CatalogService.restock
+Content-Type: application/json
+
+{
+  "quantity": 10
+}
+GET http://localhost:4004/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)
+### Restock Book 101
+POST http://localhost:4004/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)/CatalogService.restock
+Content-Type: application/json
+
+{
+  "quantity": 10
+}
+
+### Get Book 101
+GET http://localhost:4004/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)
+Accept: application/json

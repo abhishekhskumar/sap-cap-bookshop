@@ -1,40 +1,52 @@
 module.exports = (srv) => {
 
-  // 1. Computed field (from before)
-  srv.after('READ', 'Books', (books) => {
-    for (const book of books) {
+  // 1. Computed fields
+  srv.after(['READ', 'EDIT'], 'Books', (books) => {
+    const list = Array.isArray(books) ? books : [books];
+    for (const book of list) {
       book.stockStatus = book.stock > 0 ? 'in stock' : 'out of stock';
-      book.criticality = book.stock > 0 ? 3 : 1;   // 3 = green, 1 = red
+      book.criticality = book.stock > 0 ? 3 : 1;
     }
   });
 
-  // 2. Validation: reject bad data before it's saved
+  // 2. Validation on create
   srv.before('CREATE', 'Books', (req) => {
     const { title, stock } = req.data;
-    if (!title) {
-      return req.error(400, 'A book must have a title.');
-    }
-    if (stock < 0) {
-      return req.error(400, 'Stock cannot be negative.');
-    }
+    if (!title)    return req.error(400, 'A book must have a title.');
+    if (stock < 0) return req.error(400, 'Stock cannot be negative.');
   });
 
-  // 3. Custom action: add quantity to a book's stock
-  srv.on('restock', async (req) => {
-    const { book, quantity } = req.data;
+  // 3. Validation on edit
+  srv.before('UPDATE', 'Books', (req) => {
+    const { title, stock } = req.data;
+    if (title !== undefined && !title)
+      return req.error(400, 'A book must have a title.');
+    if (stock !== undefined && stock < 0)
+      return req.error(400, 'Stock cannot be negative.');
+  });
+
+  // 4. Restock — bound action
+  srv.on('restock', 'Books', async (req) => {
+    const { quantity } = req.data;
+    const ID = req.params[0].ID;
     const { Books } = srv.entities;
 
-    if (quantity <= 0) {
+    if (!quantity || quantity <= 0)
       return req.error(400, 'Quantity must be greater than zero.');
-    }
 
-    const found = await SELECT.one.from(Books).where({ ID: book });
-    if (!found) {
-      return req.error(404, `No book found with ID ${book}.`);
-    }
+    const found = await SELECT.one.from(Books)
+    .columns('ID', 'title', 'stock')
+      .where({ ID });
 
-    await UPDATE(Books).set({ stock: found.stock + quantity }).where({ ID: book });
-    return `Restocked "${found.title}" by ${quantity}. New stock: ${found.stock + quantity}.`;
+    if (!found)
+      return req.error(404, `No book found with ID ${ID}.`);
+
+    const newStock = found.stock + quantity;
+    await UPDATE(Books)
+      .set({ stock: newStock })
+      .where({ ID });
+
+    return `Restocked "${found.title}" by ${quantity}. New stock: ${newStock}.`;
   });
 
 };

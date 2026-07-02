@@ -1,22 +1,33 @@
-# Getting Started
+cat > readme.md << 'EOF'
+# SAP CAP Bookshop
 
-Welcome to your new CAP project.
+A full-stack SAP BTP application built with SAP Cloud Application Programming Model (CAP) and SAP Fiori Elements.
 
-It contains these folders and files, following our recommended project layout:
+## Features
+- Fiori Elements List Report with criticality-based stock indicators
+- Object Page with two sections (Book Details, Stock Information)
+- Full CRUD with draft mode (@odata.draft.enabled)
+- Author value help dropdown
+- Server-side validation on create and update
+- Bound custom action (Restock) with parameter dialog
+- OData V4 service with SQLite (local) / SAP HANA (production)
 
-File or Folder | Purpose
----------|----------
-`app/` | content for UI frontends goes here
-`db/` | your domain models and data go here
-`srv/` | your service models and code go here
-`readme.md` | this getting started guide
+## Tech Stack
+- SAP CAP Node.js (@sap/cds 9.9.2)
+- SAP Fiori Elements (sap.fe.templates)
+- SAP UI5 1.149.1
+- OData V4
+- SQLite (dev) / SAP HANA (prod)
 
-## Next Steps
+## Run Locally
+\`\`\`bash
+npm install
+cds watch
+\`\`\`
+Open: http://localhost:4004/bookshopui/index.html
 
-- Open a new terminal and run `cds watch`
-- (in VS Code simply choose _**Terminal** > Run Task > cds watch_)
-- Start with your domain model, in a CDS file in `db/`
-
-## Learn More
-
-Learn more at <https://cap.cloud.sap>.
+## Project Structure
+- db/ — CDS data model (Books, Authors)
+- srv/ — OData service + business logic
+- app/bookshop-ui/ — Fiori Elements UI
+EOF

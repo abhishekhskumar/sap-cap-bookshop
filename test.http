@@ -1,0 +1,11 @@
+### Try to create an INVALID book (negative stock) — should FAIL with 400
+POST http://localhost:4004/odata/v4/catalog/Books
+Content-Type: application/json
+
+{ "ID": "103", "title": "Bad Book", "stock": -5 }
+
+### Create a VALID book — should succeed
+POST http://localhost:4004/odata/v4/catalog/Books
+Content-Type: application/json
+
+{ "ID": "104", "title": "Foundation", "stock": 7 }

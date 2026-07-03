@@ -121,6 +121,27 @@ module.exports = (srv) => {
     return 'Book rejected.';
   });
 
+  srv.on('discontinue', 'Books', async (req) => {
+    const ID = req.params[0].ID;
+    const { Books } = srv.entities;
+
+    if (!req.user.is('admin'))
+      return req.reject(403, 'Only admins can discontinue books.');
+
+    const updated = await UPDATE(Books)
+      .set({
+        approvalStatus: 'rejected',
+        stock: 0,
+        reviewedBy: req.user.id,
+        reviewedAt: new Date().toISOString()
+      })
+      .where({ ID });
+
+    if (!updated) return req.error(404, `No book found with ID ${ID}.`);
+
+    return `Book ${ID} discontinued: approvalStatus set to rejected and stock set to 0.`;
+  });
+
   // ── External service consumption ──────────────────────────
 
   // Connect to the external ReviewsAPI

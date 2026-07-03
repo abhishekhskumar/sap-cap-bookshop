@@ -143,4 +143,29 @@ describe('CatalogService', () => {
       expect([403, 404]).toContain(res.status);
     });
   });
+
+  describe('discontinue action', () => {
+    it('discontinues a book as admin and sets approvalStatus rejected and stock 0', async () => {
+      const { status, data } = await POST(
+        '/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)/CatalogService.discontinue',
+        {},
+        admin
+      );
+      expect(status).toBe(200);
+      expect(data.value).toContain('discontinued');
+
+      const { data: book } = await GET('/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)', admin);
+      expect(book.approvalStatus).toBe('rejected');
+      expect(book.stock).toBe(0);
+    });
+
+    it('blocks non-admin from discontinuing a book (403)', async () => {
+      const res = await POST(
+        '/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)/CatalogService.discontinue',
+        {},
+        viewer
+      ).catch(e => e.response);
+      expect(res.status).toBe(403);
+    });
+  });
 });

@@ -12,6 +12,7 @@ service CatalogService {
     action restock(quantity: Integer) returns String;
     action approve()                  returns String;
     action reject()                   returns String;
+    action discontinue()             returns String;
   };
 
   entity Authors as projection on bookshop.Authors;

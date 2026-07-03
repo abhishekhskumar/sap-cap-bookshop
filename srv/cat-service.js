@@ -82,6 +82,45 @@ module.exports = (srv) => {
     return `Restocked "${found.title}" by ${quantity}. New stock: ${newStock}.`;
   });
 
+  // Approval workflow
+  srv.on('approve', 'Books', async (req) => {
+    const ID = req.params[0].ID;
+    const { Books } = srv.entities;
+
+    if (!req.user.is('admin'))
+      return req.reject(403, 'Only admins can approve books.');
+
+    await UPDATE(Books)
+      .set({
+        approvalStatus: 'approved',
+        reviewedBy: req.user.id,
+        reviewedAt: new Date().toISOString()
+      })
+      .where({ ID });
+
+    srv.emit('BookApproved', { book_id: ID, approvedBy: req.user.id });
+    return 'Book approved successfully.';
+  });
+
+  srv.on('reject', 'Books', async (req) => {
+    const ID = req.params[0].ID;
+    const { Books } = srv.entities;
+
+    if (!req.user.is('admin'))
+      return req.reject(403, 'Only admins can reject books.');
+
+    await UPDATE(Books)
+      .set({
+        approvalStatus: 'rejected',
+        reviewedBy: req.user.id,
+        reviewedAt: new Date().toISOString()
+      })
+      .where({ ID });
+
+    srv.emit('BookRejected', { book_id: ID, rejectedBy: req.user.id });
+    return 'Book rejected.';
+  });
+
   // ── External service consumption ──────────────────────────
 
   // Connect to the external ReviewsAPI

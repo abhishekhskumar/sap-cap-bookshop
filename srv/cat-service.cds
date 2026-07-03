@@ -9,6 +9,8 @@ service CatalogService {
     author : redirected to Authors
   } actions {
     action restock(quantity: Integer) returns String;
+    action approve()                  returns String;
+    action reject()                   returns String;
   };
 
   entity Authors as projection on bookshop.Authors;
@@ -61,6 +63,18 @@ annotate CatalogService.Books with @(
         Action             : 'CatalogService.restock',
         Label              : 'Restock',
         InvocationGrouping : #ChangeSet
+      },
+      {
+        $Type              : 'UI.DataFieldForAction',
+        Action             : 'CatalogService.approve',
+        Label              : 'Approve',
+        InvocationGrouping : #ChangeSet
+      },
+      {
+        $Type              : 'UI.DataFieldForAction',
+        Action             : 'CatalogService.reject',
+        Label              : 'Reject',
+        InvocationGrouping : #ChangeSet
       }
     ],
     HeaderInfo: {
@@ -81,18 +95,35 @@ annotate CatalogService.Books with @(
         ID     : 'StockFacet',
         Label  : 'Stock Information',
         Target : '@UI.FieldGroup#StockInfo'
+      },
+      {
+        $Type  : 'UI.ReferenceFacet',
+        ID     : 'ApprovalFacet',
+        Label  : 'Approval Status',
+        Target : '@UI.FieldGroup#Approval'
       }
     ],
     FieldGroup #BookDetails: {
       Data: [
-        { Value: ID,        Label: 'Book ID' },
-        { Value: title,     Label: 'Title'   },
-        { Value: author_ID, Label: 'Author'  }
+        { Value: ID,        Label: 'Book ID'  },
+        { Value: title,     Label: 'Title'    },
+        { Value: author_ID, Label: 'Author'   },
+        { Value: isbn,      Label: 'ISBN'     },
+        { Value: pageCount, Label: 'Pages'    },
+        { Value: language,  Label: 'Language' },
+        { Value: price,     Label: 'Price'    }
       ]
     },
     FieldGroup #StockInfo: {
       Data: [
         { Value: stock, Label: 'Stock Count' }
+      ]
+    },
+    FieldGroup #Approval: {
+      Data: [
+        { Value: approvalStatus, Label: 'Status'      },
+        { Value: reviewedBy,     Label: 'Reviewed By' },
+        { Value: reviewedAt,     Label: 'Reviewed On' }
       ]
     }
   }

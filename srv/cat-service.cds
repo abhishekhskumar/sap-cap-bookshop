@@ -1,5 +1,6 @@
 using my.bookshop from '../db/schema';
 using ReviewsAPI from './external/reviews-api';
+using API_BUSINESS_PARTNER from './external/business-partner';
 
 service CatalogService {
 
@@ -39,6 +40,14 @@ service CatalogService {
     rating: Decimal(2,1);
     reviewCount: Integer;
     summary: String;
+  };
+
+  @readonly entity Suppliers as projection on API_BUSINESS_PARTNER.A_BusinessPartner;
+
+  function getSupplier(id: String) returns {
+    name    : String;
+    country : String;
+    industry: String;
   };
 
 }

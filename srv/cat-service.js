@@ -145,6 +145,27 @@ module.exports = (srv) => {
     return reviewsApi.run(req.query);
   });
 
+  // ── S/4HANA Business Partner integration ──────────────────
+  srv.on('READ', 'Suppliers', async (req) => {
+    const s4 = await cds.connect.to('API_BUSINESS_PARTNER');
+    return s4.run(req.query);
+  });
+
+  srv.on('getSupplier', async (req) => {
+    const { id } = req.data;
+    const s4 = await cds.connect.to('API_BUSINESS_PARTNER');
+    const bp = await s4.run(
+      SELECT.one.from('A_BusinessPartner')
+        .where({ BusinessPartner: id })
+    );
+    if (!bp) return req.error(404, 'Supplier not found: ' + id);
+    return {
+      name: bp.BusinessPartnerFullName,
+      country: bp.Country,
+      industry: bp.Industry
+    };
+  });
+
   // ── Event listeners ─────────────────────────────────────────
 
   srv.on('BookRestocked', async (msg) => {

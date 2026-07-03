@@ -57,6 +57,9 @@
       "ReviewsAPI": {
         "kind": "mocked"
       },
+      "API_BUSINESS_PARTNER": {
+        "kind": "mocked"
+      },
       "[production]": {
         "db": "hana",
         "auth": {

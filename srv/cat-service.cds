@@ -16,9 +16,7 @@ service CatalogService {
 
 annotate CatalogService.Books with @(
   UI: {
-
     SelectionFields: [ title, stock ],
-
     LineItem: [
       { Value: title,       Label: 'Title'    },
       { Value: author.name, Label: 'Author'   },
@@ -30,7 +28,6 @@ annotate CatalogService.Books with @(
         Label       : 'Availability'
       }
     ],
-
     Identification: [
       {
         $Type              : 'UI.DataFieldForAction',
@@ -39,14 +36,12 @@ annotate CatalogService.Books with @(
         InvocationGrouping : #ChangeSet
       }
     ],
-
     HeaderInfo: {
       TypeName       : 'Book',
       TypeNamePlural : 'Books',
       Title          : { Value: title },
       Description    : { Value: author_ID }
     },
-
     Facets: [
       {
         $Type  : 'UI.ReferenceFacet',
@@ -61,7 +56,6 @@ annotate CatalogService.Books with @(
         Target : '@UI.FieldGroup#StockInfo'
       }
     ],
-
     FieldGroup #BookDetails: {
       Data: [
         { Value: ID,        Label: 'Book ID' },
@@ -69,13 +63,11 @@ annotate CatalogService.Books with @(
         { Value: author_ID, Label: 'Author'  }
       ]
     },
-
     FieldGroup #StockInfo: {
       Data: [
         { Value: stock, Label: 'Stock Count' }
       ]
     }
-
   }
 );
 
@@ -130,11 +122,3 @@ annotate CatalogService.Books actions {
     )
   );
 }
-
-annotate CatalogService.Books with actions {
-  restock @(
-    Common.SideEffects: {
-      TargetProperties: ['stock']
-    }
-  );
-};

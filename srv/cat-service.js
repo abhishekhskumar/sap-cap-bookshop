@@ -1,5 +1,15 @@
 module.exports = (srv) => {
 
+  srv.before(['CREATE','UPDATE','DELETE'], 'Books', (req) => {
+    if (!req.user.is('admin'))
+      return req.reject(403, 'Only admins can modify books.');
+  });
+
+  srv.before('restock', 'Books', (req) => {
+    if (!req.user.is('admin'))
+      return req.reject(403, 'Only admins can restock.');
+  });
+
   // 1. Computed fields
   srv.after(['READ', 'EDIT'], 'Books', (books) => {
     const list = Array.isArray(books) ? books : [books];

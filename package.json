@@ -20,5 +20,18 @@
   ],
   "sapux": [
     "app/bookshop-ui"
-  ]
+  ],
+  "cds": {
+    "requires": {
+      "auth": {
+        "kind": "mocked",
+        "users": {
+          "alice": { "password": "alice", "roles": ["admin"] },
+          "bob":   { "password": "bob",   "roles": ["viewer"] },
+          "eve":   { "password": "eve",   "roles": [] }
+        },
+        "default": "alice"
+      }
+    }
+  }
 }

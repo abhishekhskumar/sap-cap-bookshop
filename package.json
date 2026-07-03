@@ -47,6 +47,9 @@
           }
         },
         "default": "alice"
+      },
+      "ReviewsAPI": {
+        "kind": "mocked"
       }
     }
   }

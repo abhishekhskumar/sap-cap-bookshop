@@ -59,4 +59,28 @@ module.exports = (srv) => {
     return `Restocked "${found.title}" by ${quantity}. New stock: ${newStock}.`;
   });
 
+  // ── External service consumption ──────────────────────────
+
+  // Connect to the external ReviewsAPI
+  srv.on('getBookReview', async (req) => {
+    const { book_id } = req.data;
+    const reviewsApi = await cds.connect.to('ReviewsAPI');
+    const { Reviews } = reviewsApi.entities;
+    const result = await reviewsApi.run(
+      SELECT.one.from(Reviews).where({ book_id })
+    );
+    if (!result) return req.error(404, 'No review found for book ' + book_id);
+    return {
+      rating: result.rating,
+      reviewCount: result.reviewCount,
+      summary: result.summary
+    };
+  });
+
+  // Enrich Books READ with review data
+  srv.on('READ', 'Reviews', async (req) => {
+    const reviewsApi = await cds.connect.to('ReviewsAPI');
+    return reviewsApi.run(req.query);
+  });
+
 };

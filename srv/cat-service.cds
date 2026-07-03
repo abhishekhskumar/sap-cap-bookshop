@@ -1,4 +1,5 @@
 using my.bookshop from '../db/schema';
+using ReviewsAPI from './external/reviews-api';
 
 service CatalogService {
 
@@ -11,6 +12,14 @@ service CatalogService {
   };
 
   entity Authors as projection on bookshop.Authors;
+
+  // Expose reviews from external service
+  @readonly entity Reviews as projection on ReviewsAPI.Reviews;
+  function getBookReview(book_id: Integer) returns {
+    rating: Decimal(2,1);
+    reviewCount: Integer;
+    summary: String;
+  };
 
 }
 

@@ -1,33 +1,11 @@
-### 1. Alice (Admin) - should get 200
-GET http://localhost:4004/odata/v4/catalog/Books
+### Get all reviews
+GET http://localhost:4004/odata/v4/catalog/Reviews
 Authorization: Basic YWxpY2U6YWxpY2U=
 
-###
-
-### 2. Bob (Viewer) - should get 200
-GET http://localhost:4004/odata/v4/catalog/Books
-Authorization: Basic Ym9iOmJvYg==
-
-###
-
-### 3. Eve (no roles) - should get 403
-GET http://localhost:4004/odata/v4/catalog/Books
-Authorization: Basic ZXZlOmV2ZQ==
-
-###
-
-### 4. Bob restock - should get 403
-POST http://localhost:4004/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)/CatalogService.restock
-Authorization: Basic Ym9iOmJvYg==
-Content-Type: application/json
-
-{ "quantity": 5 }
-
-###
-
-### 5. Alice restock - should get 200
-POST http://localhost:4004/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)/CatalogService.restock
+### Get Dune review
+GET http://localhost:4004/odata/v4/catalog/getBookReview(book_id=101)
 Authorization: Basic YWxpY2U6YWxpY2U=
-Content-Type: application/json
 
-{ "quantity": 5 }
+### Get 1984 review
+GET http://localhost:4004/odata/v4/catalog/getBookReview(book_id=102)
+Authorization: Basic YWxpY2U6YWxpY2U=

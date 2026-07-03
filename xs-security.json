@@ -1,0 +1,31 @@
+{
+  "xsappname": "sap-cap-bookshop",
+  "tenant-mode": "dedicated",
+  "scopes": [
+    {
+      "name": "$XSAPPNAME.admin",
+      "description": "Admin access"
+    },
+    {
+      "name": "$XSAPPNAME.viewer",
+      "description": "Viewer access"
+    }
+  ],
+  "role-templates": [
+    {
+      "name": "admin",
+      "description": "Admin role",
+      "scope-references": [
+        "$XSAPPNAME.admin"
+      ]
+    },
+    {
+      "name": "viewer",
+      "description": "Viewer role",
+      "scope-references": [
+        "$XSAPPNAME.viewer"
+      ]
+    }
+  ],
+  "attributes": []
+}

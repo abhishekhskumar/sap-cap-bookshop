@@ -2,11 +2,14 @@
   "name": "my-cap-app",
   "version": "1.0.0",
   "dependencies": {
-    "@sap/cds": "^9"
+    "@cap-js/hana": "^2",
+    "@sap/cds": "^9",
+    "@sap/xssec": "^4"
   },
   "devDependencies": {
     "@cap-js/cds-test": "^1.0.1",
     "@cap-js/sqlite": "^2",
+    "@sap/cds-dk": "^9",
     "@sap/eslint-plugin-cds": "^4",
     "cds-plugin-ui5": "^0.17.0",
     "eslint": "^9",
@@ -28,6 +31,9 @@
     "requires": {
       "auth": {
         "kind": "mocked",
+        "[development]": {
+          "kind": "dummy"
+        },
         "users": {
           "alice": {
             "password": "alice",
@@ -50,6 +56,12 @@
       },
       "ReviewsAPI": {
         "kind": "mocked"
+      },
+      "[production]": {
+        "db": "hana",
+        "auth": {
+          "kind": "xsuaa"
+        }
       }
     }
   }

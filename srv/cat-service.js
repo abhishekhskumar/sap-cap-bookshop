@@ -21,15 +21,17 @@ module.exports = (srv) => {
     }
   });
 
-  // 2. Validation on create
+  // 2. Validation on create (skip for draft inserts — title may be empty until draftActivate)
   srv.before('CREATE', 'Books', (req) => {
+    if (req.target?.isDraft) return;
     const { title, stock } = req.data;
     if (!title)    return req.error(400, 'A book must have a title.');
     if (stock < 0) return req.error(400, 'Stock cannot be negative.');
   });
 
-  // 3. Validation on edit
+  // 3. Validation on edit (skip for draft patches — validate at draftActivate time)
   srv.before('UPDATE', 'Books', (req) => {
+    if (req.target?.isDraft) return;
     const { title, stock } = req.data;
     if (title !== undefined && !title)
       return req.error(400, 'A book must have a title.');

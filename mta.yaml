@@ -1,0 +1,59 @@
+_schema-version: "3.1"
+ID: sap-cap-bookshop
+version: 1.0.0
+description: SAP CAP Bookshop Application
+
+parameters:
+  enable-parallel-deployments: true
+
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - npx cds build --production
+
+modules:
+  - name: sap-cap-bookshop-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      buildpack: nodejs_buildpack
+      memory: 256M
+    requires:
+      - name: sap-cap-bookshop-db
+      - name: sap-cap-bookshop-auth
+    provides:
+      - name: srv-api
+        properties:
+          srv-url: ${default-url}
+
+  - name: sap-cap-bookshop-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+      memory: 256M
+    requires:
+      - name: sap-cap-bookshop-db
+
+resources:
+  - name: sap-cap-bookshop-db
+    type: com.sap.xs.hdi-container
+    parameters:
+      service: hana
+      service-plan: hdi-shared
+
+  - name: sap-cap-bookshop-auth
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      config:
+        xsappname: my-cap-app-${org}-${space}
+        tenant-mode: dedicated
+        oauth2-configuration:
+          credential-types:
+            - "binding-secret"
+            - "x509"

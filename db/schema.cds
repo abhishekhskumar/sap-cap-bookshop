@@ -15,3 +15,13 @@ entity Authors : managed {
   name  : String(111);
   books : Association to many Books on books.author = $self;
 }
+
+entity AuditLog {
+  key ID    : UUID;
+  action    : String;
+  entity_   : String;
+  entityKey : String;
+  details   : String;
+  user      : String;
+  timestamp : Timestamp;
+}

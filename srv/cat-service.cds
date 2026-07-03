@@ -13,6 +13,24 @@ service CatalogService {
 
   entity Authors as projection on bookshop.Authors;
 
+  @readonly entity AuditLog as projection on bookshop.AuditLog;
+
+  // Events for async messaging
+  event BookRestocked {
+    book_id   : Integer;
+    title     : String;
+    quantity  : Integer;
+    newStock  : Integer;
+    timestamp : Timestamp;
+  }
+
+  event LowStock {
+    book_id  : Integer;
+    title    : String;
+    stock    : Integer;
+    timestamp: Timestamp;
+  }
+
   // Expose reviews from external service
   @readonly entity Reviews as projection on ReviewsAPI.Reviews;
   function getBookReview(book_id: Integer) returns {

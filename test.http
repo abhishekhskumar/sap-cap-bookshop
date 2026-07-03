@@ -9,3 +9,16 @@ Authorization: Basic YWxpY2U6YWxpY2U=
 ### Get 1984 review
 GET http://localhost:4004/odata/v4/catalog/getBookReview(book_id=102)
 Authorization: Basic YWxpY2U6YWxpY2U=
+
+###
+POST http://localhost:4004/odata/v4/catalog/Books(ID=101,IsActiveEntity=true)/CatalogService.restock
+Authorization: Basic YWxpY2U6YWxpY2U=
+Content-Type: application/json
+
+{ "quantity": 10 }
+### Get all reviews
+POST http://localhost:4004/odata/v4/catalog/Books(ID=102,IsActiveEntity=true)/CatalogService.restock
+Authorization: Basic YWxpY2U6YWxpY2U=
+Content-Type: application/json
+
+{ "quantity": 3 }

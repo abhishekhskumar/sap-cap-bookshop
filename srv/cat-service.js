@@ -1,3 +1,5 @@
+const cds = require('@sap/cds');
+
 module.exports = (srv) => {
 
   srv.before(['CREATE','UPDATE','DELETE'], 'Books', (req) => {
@@ -56,6 +58,25 @@ module.exports = (srv) => {
       .set({ stock: newStock })
       .where({ ID });
 
+    // Emit restock event
+    srv.emit('BookRestocked', {
+      book_id: ID,
+      title: found.title,
+      quantity,
+      newStock,
+      timestamp: new Date().toISOString()
+    });
+
+    // Emit low stock alert if stock drops below 10
+    if (newStock < 10) {
+      srv.emit('LowStock', {
+        book_id: ID,
+        title: found.title,
+        stock: newStock,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     return `Restocked "${found.title}" by ${quantity}. New stock: ${newStock}.`;
   });
 
@@ -81,6 +102,40 @@ module.exports = (srv) => {
   srv.on('READ', 'Reviews', async (req) => {
     const reviewsApi = await cds.connect.to('ReviewsAPI');
     return reviewsApi.run(req.query);
+  });
+
+  // ── Event listeners ─────────────────────────────────────────
+
+  srv.on('BookRestocked', async (msg) => {
+    const { book_id, title, quantity, newStock, timestamp } = msg.data;
+    console.log(`[EVENT] BookRestocked: "${title}" +${quantity} → stock: ${newStock}`);
+
+    // Write to audit log
+    await INSERT.into('my.bookshop.AuditLog').entries({
+      ID: cds.utils.uuid(),
+      action: 'RESTOCK',
+      entity_: 'Books',
+      entityKey: String(book_id),
+      details: `Restocked "${title}" by ${quantity}. New stock: ${newStock}`,
+      user: 'system',
+      timestamp
+    });
+  });
+
+  srv.on('LowStock', async (msg) => {
+    const { book_id, title, stock, timestamp } = msg.data;
+    console.log(`[ALERT] LowStock: "${title}" only ${stock} left!`);
+
+    // Write alert to audit log
+    await INSERT.into('my.bookshop.AuditLog').entries({
+      ID: cds.utils.uuid(),
+      action: 'LOW_STOCK_ALERT',
+      entity_: 'Books',
+      entityKey: String(book_id),
+      details: `Low stock alert: "${title}" has only ${stock} units`,
+      user: 'system',
+      timestamp
+    });
   });
 
 };

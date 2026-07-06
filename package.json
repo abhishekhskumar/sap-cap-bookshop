@@ -5,6 +5,7 @@
     "@cap-js/audit-logging": "^1.2.2",
     "@cap-js/change-tracking": "^2.0.1",
     "@cap-js/hana": "^2",
+    "@cap-js/telemetry": "^2.0.1",
     "@sap/cds": "^9",
     "@sap/xssec": "^4"
   },

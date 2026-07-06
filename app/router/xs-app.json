@@ -1,0 +1,54 @@
+{
+  "authenticationMethod": "route",
+  "welcomeFile": "/bookshopui/webapp/index.html",
+  "logout": {
+    "logoutEndpoint": "/do/logout",
+    "logoutPage": "/"
+  },
+  "routes": [
+    {
+      "source": "^/bookshopui/(.*)$",
+      "target": "$1",
+      "localDir": "../bookshop-ui/webapp",
+      "authenticationType": "xsuaa"
+    },
+    {
+      "source": "^/odata/v4/(.*)$",
+      "target": "/odata/v4/$1",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa",
+      "csrfProtection": true
+    },
+    {
+      "source": "^/(.*)$",
+      "target": "$1",
+      "destination": "srv-api",
+      "authenticationType": "xsuaa",
+      "csrfProtection": true
+    }
+  ],
+  "headerWhiteList": [
+    "X-Frame-Options",
+    "Content-Security-Policy",
+    "Strict-Transport-Security",
+    "X-Content-Type-Options"
+  ],
+  "responseHeaders": [
+    {
+      "name": "X-Frame-Options",
+      "value": "DENY"
+    },
+    {
+      "name": "X-Content-Type-Options",
+      "value": "nosniff"
+    },
+    {
+      "name": "Strict-Transport-Security",
+      "value": "max-age=31536000; includeSubDomains"
+    },
+    {
+      "name": "Content-Security-Policy",
+      "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sapui5.hana.ondemand.com; style-src 'self' 'unsafe-inline' https://sapui5.hana.ondemand.com; font-src 'self' https://sapui5.hana.ondemand.com; img-src 'self' data: https://sapui5.hana.ondemand.com; connect-src 'self' https://*.hana.ondemand.com"
+    }
+  ]
+}

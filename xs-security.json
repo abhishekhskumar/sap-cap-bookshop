@@ -27,5 +27,21 @@
       ]
     }
   ],
+  "role-collections": [
+    {
+      "name": "BookshopAdmin",
+      "description": "Full access to bookshop",
+      "role-template-references": [
+        "$XSAPPNAME.admin"
+      ]
+    },
+    {
+      "name": "BookshopViewer",
+      "description": "Read-only access to bookshop",
+      "role-template-references": [
+        "$XSAPPNAME.viewer"
+      ]
+    }
+  ],
   "attributes": []
 }

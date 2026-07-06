@@ -1,7 +1,7 @@
 using my.bookshop from './schema';
 
 extend my.bookshop.Books with {
-  isbn           : String(13);
+  isbn           : String(17);
   pageCount      : Integer;
   language       : String(2) default 'EN';
   price          : Decimal(10,2);

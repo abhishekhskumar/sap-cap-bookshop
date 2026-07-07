@@ -17,3 +17,9 @@ mta_archives/
 
 # @cap-js/cds-typer
 @cds-models
+
+# Secrets - never commit
+.env
+.env.*
+*.pdf
+uploads/

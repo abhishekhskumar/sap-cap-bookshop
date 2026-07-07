@@ -7,7 +7,9 @@
     "@cap-js/hana": "^2",
     "@cap-js/telemetry": "^2.0.1",
     "@sap/cds": "^9",
-    "@sap/xssec": "^4"
+    "@sap/xssec": "^4",
+    "dotenv": "^17.4.2",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@cap-js/cds-test": "^1.0.1",

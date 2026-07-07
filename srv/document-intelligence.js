@@ -1,6 +1,10 @@
 require('dotenv').config();
 const cds = require('@sap/cds');
+const fs = require('fs');
+const path = require('path');
 const assetData = require('./data/asset-report.json');
+
+const INVOICE_FOLDER = process.env.INVOICE_FOLDER || 'C:/Users/abhishek.hs.kumar/Accenture/Agentic AI US Use Tax - Internal team - Merged';
 let scnMapping = {};
 try { scnMapping = require('./data/scn-mapping.json'); } catch (e) { console.log('scn-mapping.json not present'); }
 
@@ -9,6 +13,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
   async init() {
     this.on('extractDocAI', this._handleExtractDocAI);
     this.on('processInvoice', this._handleProcessInvoice);
+    this.on('auditWithVision', this._handleAuditWithVision);
+    this.on('listInvoices', this._handleListInvoices);
+    this.on('getInvoiceFile', this._handleGetInvoiceFile);
     await super.init();
   }
 
@@ -39,8 +46,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     ]);
     const fields = Object.entries(docAIHeader).map(([k, v]) => ({
       fieldName: k, docAIValue: v.value || '', confidence: v.confidence || 0,
-      taxCritical: taxCriticalFields.has(k)
+      taxCritical: taxCriticalFields.has(k),
+      page: v.page || 1, boundingBox: v.coordinates || null
     }));
+    console.log('BBOX SAMPLE:', JSON.stringify(fields.slice(0, 3).map(f => ({ name: f.fieldName, bbox: f.boundingBox, page: f.page }))));
 
     let lineItems, pageTypeUsed = null, grossAmount = null;
     if (routedTo === 'construction') {
@@ -81,7 +90,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       shipToAddress: resolved.shipToAddress,
       documentDate: getH('documentDate'), purchaseOrderNumber: getH('purchaseOrderNumber'),
       invoiceNetTotal, shipToPostalCode: resolved.shipToPostalCode,
-      shipToCity: resolved.shipToCity, shipToState: resolved.shipToState, country: getH('country')
+      shipToCity: resolved.shipToCity, shipToState: resolved.shipToState, country: getH('country'),
+      resolvedFromCaption: resolved.resolvedFromCaption, resolvedFromNote: resolved.resolvedFromNote
     };
     const generalInfo = this._buildGeneralInfo(inv, asset);
 
@@ -100,6 +110,18 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       apcReconciliation = { status: 'mismatch', label: 'Amounts do not reconcile with APC End', match: false, apcEnd, gross: apcGross, lineSum: apcLineSum, diff: +(apcGross - apcEnd).toFixed(2) };
     }
 
+    const consistencyChecks = this._runConsistencyChecks({
+      lineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
+      invoiceGrossTotal, invoiceFreightTotal: docAIFreightTotal,
+      purchaseOrderNumber: inv.purchaseOrderNumber,
+      shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode,
+      documentId
+    });
+    const manualAction = this._determineManualAction(
+      { documentId, shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode, lineItems },
+      consistencyChecks, fields
+    );
+
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
       fields, lineItems, suppressedLines,
@@ -110,6 +132,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       pageTypeUsed, grossAmount,
       resolvedFrom: resolved.resolvedFrom,
       apcReconciliation,
+      consistencyChecks, manualAction,
       generalInfo, docAIHeader,
       processingTimeMs: Date.now() - startTime
     });
@@ -163,7 +186,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           verdict: 'VERIFIED',
           confidence: v.confidence || 0,
           reason: 'Doc AI high-confidence — auto-verified, Claude not called (cost saved)',
-          taxCritical: false
+          taxCritical: false,
+          page: v.page || 1,
+          boundingBox: v.coordinates || null
         })),
         lineItems: routedTo === 'construction'
           ? [Object.assign(this._consolidateConstruction(keepLines, docAIFreightTotal, docAIHeader), {
@@ -244,7 +269,13 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       taxabilityStatus: 'Pending tax layer', chargeabilityStatus: 'Pending tax layer', acceptanceStatus: ''
     };
 
-    const fields = intelligence.fields || [];
+    const fields = (intelligence.fields || []).map(function(f) {
+      const docH = docAIHeader[f.fieldName];
+      return Object.assign({}, f, {
+        boundingBox: (docH && docH.coordinates) || f.boundingBox || null,
+        page: (docH && docH.page) || f.page || 1
+      });
+    });
     const verified = fields.filter(f => f.verdict === 'VERIFIED').length;
     const corrected = fields.filter(f => f.verdict === 'CORRECTED').length;
     const flagged = fields.filter(f => f.verdict === 'FLAGGED').length;
@@ -265,7 +296,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       shipToPostalCode: resolved.shipToPostalCode,
       shipToCity: resolved.shipToCity,
       shipToState: resolved.shipToState,
-      country: getF('country')
+      country: getF('country'),
+      resolvedFromCaption: resolved.resolvedFromCaption,
+      resolvedFromNote: resolved.resolvedFromNote
     };
     const generalInfo = this._buildGeneralInfo(inv, asset);
 
@@ -292,6 +325,18 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const docAICostPerDoc = 0.02;
     const claudeCostPerDoc = claudeTriggered ? 0.015 : 0;
 
+    const consistencyChecks = this._runConsistencyChecks({
+      lineItems: claudeLineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
+      invoiceGrossTotal, invoiceFreightTotal,
+      purchaseOrderNumber: inv.purchaseOrderNumber,
+      shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode,
+      documentId
+    });
+    const manualAction = this._determineManualAction(
+      { documentId, shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode, lineItems: claudeLineItems },
+      consistencyChecks, fields
+    );
+
     return JSON.stringify({
       documentId,
       schemaType,
@@ -299,7 +344,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       lineItems: claudeLineItems,
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
       lineItemCorrections: intelligence.lineItemCorrections || [],
-      consistencyChecks: intelligence.consistencyChecks || [],
+      consistencyChecks,
+      manualAction,
       freightTotal: intelligence.freightTotal || 0,
       summary: intelligence.summary || '',
       overallConfidence: intelligence.overallConfidence || 0,
@@ -332,6 +378,111 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         fieldsAdjudicated: claudeTriggered ? fields.length : 0
       }
     });
+  }
+
+  async _handleAuditWithVision(req) {
+    const { documentId, imageBase64 } = req.data;
+    const LOG = cds.log('intelligence');
+    if (!imageBase64) return req.error(400, 'imageBase64 is required');
+    LOG.info(`Vision audit requested: ${documentId}`);
+
+    const startTime = Date.now();
+    let intelligence;
+    try {
+      intelligence = await this._callVisionAudit(imageBase64);
+    } catch (err) {
+      LOG.error('Vision audit failed:', err.message);
+      return req.error(500, `Vision audit failed: ${err.message}`);
+    }
+
+    const fields = (intelligence.fields || []).map(function(f) {
+      return Object.assign({}, f, { routedTo: 'claude-vision' });
+    });
+
+    const verified  = fields.filter(function(f){ return f.verdict === 'VERIFIED';  }).length;
+    const corrected = fields.filter(function(f){ return f.verdict === 'CORRECTED'; }).length;
+    const flagged   = fields.filter(function(f){ return f.verdict === 'FLAGGED';   }).length;
+
+    const vendorTaxAmount = intelligence.vendorTaxAmount != null
+      ? parseFloat(String(intelligence.vendorTaxAmount).replace(/[^0-9.\-]/g, ''))
+      : null;
+
+    // Distribute freight across any keep line items Claude Vision extracted
+    const rawItems = (intelligence.lineItems || []).filter(function(li){ return !li.isFreight && li.lineVerdict !== 'SUPPRESSED'; });
+    const lineItems = rawItems.map(function(li) {
+      return Object.assign({}, li, { freightAmount: 0, itemAmount: li.amount || 0, netAmount: li.amount || 0, vertexTaxAmount: null, freightTaxAmount: null });
+    });
+    const invoiceNetTotal = +(lineItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2) || null;
+    const invoiceGrossTotal = vendorTaxAmount != null && invoiceNetTotal != null
+      ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2) : invoiceNetTotal;
+
+    LOG.info(`Vision audit complete in ${Date.now() - startTime}ms — ${fields.length} fields, ${lineItems.length} lines`);
+
+    return JSON.stringify({
+      documentId,
+      schemaType: intelligence.invoiceMode || 'non_construction',
+      invoiceMode: intelligence.invoiceMode || 'non_construction',
+      fields,
+      lineItems,
+      suppressedLines: [],
+      lineItemCorrections: [],
+      consistencyChecks: intelligence.consistencyChecks || [],
+      summary: intelligence.summary || '',
+      overallConfidence: intelligence.overallConfidence || 0,
+      invoiceNetTotal,
+      vendorTaxAmount,
+      invoiceGrossTotal,
+      invoiceTotalAmount: invoiceGrossTotal,
+      invoiceFreightTotal: 0,
+      apcReconciliation: null,
+      generalInfo: [],
+      reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex', chargeabilityStatus: 'Pending Vertex' },
+      stats: { total: fields.length, verified, corrected, flagged },
+      processingTimeMs: Date.now() - startTime,
+      visionAudit: true,
+      costValue: { claudeTriggered: true, docAICostPerDoc: 0, claudeCostPerDoc: 0.02, totalCostPerDoc: 0.02 }
+    });
+  }
+
+  async _handleListInvoices(req) {
+    const bySCN = (assetData && assetData.bySCN) ? assetData.bySCN : assetData;
+    let files;
+    try {
+      files = fs.readdirSync(INVOICE_FOLDER);
+    } catch (err) {
+      return req.error(500, `Cannot read invoice folder: ${err.message}`);
+    }
+    const results = files
+      .filter(function(f) { return path.extname(f).toLowerCase() === '.pdf'; })
+      .map(function(f) {
+        const scnid = path.basename(f, '.pdf');
+        const assetRecords = bySCN[scnid];
+        const supplierName = (assetRecords && assetRecords[0] && assetRecords[0].supplierName) || '';
+        return { scnid, fileName: f, supplierName, hasAssetData: !!assetRecords };
+      })
+      .sort(function(a, b) { return a.scnid.localeCompare(b.scnid); });
+    return JSON.stringify(results);
+  }
+
+  async _handleGetInvoiceFile(req) {
+    const { fileName } = req.data;
+    if (!fileName) return req.error(400, 'fileName is required');
+    // Security: reject any path separators or traversal sequences
+    if (/[/\\]/.test(fileName) || fileName.includes('..')) {
+      return req.error(400, 'Invalid fileName');
+    }
+    const filePath = path.join(INVOICE_FOLDER, fileName);
+    // Confirm the resolved path is still inside INVOICE_FOLDER
+    const resolvedFolder = path.resolve(INVOICE_FOLDER);
+    const resolvedFile  = path.resolve(filePath);
+    if (!resolvedFile.startsWith(resolvedFolder + path.sep) && resolvedFile !== resolvedFolder) {
+      return req.error(400, 'Invalid fileName');
+    }
+    if (!fs.existsSync(resolvedFile)) {
+      return req.error(404, `File not found: ${fileName}`);
+    }
+    const buf = fs.readFileSync(resolvedFile);
+    return buf.toString('base64');
   }
 
   _computeTriggerDecision(docAIHeader) {
@@ -451,7 +602,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const ext = raw.extraction || {};
     if (ext.headerFields) {
       for (const f of ext.headerFields) {
-        headerFields[f.name] = { value: f.value || '', confidence: Math.round((f.confidence || 0) * 100) };
+        headerFields[f.name] = {
+          value: f.value || '',
+          confidence: Math.round((f.confidence || 0) * 100),
+          page: f.page || 1,
+          coordinates: f.coordinates || null
+        };
       }
     }
 
@@ -627,6 +783,163 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     const content = data.orchestration_result?.choices?.[0]?.message?.content || '';
     const cleaned = content.replace(/```json|```/g, '').trim();
     return JSON.parse(cleaned);
+  }
+
+  async _callVisionAudit(imageBase64) {
+    const authUrl       = process.env.AI_CORE_AUTH_URL;
+    const clientId      = process.env.AI_CORE_CLIENT_ID;
+    const clientSecret  = process.env.AI_CORE_CLIENT_SECRET;
+    const deploymentUrl = process.env.AI_CORE_DEPLOYMENT_URL;
+    const resourceGroup = process.env.AI_CORE_RESOURCE_GROUP || 'use-tax';
+    const modelName     = process.env.AI_CORE_MODEL || 'anthropic--claude-4.5-sonnet';
+
+    if (!authUrl || !clientId) throw new Error('AI Core credentials not configured');
+
+    const tokenRes = await fetch(authUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret })
+    });
+    if (!tokenRes.ok) throw new Error(`AI Core token failed: ${tokenRes.status}`);
+    const { access_token } = await tokenRes.json();
+
+    const orchBody = {
+      orchestration_config: {
+        module_configurations: {
+          templating_module_config: { template: [{ role: 'user', content: '{{?instruction}}' }] },
+          llm_module_config: { model_name: modelName, model_params: { max_tokens: 4000 } }
+        }
+      },
+      input_params: { instruction: 'Analyze the invoice image provided and return the structured field audit as JSON.' },
+      messages_history: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: this._buildVisionPrompt() },
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } }
+          ]
+        }
+      ]
+    };
+
+    const response = await fetch(deploymentUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+        'Content-Type': 'application/json',
+        'AI-Resource-Group': resourceGroup
+      },
+      body: JSON.stringify(orchBody)
+    });
+    if (!response.ok) throw new Error(`AI Core vision call failed: ${response.status} ${await response.text()}`);
+
+    const data = await response.json();
+    console.log('VISION RAW RESPONSE:', JSON.stringify(data.orchestration_result).substring(0, 3000));
+    const content = data.orchestration_result?.choices?.[0]?.message?.content || '';
+    const cleaned = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      console.log('VISION PARSE FAILED —', e.message);
+      console.log('VISION CLEANED CONTENT:', cleaned.substring(0, 2000));
+      throw e;
+    }
+    console.log('VISION PARSED fields:', parsed.fields ? parsed.fields.length : 'PARSE FAILED');
+    return parsed;
+  }
+
+  _buildVisionPrompt() {
+    return `You are auditing an invoice by reading its image directly. You are the primary extraction source — there is no prior OCR output to compare against. Extract and verify the COMPLETE field set from what you see in the image, matching the same coverage as a full Doc AI + Claude text audit.
+
+For each field:
+1. Extract the value you can read from the image. Set docAIValue = correctValue (you are the sole extractor).
+2. verdict = VERIFIED if clearly legible; FLAGGED if partially obscured, ambiguous, or absent.
+3. confidence (0-100): 95-100 = printed clearly and unambiguously; 75-90 = present but minor obstruction; 50-74 = partially legible or inferred; <50 = guessed or not visible.
+4. routedTo = "claude-vision" on EVERY field without exception.
+5. If a field is genuinely absent from the invoice, output it with correctValue = "" and verdict = FLAGGED.
+
+ADDRESS PRIORITY (determines tax jurisdiction — critical):
+- NON-CONSTRUCTION: Ship-to Address > Project Address > Contract Address. NEVER use Bill-To (Accenture Chicago, 500 W Madison) as the tax address.
+- CONSTRUCTION: Project Address > Contract Address > Ship-to Address.
+Identify ALL address blocks visible on the invoice (Ship-to, Project, Contract, Bill-To/Accenture) and extract each one separately. The tax-jurisdiction fields (shipToAddress/City/State/PostalCode) must come from the winning block per the priority above.
+
+taxCritical = true for: shipToAddress, shipToCity, shipToState, shipToPostalCode, grossAmount, taxAmount, taxAmountHeader.
+taxCritical = false for all other fields.
+
+REQUIRED FIELDS — extract every one, in this order:
+
+Core invoice header:
+  vendorName              — legal entity issuing the invoice (not a remit-to processor)
+  invoiceNumber           — invoice / document number
+  documentDate            — invoice date, MM/DD/YYYY
+  purchaseOrderNumber     — PO number (Accenture POs: 10-digit, start with 6)
+  grossAmount             — total amount due on the invoice (strip currency symbols)
+  netAmount               — subtotal before tax (strip currency symbols; empty string if not shown)
+  subTotal                — line items subtotal if printed separately (empty string if not shown)
+  taxAmount               — tax dollar amount from a header tax field; null if not present as a header
+  taxAmountHeader         — same as taxAmount if printed as a header-level field; null if absent
+  taxPercentage           — tax rate printed on the invoice as a percentage (e.g. "5.5"); null if absent
+  totalTaxableAmount      — taxable base amount if explicitly printed; null if absent
+  shippingCostHeader      — freight/shipping amount from a header field (not a line item); null if absent
+  workCompletedThisPeriodTotal — for construction invoices: current-period total from sworn statement or application; null if not a construction invoice or not present
+
+Winning tax-jurisdiction address (per priority rule above):
+  shipToAddress           — street address of the winning block
+  shipToCity              — city of the winning block
+  shipToState             — two-letter state abbreviation
+  shipToPostalCode        — ZIP code
+
+Project address block (extract if visible — may be the winning block for construction):
+  projectAddress          — street address
+  projectAddressCity      — city
+  projectAddressState     — state abbreviation
+  projectAddressPostalCode — ZIP
+
+Contract/delivery address block (extract if visible):
+  contractDetails         — street address
+  contractDetailsCity     — city
+  contractDetailsPostalcode — ZIP (no state field for this block)
+
+Bill-To / Accenture address block (extract if visible — for reference only, never the tax address):
+  accentureAddress        — street address
+  accentureAddressCity    — city
+  accentureAddressState   — state
+  accentureAddressPostalCode — ZIP
+
+Other:
+  country                 — country of the delivery/project address (e.g. "US")
+
+LINE ITEMS — extract all visible rows:
+- For each line: unspsc (if printed, else ""), description, amount (as printed on invoice), isFreight (true if shipping/freight/delivery line), lineVerdict (VERIFIED or FLAGGED), lineReason (what you saw), lineConfidence, page (page number the line appears on, default 1).
+- Freight/shipping lines: isFreight=true, lineVerdict="SUPPRESSED".
+- Tax lines: lineVerdict="SUPPRESSED", isFreight=false.
+- PO/reference-only rows with no amount: lineVerdict="SUPPRESSED".
+- Real billable lines: lineVerdict="VERIFIED" (or FLAGGED if unreadable).
+
+CONSISTENCY CHECKS — report these:
+- Do line item amounts sum to the invoice subtotal/gross?
+- If tax rate and tax amount are both visible, does base × rate ≈ tax amount?
+- Is ship-to state consistent with city and ZIP?
+
+Return ONLY this JSON — no markdown fences, no prose before or after:
+{
+  "invoiceMode": "non_construction",
+  "invoiceTaxRate": 0,
+  "vendorTaxAmount": null,
+  "fields": [
+    { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED", "confidence": 0, "reason": "read from invoice header top-left", "taxCritical": false, "routedTo": "claude-vision" }
+  ],
+  "lineItems": [
+    { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "lineVerdict": "VERIFIED", "lineReason": "", "lineConfidence": 80, "page": 1 }
+  ],
+  "lineItemCorrections": [],
+  "consistencyChecks": [
+    { "check": "Line items sum to gross", "result": "PASS|FAIL|UNKNOWN", "detail": "" }
+  ],
+  "summary": "2-3 sentence summary of image legibility, field coverage, and overall confidence.",
+  "overallConfidence": 0
+}`;
   }
 
   _buildAuditPrompt(schemaType) {
@@ -854,6 +1167,129 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
     return intelligence;
   }
 
+  _runConsistencyChecks(result) {
+    const checks = [];
+    const fmt = n => n != null ? (+n).toFixed(2) : '—';
+
+    // 1. lineItemsSumToNet
+    const lineItems = result.lineItems || [];
+    const netTotal = result.invoiceNetTotal;
+    if (lineItems.length > 0 && netTotal != null) {
+      const lineSum = +(lineItems.reduce((s, li) => s + (li.itemAmount || 0), 0)).toFixed(2);
+      const diff = +(lineSum - netTotal).toFixed(2);
+      const passed = Math.abs(diff) <= 1.0;
+      checks.push({
+        name: 'lineItemsSumToNet', passed, severity: 'error',
+        message: passed
+          ? `Line items sum to ${fmt(lineSum)} ≈ invoice net ${fmt(netTotal)}.`
+          : `Line items sum to ${fmt(lineSum)} but invoice net is ${fmt(netTotal)} (diff ${diff >= 0 ? '+' : ''}${fmt(diff)}).`,
+        values: { lineSum, netTotal, diff }
+      });
+    }
+
+    // 2. grossEqualsNetPlusTax
+    const vendorTax = result.vendorTaxAmount;
+    const gross = result.invoiceGrossTotal;
+    if (vendorTax != null && gross != null && netTotal != null) {
+      const expected = +(netTotal + vendorTax).toFixed(2);
+      const diff2 = +(gross - expected).toFixed(2);
+      const passed = Math.abs(diff2) <= 1.0;
+      checks.push({
+        name: 'grossEqualsNetPlusTax', passed, severity: 'error',
+        message: passed
+          ? `Gross ${fmt(gross)} = net ${fmt(netTotal)} + tax ${fmt(vendorTax)}.`
+          : `Gross ${fmt(gross)} ≠ net ${fmt(netTotal)} + tax ${fmt(vendorTax)} = ${fmt(expected)} (diff ${diff2 >= 0 ? '+' : ''}${fmt(diff2)}).`,
+        values: { gross, netTotal, vendorTax, expected, diff: diff2 }
+      });
+    }
+
+    // 3. freightReconciles
+    const freightTotal = result.invoiceFreightTotal;
+    if (freightTotal != null && freightTotal > 0 && lineItems.length > 0) {
+      const freightSum = +(lineItems.reduce((s, li) => s + (li.freightAmount || 0), 0)).toFixed(2);
+      const diff3 = +(freightSum - freightTotal).toFixed(2);
+      const passed = Math.abs(diff3) <= 1.0;
+      checks.push({
+        name: 'freightReconciles', passed, severity: 'error',
+        message: passed
+          ? `Distributed freight ${fmt(freightSum)} ≈ freight source ${fmt(freightTotal)}.`
+          : `Distributed freight ${fmt(freightSum)} != freight source ${fmt(freightTotal)}.`,
+        values: { freightSum, freightTotal, diff: diff3 }
+      });
+    }
+
+    // 4. poFormat
+    const po = (result.purchaseOrderNumber || '').trim();
+    if (po) {
+      const passed = /^6001\d{6}$/.test(po);
+      checks.push({
+        name: 'poFormat', passed, severity: 'warning',
+        message: passed
+          ? `PO ${po} matches expected format.`
+          : `PO ${po} doesn't match expected format (10-digit starting 6001).`,
+        values: { purchaseOrderNumber: po }
+      });
+    }
+
+    // 5. shipToCompleteForVertex
+    const shipToCity = result.shipToCity || null;
+    const shipToPostalCode = result.shipToPostalCode || null;
+    const shipOk = !!(shipToCity && shipToPostalCode);
+    checks.push({
+      name: 'shipToCompleteForVertex', passed: shipOk, severity: 'error',
+      message: shipOk
+        ? `Ship-to complete: ${shipToCity} ${shipToPostalCode}.`
+        : 'Ship-to incomplete for Vertex (city or postal missing).',
+      values: { shipToCity, shipToPostalCode }
+    });
+
+    return checks;
+  }
+
+  _determineManualAction(result, checks, fields) {
+    const reasons = [];
+
+    // Low-confidence fields
+    (fields || []).forEach(f => {
+      if (f.confidence != null && +f.confidence < 75) {
+        reasons.push(`Low confidence on "${f.fieldName}": ${f.confidence}%`);
+      }
+    });
+
+    // Failed error-severity consistency checks
+    (checks || []).forEach(c => {
+      if (!c.passed && c.severity === 'error') {
+        reasons.push(`Consistency check failed [${c.name}]: ${c.message}`);
+      }
+    });
+
+    // Empty/missing SCNID
+    const scnid = (result.documentId || '').trim();
+    if (!scnid || scnid.toUpperCase() === 'UNKNOWN') {
+      reasons.push('SCNID is empty or missing.');
+    }
+
+    // Missing ship-to city or postal (only if not already captured by shipToCompleteForVertex check)
+    if (!result.shipToCity || !result.shipToPostalCode) {
+      const alreadyListed = (checks || []).some(c => c.name === 'shipToCompleteForVertex' && !c.passed);
+      if (!alreadyListed) {
+        reasons.push('Ship-to city or postal code missing — cannot determine jurisdiction.');
+      }
+    }
+
+    // Missing UNSPSC on KEEP lines
+    (result.lineItems || []).forEach((li, idx) => {
+      if (!li.isFreight && (!li.unspsc || li.unspsc.trim() === '')) {
+        reasons.push(`Line ${idx + 1} ("${li.description || 'unknown'}"): missing UNSPSC code.`);
+      }
+    });
+
+    // Vertex fail — uncomment when Vertex is wired:
+    // if (result.vertexFailed) reasons.push('Vertex tax lookup failed.');
+
+    return { required: reasons.length > 0, reasons };
+  }
+
   _resolveShipTo(getVal, invoiceMode) {
     const g = k => { const v = getVal(k); return (v == null || v === '') ? null : v; };
     const blocks = {
@@ -862,18 +1298,27 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
       shipto:    { city: g('shipToCity'),            postal: g('shipToPostalCode'),          state: g('shipToState'),           addr: g('shipToAddress') },
       accenture: { city: g('accentureAddressCity'), postal: g('accentureAddressPostalCode'), state: g('accentureAddressState'), addr: g('accentureAddress') }
     };
-    const order = invoiceMode === 'construction'
+    const isConstruction = invoiceMode === 'construction';
+    const order = isConstruction
       ? ['project', 'contract', 'shipto', 'accenture']
       : ['shipto', 'project', 'contract', 'accenture'];
+    const LABELS = { shipto: 'ShipTo Address', project: 'Project Address', contract: 'Contract Details', accenture: 'Accenture Address' };
+    const priorityStr = isConstruction ? 'Project > Contract > ShipTo > Accenture' : 'ShipTo > Project > Contract > Accenture';
+    const modeLabel = isConstruction ? 'construction' : 'non-construction';
     for (const name of order) {
       const b = blocks[name];
       if ((b.city != null && b.city !== '') || (b.postal != null && b.postal !== '')) {
+        const priorityNum = order.indexOf(name) + 1;
+        const caption = `Resolved from: ${LABELS[name]} (priority ${priorityNum} for ${modeLabel}: ${priorityStr})`;
+        const note = name === 'accenture'
+          ? 'Accenture billing address used — no higher-priority address available on the invoice; this is an approximation, not the delivery location.'
+          : null;
         console.log('_resolveShipTo: winner=%s city=%s postal=%s', name, b.city, b.postal);
-        return { shipToAddress: b.addr, shipToCity: b.city, shipToState: b.state, shipToPostalCode: b.postal, resolvedFrom: name };
+        return { shipToAddress: b.addr, shipToCity: b.city, shipToState: b.state, shipToPostalCode: b.postal, resolvedFrom: name, resolvedFromCaption: caption, resolvedFromNote: note };
       }
     }
     console.log('_resolveShipTo: no block won — returning nulls');
-    return { shipToAddress: null, shipToCity: null, shipToState: null, shipToPostalCode: null, resolvedFrom: 'none' };
+    return { shipToAddress: null, shipToCity: null, shipToState: null, shipToPostalCode: null, resolvedFrom: 'none', resolvedFromCaption: null, resolvedFromNote: null };
   }
 
   _consolidateConstruction(lineItems, freightTotal, headerFields) {
@@ -970,18 +1415,30 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
       return { field, assetReportValue: a, invoiceValue: i, match };
     };
 
+    const assetCity = A.cityName || A.supplierCity || null;
+    const assetState = A.stateName || A.supplierState || null;
+    const assetPostal = A.supplierPostalCode || A.postalCodeShipTo || null;
+    let shipMatch = null;
+    if ((assetCity || assetPostal) && (inv.shipToCity || inv.shipToPostalCode)) {
+      const cityOk = !assetCity || !inv.shipToCity || norm(assetCity) === norm(inv.shipToCity);
+      const postalOk = !assetPostal || !inv.shipToPostalCode || norm(assetPostal) === norm(inv.shipToPostalCode);
+      const stateOk = !assetState || !inv.shipToState || normState(assetState) === normState(inv.shipToState);
+      shipMatch = cityOk && postalOk && stateOk;
+    }
     return [
-      row('Vendor Name',    A.supplierName,                             inv.vendorName),
-      row('SCNID',          A.scnId,                                    asset ? asset.scnid : null),
-      row('Ship to address',A.shipToAddressSAP,                         inv.shipToAddress),
-      row('Invoice Date',   null,                                        inv.documentDate),
-      row('PO Number',      A.poNumber,                                 inv.purchaseOrderNumber),
-      row('Total Amount',   null,                                        inv.invoiceNetTotal != null ? String(inv.invoiceNetTotal) : null),
-      row('APC End',        A.apcEndValue,                              null),
-      row('Postal Code',    A.supplierPostalCode || A.postalCodeShipTo,  inv.shipToPostalCode),
-      exactRow('City',      A.cityName || A.supplierCity,               inv.shipToCity),
-      exactRow('State',     A.stateName || A.supplierState,             inv.shipToState, normState),
-      row('Country',        A.supplierCountry,                          inv.country)
+      row('Vendor Name',  A.supplierName,  inv.vendorName),
+      row('SCNID',        A.scnId,         asset ? asset.scnid : null),
+      { field: 'Ship-to Location', type: 'shipTo',
+        invoiceAddress: inv.shipToAddress || null, invoiceCity: inv.shipToCity || null,
+        invoiceState: inv.shipToState || null, invoicePostalCode: inv.shipToPostalCode || null,
+        assetAddress: A.shipToAddressSAP || null, assetCity, assetState, assetPostal,
+        caption: inv.resolvedFromCaption || null, note: inv.resolvedFromNote || null,
+        match: shipMatch },
+      row('Invoice Date', null,            inv.documentDate),
+      row('PO Number',    A.poNumber,      inv.purchaseOrderNumber),
+      row('Total Amount', null,            inv.invoiceNetTotal != null ? String(inv.invoiceNetTotal) : null),
+      row('APC End',      A.apcEndValue,   null),
+      row('Country',      A.supplierCountry, inv.country)
     ];
   }
 };

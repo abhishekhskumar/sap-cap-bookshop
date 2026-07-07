@@ -15,4 +15,15 @@ service DocumentIntelligenceService @(path: '/api/intelligence') {
     invoiceBase64 : LargeString,
     mediaType : String
   ) returns String;
+
+  action auditWithVision(
+    documentId : String,
+    imageBase64 : LargeString
+  ) returns String;
+
+  action listInvoices() returns String;
+
+  action getInvoiceFile(
+    fileName : String
+  ) returns String;
 }

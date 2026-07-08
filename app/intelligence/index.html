@@ -42,6 +42,7 @@
   .controls { display:flex; gap:12px; align-items:center; margin-bottom:14px; }
   button.primary { padding:9px 22px; border:none; border-radius:6px; background:#0a6ed1; color:#fff; font-weight:600; font-size:13px; cursor:pointer; }
   button.primary:disabled { background:#ccc; cursor:not-allowed; }
+  .rerun-link { font-size:11px; font-weight:400; opacity:.78; cursor:pointer; margin-left:6px; text-decoration:underline; }
   .card { background:#fff; border-radius:8px; margin-bottom:14px; overflow:hidden; box-shadow:0 1px 2px rgba(0,0,0,.08); }
   .card-title { padding:12px 16px; font-size:14px; font-weight:600; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center; }
   .sec-title { font-size:16px; font-weight:700; margin:6px 0 10px; }
@@ -220,7 +221,8 @@
 </div>
 
 <script>
-var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null;
+var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, _renderedLineItems=[];
+var _statusDocAI=null, _statusClaude=null, _statusVision=null;
 var allInvoices=[], filterAssetOnly=true;
 var pdfDoc=null, pdfCurrentPage=1, pdfTotalPages=0, pdfViewport=null, ocrBoxes=[];
 var roi={annualVolume:25000,triggerRate:20,minutesSaved:8,hourlyRate:50,docAICost:0.02,claudeCost:0.015};
@@ -246,6 +248,14 @@ async function handleFile(file){
   for(var i=0;i<u8.length;i+=CHUNK) b64+=String.fromCharCode.apply(null,u8.subarray(i,i+CHUNK));
   fileBase64=btoa(b64);
   docaiBtn.disabled=false;
+  docaiResult=null; claudeResult=null; visionResult=null; lastResult=null;
+  docaiRan=false; claudeRan=false; visionRan=false;
+  _statusDocAI=null; _statusClaude=null; _statusVision=null;
+  document.getElementById('statusBox').innerHTML='';
+  document.getElementById('docaiBtn').textContent='1. Run Doc AI Extraction';
+  document.getElementById('claudeBtn').textContent='2. Send to Claude for Audit';
+  document.getElementById('visionBtn').innerHTML='3. Audit with Claude Vision <span style="font-size:11px;font-weight:400;">(beta)</span>';
+  document.getElementById('claudeBtn').disabled=true; document.getElementById('visionBtn').disabled=true;
   if(fileMediaType==='application/pdf'){
     var pdfLib=window['pdfjsLib'];
     if(typeof pdfLib==='undefined'){
@@ -290,47 +300,75 @@ function disagree(values){
 
 function closeModal(){document.getElementById('modalBg').classList.remove('show');}
 
+function _markButtonRun(btnId, labelHtml) {
+  var btn=document.getElementById(btnId);
+  if(!btn)return;
+  var fn={'docaiBtn':'reRunDocAI','claudeBtn':'reRunClaude','visionBtn':'reRunVision'}[btnId]||'';
+  btn.innerHTML=labelHtml+' &#10003; <span class="rerun-link" onclick="event.stopPropagation();'+fn+'()">Re-run</span>';
+}
+function _renderStatusAll(transient) {
+  var box=document.getElementById('statusBox'), html='';
+  if(_statusDocAI) html+='<div class="status-msg done">'+_statusDocAI+'</div>';
+  if(_statusClaude) html+='<div class="status-msg done">'+_statusClaude+'</div>';
+  if(_statusVision) html+='<div class="status-msg done">'+_statusVision+'</div>';
+  if(transient) html+=transient;
+  box.innerHTML=html;
+}
+function _showCached(layer, data) {
+  viewMode=layer; lastResult=data;
+  var label={'docai':'Doc AI','claude':'Claude','vision':'Vision'}[layer]||layer.toUpperCase();
+  _renderStatusAll('<div class="status-msg loading">Showing cached '+label+' result — click <em>Re-run</em> on the button to refresh from the service.</div>');
+  renderAll(data);
+}
+function reRunDocAI(){docaiRan=false;docaiResult=null;_statusDocAI=null;document.getElementById('docaiBtn').textContent='1. Run Doc AI Extraction';runDocAI();}
+function reRunClaude(){claudeRan=false;claudeResult=null;_statusClaude=null;document.getElementById('claudeBtn').textContent='2. Send to Claude for Audit';runClaude();}
+function reRunVision(){visionRan=false;visionResult=null;_statusVision=null;document.getElementById('visionBtn').innerHTML='3. Audit with Claude Vision <span style="font-size:11px;font-weight:400;">(beta)</span>';runVision();}
+
 async function runDocAI(){
-  var statusBox=document.getElementById('statusBox');
+  if(docaiRan && docaiResult){ _showCached('docai', docaiResult); return; }
   docaiBtn.disabled=true;
-  statusBox.innerHTML='<div class="status-msg loading"><span class="spinner"></span>Step 1: Running Doc AI extraction...</div>';
+  _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Step 1: Running Doc AI extraction...</div>');
   try{
     var response=await fetch('/api/intelligence/extractDocAI',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),schemaType:'auto',invoiceBase64:fileBase64,mediaType:fileMediaType})});
     var text=await response.text(); var data;
     try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
-    docaiResult=data; lastResult=data;
+    docaiResult=data; lastResult=data; docaiRan=true;
     var mode=data.invoiceMode||'non_construction';
     document.getElementById('modeBadge').innerHTML='<span class="pill '+(mode==='construction'?'construction':'noncon')+'">Auto-classified: '+(mode==='construction'?'CONSTRUCTION':'NON-CONSTRUCTION')+'</span>';
-    statusBox.innerHTML='<div class="status-msg done">✅ Doc AI extraction complete in '+(data.processingTimeMs||'?')+'ms — '+(data.fields||[]).length+' fields extracted. Step 2: ready for Claude audit.</div>';
+    _statusDocAI='✅ Doc AI extraction complete — '+(data.fields||[]).length+' fields extracted';
+    _renderStatusAll();
     document.getElementById('claudeBtn').disabled=false;
     document.getElementById('visionBtn').disabled=false;
+    _markButtonRun('docaiBtn','1. Run Doc AI Extraction');
     viewMode='docai';
     renderAll(data);
-  }catch(err){ statusBox.innerHTML='<div class="status-msg error">❌ '+err.message+'</div>'; }
+  }catch(err){ _renderStatusAll('<div class="status-msg error">❌ '+err.message+'</div>'); }
   docaiBtn.disabled=false;
 }
 
 async function runClaude(){
-  var statusBox=document.getElementById('statusBox');
+  if(claudeRan && claudeResult){ _showCached('claude', claudeResult); return; }
   document.getElementById('claudeBtn').disabled=true;
-  statusBox.innerHTML='<div class="status-msg loading"><span class="spinner"></span>Step 2: Sending to Claude for full audit...</div>';
+  _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Step 2: Sending to Claude for full audit...</div>');
   try{
     var response=await fetch('/api/intelligence/processInvoice',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),schemaType:'auto',invoiceBase64:fileBase64,mediaType:fileMediaType})});
+      body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),docAIResult:JSON.stringify(docaiResult)})});
     var text=await response.text(); var data;
     try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
-    claudeResult=data; lastResult=data; var s=data.stats||{};
+    claudeResult=data; lastResult=data; claudeRan=true; var s=data.stats||{};
     var mode=data.invoiceMode||'non_construction';
     document.getElementById('modeBadge').innerHTML='<span class="pill '+(mode==='construction'?'construction':'noncon')+'">Auto-classified: '+(mode==='construction'?'CONSTRUCTION':'NON-CONSTRUCTION')+'</span>';
-    statusBox.innerHTML='<div class="status-msg done">✅ Claude audit complete in '+(data.processingTimeMs||'?')+'ms — '+(s.verified||0)+' verified, '+(s.corrected||0)+' corrected, '+(s.flagged||0)+' flagged</div>';
+    _statusClaude='✅ Claude audit complete in '+(data.processingTimeMs||'?')+'ms — '+(s.verified||0)+' verified, '+(s.corrected||0)+' corrected, '+(s.flagged||0)+' flagged';
+    _renderStatusAll();
+    _markButtonRun('claudeBtn','2. Send to Claude for Audit');
     viewMode='claude';
     renderAll(data);
     if(pendingHighlightField){
       var fn=pendingHighlightField; pendingHighlightField=null;
       setTimeout(function(){var row=document.querySelector('.kv-field-row[data-field="'+fn+'"]');if(row){row.scrollIntoView({behavior:'smooth',block:'center'});row.style.transition='background 0.4s';row.style.background='#fffde7';setTimeout(function(){row.style.background='';row.style.transition='';},1800);}},200);
     }
-  }catch(err){ statusBox.innerHTML='<div class="status-msg error">❌ '+err.message+'</div>'; }
+  }catch(err){ _renderStatusAll('<div class="status-msg error">❌ '+err.message+'</div>'); }
   document.getElementById('claudeBtn').disabled=false;
 }
 
@@ -472,22 +510,25 @@ function updatePageNav(){
 }
 
 async function runVision(){
-  var statusBox=document.getElementById('statusBox'), btn=document.getElementById('visionBtn');
+  if(visionRan && visionResult){ _showCached('vision', visionResult); return; }
+  var btn=document.getElementById('visionBtn');
   btn.disabled=true;
-  statusBox.innerHTML='<div class="status-msg loading"><span class="spinner"></span>Rendering invoice page to image…</div>';
+  _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Rendering invoice page to image…</div>');
   try{
     var imgBase64=await renderPdfToPng(uploadedFile);
-    statusBox.innerHTML='<div class="status-msg loading"><span class="spinner"></span>Running Claude Vision — sending to multimodal AI…</div>';
+    _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Running Claude Vision — sending to multimodal AI…</div>');
     var response=await fetch('/api/intelligence/auditWithVision',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),imageBase64:imgBase64})});
+      body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),imageBase64:imgBase64,docAIResult:JSON.stringify(claudeResult||docaiResult||null)})});
     var text=await response.text(); var data;
     try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
-    visionResult=data; lastResult=data; var s=data.stats||{};
-    statusBox.innerHTML='<div class="status-msg done">✅ Claude Vision audit complete — '+(s.verified||0)+' verified, '+(s.corrected||0)+' corrected, '+(s.flagged||0)+' flagged</div>';
+    visionResult=data; lastResult=data; visionRan=true; var s=data.stats||{};
+    _statusVision='✅ Claude Vision audit complete in '+(data.processingTimeMs||'?')+'ms — '+(s.verified||0)+' verified, '+(s.corrected||0)+' corrected, '+(s.flagged||0)+' flagged';
+    _renderStatusAll();
+    _markButtonRun('visionBtn','3. Audit with Claude Vision <span style="font-size:11px;font-weight:400;">(beta)</span>');
     viewMode='vision';
     renderAll(data);
   }catch(err){
-    statusBox.innerHTML='<div class="status-msg error">❌ Vision: '+err.message+'</div>';
+    _renderStatusAll('<div class="status-msg error">❌ Vision: '+err.message+'</div>');
   }
   btn.disabled=false;
 }
@@ -605,20 +646,21 @@ function renderGeneral(data){
 
     var rowDisagrees=disagree([d_run?dv:null,c_run?cv:null,v_run?vv:null]);
 
-    // Best value: take from highest-priority layer; credit only the layer that changed the value
+    // Best value: Doc AI is primary — wins all ties. Another layer only wins when it genuinely changed/filled the value.
     var bestVal='', bestLayer='';
     var dvN=dv?dv.trim().toLowerCase():'', cvN=cv?cv.trim().toLowerCase():'', vvN=vv?vv.trim().toLowerCase():'';
-    if(v_run&&vv){
-      bestVal=vv;
-      var priorN=c_run&&cvN?cvN:dvN;
-      if(vvN&&vvN!==priorN) bestLayer='vision';
-      else if(c_run&&cvN&&cvN!==dvN) bestLayer='claude';
-      else bestLayer='docai';
-    } else if(c_run&&cv){
-      bestVal=cv;
-      bestLayer=(cvN&&cvN!==dvN)?'claude':'docai';
-    } else if(d_run&&dv){
-      bestVal=dv; bestLayer='docai';
+    if(dvN){
+      // Doc AI has a value: wins unless a later layer explicitly changed it
+      if(v_run&&vvN&&vvN!==dvN){bestVal=vv;bestLayer='vision';}
+      else if(c_run&&cvN&&cvN!==dvN){bestVal=cv;bestLayer='claude';}
+      else{bestVal=dv;bestLayer='docai';}
+    } else if(cvN){
+      // Doc AI blank — Claude filled it; Vision wins only if it changed Claude's value
+      if(v_run&&vvN&&vvN!==cvN){bestVal=vv;bestLayer='vision';}
+      else{bestVal=cv;bestLayer='claude';}
+    } else if(vvN){
+      // Both blank — Vision is the only source
+      bestVal=vv;bestLayer='vision';
     }
 
     // Doc AI cell: value + confidence colouring
@@ -721,64 +763,165 @@ function lineVerdictPill(v){
 }
 
 function renderLineItems(data){
-  var items=data.lineItems||[];
-  if(!items.length){document.getElementById('lineItemsContent').innerHTML='<div class="placeholder">No line items extracted</div>';return;}
-  var mode=data.invoiceMode||'non_construction';
-  var html='<div style="padding:10px 14px;font-size:12px;color:#666;background:#f4f9fd;border-bottom:1px solid #d5e5f0;">'+
-    (mode==='construction'?'Construction: consolidated to one line per CAPM logic. ':'Non-construction: individual lines; freight distributed proportionally. ')+
-    'Item Amount includes freight; freight is tracked and taxed separately across jurisdictions (see Item Details).</div>';
-  html+='<table><tr><th>UNSPSC</th><th>Item Description</th><th>Verdict</th><th class="num">Item Amount<br>(incl. Freight)</th><th class="num">Tax Amount<br>(Vertex)</th><th class="num">Freight Amount</th><th class="num">Freight Tax</th><th>Details</th></tr>';
-  items.forEach(function(li,i){
-    var descCell=(li.description||'—');
-    if((li.lineVerdict==='CORRECTED'||li.lineVerdict==='FLAGGED')&&li.lineReason){
-      descCell+='<div class="reason">'+li.lineReason+'</div>';
-    }
-    html+='<tr><td>'+(li.unspsc||'—')+'</td><td>'+descCell+'</td>';
-    html+='<td>'+(li.lineVerdict?lineVerdictPill(li.lineVerdict):'')+'</td>';
-    html+='<td class="num">'+money(li.itemAmount)+'</td>';
-    html+='<td class="num">'+(li.vertexTaxAmount==null?'<span style="color:#999;" title="Requires Vertex integration">N/A</span>':'$'+money(li.vertexTaxAmount))+'</td>';
-    html+='<td class="num">'+(li.lineVerdict==='SUPPRESSED'||li.isFreight?'<span style="color:#ccc;">—</span>':money(li.freightAmount))+'</td>';
-    html+='<td class="num">'+(li.freightTaxAmount==null?'<span style="color:#999;" title="Requires Vertex integration">N/A</span>':'$'+money(li.freightTaxAmount))+'</td>';
-    html+='<td><span class="link" onclick="openItemDetails('+i+')">&#9656; Click</span></td></tr>';
+  var mode=(data&&data.invoiceMode)||(docaiResult&&docaiResult.invoiceMode)||'non_construction';
+  var daLines  = docaiRan  ? ((docaiResult&&docaiResult.lineItems)||[])  : [];
+  var clLines  = claudeRan ? ((claudeResult&&claudeResult.lineItems)||[]) : [];
+  var vsLines  = visionRan ? ((visionResult&&visionResult.lineItems)||[]) : [];
+  if(!daLines.length&&!clLines.length&&!vsLines.length){
+    document.getElementById('lineItemsContent').innerHTML='<div class="placeholder">No line items extracted</div>';return;}
+
+  // Raw amount: netAmount (pre-freight) > amount > itemAmount
+  var rawAmt=function(li){return li?parseFloat(li.netAmount!=null?li.netAmount:li.amount!=null?li.amount:li.itemAmount)||0:null;};
+  var normD=function(s){return String(s||'').toLowerCase().replace(/[^a-z0-9 ]+/g,' ').replace(/\s+/g,' ').trim();};
+  var amtClose=function(a,b){return a!=null&&b!=null&&Math.abs(a-b)<0.02;};
+
+  // Match base line against a candidate list; returns matched index or null
+  var findMatch=function(base,cands,used){
+    var bd=normD(base.description),ba=rawAmt(base);
+    var best=null,bestS=99;
+    cands.forEach(function(c,i){
+      if(used.has(i))return;
+      var cd=normD(c.description),ca=rawAmt(c);
+      var ds=bd&&cd&&bd===cd,as=amtClose(ba,ca);
+      var s=ds&&as?0:ds?1:as&&ba>0?2:99;
+      if(s<bestS){best=i;bestS=s;}
+    });
+    return bestS<99?best:null;
+  };
+
+  // Build merged rows anchored on Doc AI, then append unmatched Claude/Vision
+  var rows=[],clUsed=new Set(),vsUsed=new Set();
+  daLines.forEach(function(dl){
+    var ci=findMatch(dl,clLines,clUsed),vi=findMatch(dl,vsLines,vsUsed);
+    if(ci!=null)clUsed.add(ci); if(vi!=null)vsUsed.add(vi);
+    rows.push({da:dl,cl:ci!=null?clLines[ci]:null,vs:vi!=null?vsLines[vi]:null});
+  });
+  clLines.forEach(function(cl,i){
+    if(clUsed.has(i))return;
+    var vi=findMatch(cl,vsLines,vsUsed);
+    if(vi!=null)vsUsed.add(vi);
+    rows.push({da:null,cl:cl,vs:vi!=null?vsLines[vi]:null});
+  });
+  vsLines.forEach(function(vl,i){if(!vsUsed.has(i))rows.push({da:null,cl:null,vs:vl});});
+
+  _renderedLineItems=rows.map(function(r){return r.vs||r.cl||r.da;});
+
+  var html='';
+  html+='<div style="padding:10px 14px;font-size:12px;color:#666;background:#f4f9fd;border-bottom:1px solid #d5e5f0;">'+
+    (mode==='construction'?'Construction invoice — one consolidated line (CAPM logic). ':'Non-construction — individual lines; freight distributed proportionally. ')+
+    '<strong>Doc AI Amount</strong> = raw extracted value before freight distribution. <strong>Best Value</strong> = Doc AI when layers agree; correcting layer only when it genuinely changed the amount.</div>';
+
+  // Layer header pills
+  var layerHdr=function(label,color,ran){
+    return '<div style="font-size:10px;font-weight:700;color:'+(ran?color:'#aaa')+';text-transform:uppercase;letter-spacing:.04em;">'+(ran?label:label+' —')+'</div>';
+  };
+  html+='<table><tr>';
+  html+='<th>Item Description</th>';
+  html+='<th class="num">'+layerHdr('Doc AI','#107e3e',docaiRan)+'Amount</th>';
+  html+='<th class="num">'+layerHdr('Claude','#3452d1',claudeRan)+'Amount</th>';
+  html+='<th class="num">'+layerHdr('Vision','#9d174d',visionRan)+'Amount</th>';
+  html+='<th class="num">Best Value</th>';
+  html+='<th class="num">Freight</th>';
+  html+='<th>Verdict</th>';
+  html+='<th>Details</th>';
+  html+='</tr>';
+
+  rows.forEach(function(row,idx){
+    var da=row.da,cl=row.cl,vs=row.vs;
+    var best=vs||cl||da;
+    var daAmt=rawAmt(da),clAmt=rawAmt(cl),vsAmt=rawAmt(vs);
+
+    // Best value from most-advanced layer that has a match
+    // Doc AI wins ties; another layer only wins when it genuinely changed/filled the amount
+    var bestAmt,bestLayer;
+    if(da&&daAmt!=null){
+      if(visionRan&&vs&&vsAmt!=null&&!amtClose(vsAmt,daAmt)){bestAmt=vsAmt;bestLayer='vision';}
+      else if(claudeRan&&cl&&clAmt!=null&&!amtClose(clAmt,daAmt)){bestAmt=clAmt;bestLayer='claude';}
+      else{bestAmt=daAmt;bestLayer='docai';}
+    } else if(cl&&clAmt!=null){
+      if(visionRan&&vs&&vsAmt!=null&&!amtClose(vsAmt,clAmt)){bestAmt=vsAmt;bestLayer='vision';}
+      else{bestAmt=clAmt;bestLayer='claude';}
+    } else if(vs&&vsAmt!=null){
+      bestAmt=vsAmt;bestLayer='vision';
+    } else{bestAmt=daAmt;bestLayer='docai';}
+    var bestColor={docai:'#107e3e',claude:'#3452d1',vision:'#9d174d'}[bestLayer];
+    var bestLabel={docai:'Doc AI',claude:'Claude',vision:'Vision'}[bestLayer];
+
+    // Per-cell disagree flags — compare only ran layers, raw-vs-raw
+    var daDiff=false,clDiff=false,vsDiff=false;
+    if(docaiRan&&daAmt!=null&&claudeRan&&clAmt!=null&&!amtClose(daAmt,clAmt)){daDiff=true;clDiff=true;}
+    if(docaiRan&&daAmt!=null&&visionRan&&vsAmt!=null&&!amtClose(daAmt,vsAmt)){daDiff=true;vsDiff=true;}
+    if(claudeRan&&clAmt!=null&&visionRan&&vsAmt!=null&&!amtClose(clAmt,vsAmt)){clDiff=true;vsDiff=true;}
+
+    var verdict=best.lineVerdict||'';
+    var desc=escHtml(best.description||'—');
+    if((verdict==='CORRECTED'||verdict==='FLAGGED')&&best.lineReason)
+      desc+='<div class="reason">'+escHtml(best.lineReason)+'</div>';
+
+    var cellAmt=function(amt,layerRan,hasMatch,differs){
+      var bg=differs?'background:#fff8e1;':'';
+      var val;
+      if(!layerRan) val='<span style="color:#ccc;font-size:11px;">not run</span>';
+      else if(!hasMatch||amt==null) val='<span style="color:#bbb;font-size:11px;">—</span>';
+      else val=(differs?'<strong>':'')+'$'+money(amt)+(differs?'</strong>':'');
+      return '<td class="num" style="'+bg+'">'+val+'</td>';
+    };
+
+    var freight=best.freightAmount||0;
+    html+='<tr>';
+    html+='<td>'+desc+'</td>';
+    html+=cellAmt(daAmt, docaiRan, !!da, daDiff);
+    html+=cellAmt(clAmt, claudeRan, !!cl, clDiff);
+    html+=cellAmt(vsAmt, visionRan, !!vs, vsDiff);
+    html+='<td class="num"><strong>$'+money(bestAmt)+'</strong><br>'
+      +'<span style="display:inline-block;background:'+bestColor+';color:#fff;font-size:9px;padding:1px 6px;border-radius:8px;margin-top:2px;white-space:nowrap;">'+bestLabel+'</span></td>';
+    html+='<td class="num">'+(freight>0&&verdict!=='SUPPRESSED'&&!best.isFreight?'$'+money(freight):'<span style="color:#ccc;">—</span>')+'</td>';
+    html+='<td>'+(verdict?lineVerdictPill(verdict):'')+'</td>';
+    html+='<td><span class="link" onclick="openItemDetails('+idx+')">&#9656; Click</span></td>';
+    html+='</tr>';
   });
   html+='</table>';
+
+  // Footer totals — most advanced layer's data
+  var totD=visionResult||claudeResult||docaiResult||data;
   html+='<div style="padding:14px;text-align:right;font-size:13px;line-height:1.9;">'+
-    (data.invoiceFreightTotal>0?'Freight total (distributed): <strong>$'+money(data.invoiceFreightTotal)+'</strong><br>':'')+
-    'Invoice net amount (incl. freight): <strong>'+money(data.invoiceNetTotal)+'</strong><br>'+
-    'Vendor tax amount (from invoice): <strong>'+(data.vendorTaxAmount==null?'<span style="color:#999;">not on invoice</span>':'$'+money(data.vendorTaxAmount))+'</strong><br>'+
-    'Invoice total amount: <strong>'+money(data.invoiceTotalAmount)+'</strong><br>'+
+    (totD.invoiceFreightTotal>0?'Freight total (distributed): <strong>$'+money(totD.invoiceFreightTotal)+'</strong><br>':'')+
+    'Invoice net amount (incl. freight): <strong>'+money(totD.invoiceNetTotal)+'</strong><br>'+
+    'Vendor tax amount (from invoice): <strong>'+(totD.vendorTaxAmount==null?'<span style="color:#999;">not on invoice</span>':'$'+money(totD.vendorTaxAmount))+'</strong><br>'+
+    'Invoice total amount: <strong>'+money(totD.invoiceTotalAmount)+'</strong><br>'+
     '<span style="color:#999;font-size:12px;">Vertex tax: N/A — requires Vertex</span></div>';
-  var apcR=data.apcReconciliation||null;
+
+  var apcR=totD.apcReconciliation||null;
   if(apcR){
     if(apcR.status==='all-good'||apcR.status==='gross-apc-match'){
       html+='<div style="margin:10px 14px;padding:10px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:13px;color:#166534;display:flex;align-items:center;gap:10px;">';
-      html+='<span style="font-size:16px;font-weight:700;">✓</span>';
-      html+='<span><strong>'+apcR.label+'</strong> &nbsp; Gross <strong>'+money(apcR.gross)+'</strong> = APC End <strong>'+money(apcR.apcEnd)+'</strong></span>';
-      html+='</div>';
+      html+='<span style="font-size:16px;font-weight:700;">&#10003;</span><span><strong>'+apcR.label+'</strong> &nbsp; Gross <strong>'+money(apcR.gross)+'</strong> = APC End <strong>'+money(apcR.apcEnd)+'</strong></span></div>';
     } else if(apcR.status==='mismatch'){
       html+='<div style="margin:10px 14px;padding:10px 14px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;font-size:13px;color:#991b1b;display:flex;align-items:center;gap:10px;">';
-      html+='<span style="font-size:16px;font-weight:700;">✗</span>';
-      html+='<span><strong>'+apcR.label+'</strong> &nbsp; Gross <strong>'+money(apcR.gross)+'</strong> vs APC End <strong>'+money(apcR.apcEnd)+'</strong> &nbsp;<span style="background:#fca5a5;border-radius:4px;padding:1px 7px;font-size:12px;">diff '+money(apcR.diff)+'</span></span>';
-      html+='</div>';
+      html+='<span style="font-size:16px;font-weight:700;">&#10007;</span><span><strong>'+apcR.label+'</strong> &nbsp; Gross <strong>'+money(apcR.gross)+'</strong> vs APC End <strong>'+money(apcR.apcEnd)+'</strong> &nbsp;<span style="background:#fca5a5;border-radius:4px;padding:1px 7px;font-size:12px;">diff '+money(apcR.diff)+'</span></span></div>';
     } else {
       html+='<div style="margin:10px 14px;padding:8px 14px;font-size:12px;color:#999;font-style:italic;">'+apcR.label+'</div>';
     }
   }
-  var suppressed=data.suppressedLines||[];
+
+  var suppressed=totD.suppressedLines||[];
   if(suppressed.length){
     html+='<div style="padding:10px 14px;font-size:12px;font-weight:600;color:#888;background:#fafafa;border-top:1px solid #e0e0e0;">Suppressed rows (not billable) — caught and removed by AI</div>';
-    html+='<table><tr><th>Description</th><th>Type</th><th class="num">Amount</th><th>Reason</th></tr>';
+    html+='<table><tr><th>Description</th><th>Type</th><th class="num">Amount</th><th>Reason</th><th>Suppressed by</th></tr>';
     suppressed.forEach(function(li){
       var lt=li.lineType||null;
-      var typeLabel=lt==='shipping'?'Shipping':lt==='tax'?'Tax':'PO/PR';
-      var typeBg=lt==='shipping'?'#dbeafe':lt==='tax'?'#fef3c7':'#e5e7eb';
-      var typeFg=lt==='shipping'?'#1d4ed8':lt==='tax'?'#92400e':'#374151';
-      html+='<tr style="color:#999;">';
-      html+='<td><span style="text-decoration:line-through;">'+(li.description||'—')+'</span></td>';
-      html+='<td><span style="display:inline-block;background:'+typeBg+';color:'+typeFg+';padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">'+typeLabel+'</span></td>';
+      var tl=lt==='shipping'?'Shipping':lt==='tax'?'Tax':'PO/PR';
+      var tb=lt==='shipping'?'#dbeafe':lt==='tax'?'#fef3c7':'#e5e7eb';
+      var tf=lt==='shipping'?'#1d4ed8':lt==='tax'?'#92400e':'#374151';
+      var sb=li.suppressedBy||'docai';
+      var sbl=sb==='claude'?'Claude':sb==='vision'?'Vision':'Doc AI';
+      var sbb=sb==='claude'?'#ede9fe':sb==='vision'?'#d1fae5':'#dbeafe';
+      var sbf=sb==='claude'?'#5b21b6':sb==='vision'?'#065f46':'#1e40af';
+      html+='<tr style="color:#999;"><td><span style="text-decoration:line-through;">'+(li.description||'—')+'</span></td>';
+      html+='<td><span style="display:inline-block;background:'+tb+';color:'+tf+';padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">'+tl+'</span></td>';
       html+='<td class="num" style="text-decoration:line-through;">'+money(li.amount)+'</td>';
       html+='<td style="font-size:12px;">'+(li.suppressReason||li.lineReason||'—')+'</td>';
-      html+='</tr>';
+      html+='<td><span style="display:inline-block;background:'+sbb+';color:'+sbf+';padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">'+sbl+'</span></td></tr>';
     });
     html+='</table>';
   }
@@ -786,7 +929,7 @@ function renderLineItems(data){
 }
 
 function openItemDetails(i){
-  var li=(lastResult.lineItems||[])[i]; if(!li)return;
+  var li=_renderedLineItems[i]||(lastResult&&(lastResult.lineItems||[])[i]); if(!li)return;
   var html;
   if(!li.jurisdictions){
     html='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">NOT WIRED</span><p style="margin-top:12px;">Jurisdiction tax breakdown (State / County / City / District) requires the Vertex integration, which is not connected in this POC.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';

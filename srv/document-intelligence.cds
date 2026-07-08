@@ -11,14 +11,13 @@ service DocumentIntelligenceService @(path: '/api/intelligence') {
 
   action processInvoice(
     documentId : String,
-    schemaType : String enum { construction; non_construction; indexing; auto },
-    invoiceBase64 : LargeString,
-    mediaType : String
+    docAIResult : LargeString
   ) returns String;
 
   action auditWithVision(
     documentId : String,
-    imageBase64 : LargeString
+    imageBase64 : LargeString,
+    docAIResult : LargeString
   ) returns String;
 
   action listInvoices() returns String;

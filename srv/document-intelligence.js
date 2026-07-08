@@ -8,6 +8,49 @@ const INVOICE_FOLDER = process.env.INVOICE_FOLDER || 'C:/Users/abhishek.hs.kumar
 let scnMapping = {};
 try { scnMapping = require('./data/scn-mapping.json'); } catch (e) { console.log('scn-mapping.json not present'); }
 
+const TAX_CRITICAL_FIELDS = new Set([
+  'shipToAddress','shipToCity','shipToState','shipToPostalCode',
+  'grossAmount','taxAmount','taxAmountHeader'
+]);
+
+const SCHEMA_FIELDS = {
+  common_header: [
+    'vendorName','invoiceNumber','documentDate',
+    'shipToAddress','shipToCity','shipToState','shipToCounty','shipToPostalCode',
+    'grossAmount','taxPercentage','purchaseOrderNumber',
+    'totalTaxableAmount','nonTaxableAmount','subTotal','shippingCostHeader',
+    'contractDetails','contractDetailsPostalcode',
+    'projectAddress','projectAddressPostalCode',
+    'workCompletedThisPeriodTotal'
+  ],
+  taxField: { indexing: 'taxAmountHeader', non_construction: 'taxAmount', construction: 'taxAmount' },
+  non_construction_extra: [
+    'accentureAddress','accentureAddressCity','accentureAddressState',
+    'accentureAddressPostalCode','accentureAddressCounty',
+    'projectAddressCity','projectAddressState','projectAddressCounty',
+    'contractDetailsCity'
+  ],
+  construction_extra: ['projectAddressCity','projectAddressState','projectAddressCounty','contractDetailsCity'],
+  indexing_extra: ['senderAddress','amountDueCurrent','documentType','currentPaymentDue','thisPaymentAmountDetected'],
+  lineItem: {
+    indexing:          ['materialDescription','lineType','netPrice','taxability','amount'],
+    non_construction:  ['materialDescription','taxAmount','netPrice','taxability','Amount','lineAction'],
+    construction:      ['materialDescription','taxAmount','netPrice','taxability','pageType']
+  }
+};
+
+function schemaHeaderFields(mode) {
+  const m = String(mode || 'non_construction');
+  const seen = new Set(), result = [];
+  const push = k => { if (!seen.has(k)) { seen.add(k); result.push(k); } };
+  SCHEMA_FIELDS.common_header.forEach(push);
+  if      (m === 'construction') SCHEMA_FIELDS.construction_extra.forEach(push);
+  else if (m === 'indexing')     SCHEMA_FIELDS.indexing_extra.forEach(push);
+  else                            SCHEMA_FIELDS.non_construction_extra.forEach(push);
+  push(SCHEMA_FIELDS.taxField[m] || SCHEMA_FIELDS.taxField.non_construction);
+  return result;
+}
+
 module.exports = class DocumentIntelligenceService extends cds.ApplicationService {
 
   async init() {
@@ -25,6 +68,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const startTime = Date.now();
     LOG.info(`extractDocAI: ${documentId} (${schemaType})`);
 
+    let fullText = '';
+    try {
+      fullText = await this._extractPdfText(invoiceBase64, mediaType);
+      LOG.info(`extractDocAI: text extracted, ${fullText.length} chars`);
+    } catch (err) {
+      LOG.warn('extractDocAI: PDF text extraction failed:', err.message);
+    }
+
     let keepLines = [], suppressedLines = [], docAIHeader = {}, routedTo = schemaType;
     let docAIFreightTotal = 0, docAIInvoiceNetTotal = 0, docAIVendorTax = null;
     try {
@@ -40,15 +91,21 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       LOG.warn('extractDocAI: Doc AI failed:', err.message);
     }
 
-    const taxCriticalFields = new Set([
-      'shipToAddress','shipToCity','shipToState','shipToPostalCode',
-      'grossAmount','taxAmount','taxAmountHeader'
-    ]);
-    const fields = Object.entries(docAIHeader).map(([k, v]) => ({
-      fieldName: k, docAIValue: v.value || '', confidence: v.confidence || 0,
-      taxCritical: taxCriticalFields.has(k),
-      page: v.page || 1, boundingBox: v.coordinates || null
-    }));
+    const schemaFields = schemaHeaderFields(routedTo);
+    const schemaSet = new Set(schemaFields);
+    const mkField = (k, v) => ({
+      fieldName: k,
+      docAIValue: v ? (v.value || '') : '',
+      confidence: v ? (v.confidence || 0) : 0,
+      taxCritical: TAX_CRITICAL_FIELDS.has(k),
+      page: v ? (v.page || 1) : 1,
+      boundingBox: v ? (v.coordinates || null) : null,
+      provenance: 'extracted'
+    });
+    const fields = [
+      ...schemaFields.map(k => mkField(k, docAIHeader[k])),
+      ...Object.entries(docAIHeader).filter(([k]) => !schemaSet.has(k)).map(([k, v]) => mkField(k, v))
+    ];
     console.log('BBOX SAMPLE:', JSON.stringify(fields.slice(0, 3).map(f => ({ name: f.fieldName, bbox: f.boundingBox, page: f.page }))));
 
     let lineItems, pageTypeUsed = null, grossAmount = null;
@@ -68,7 +125,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           freightAmount: li.freightAmount || 0,
           lineAction: li.lineAction || 'KEEP',
           lineType: li.lineType || null,
-          page: li.page || 1
+          page: li.page || 1,
+          provenance: 'extracted',
+          freightProvenance: docAIFreightTotal > 0 ? 'inferred' : 'extracted',
+          freightProvenanceDetail: docAIFreightTotal > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined,
+          itemAmountProvenance: (li.freightAmount || 0) > 0 ? 'inferred' : 'extracted',
+          itemAmountProvenanceDetail: (li.freightAmount || 0) > 0 ? 'derived: netAmount + distributedFreight' : undefined
         };
       });
     }
@@ -79,6 +141,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const vendorTaxAmount = docAIVendorTax;
     const invoiceGrossTotal = vendorTaxAmount != null
       ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2) : invoiceNetTotal;
+    const _netProv = (routedTo === 'construction' || docAIInvoiceNetTotal)
+      ? { provenance: 'extracted' }
+      : { provenance: 'inferred', provenanceDetail: 'sum of line item amounts' };
+    const _grossProv = vendorTaxAmount != null
+      ? { provenance: 'inferred', provenanceDetail: 'derived: invoiceNetTotal + vendorTaxAmount' }
+      : _netProv;
 
     console.log('EXTRACT DOCAI LINE ITEMS:', JSON.stringify(lineItems, null, 2));
 
@@ -111,7 +179,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     }
 
     const consistencyChecks = this._runConsistencyChecks({
-      lineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
+      lineItems, rawLineItems: keepLines, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
       invoiceGrossTotal, invoiceFreightTotal: docAIFreightTotal,
       purchaseOrderNumber: inv.purchaseOrderNumber,
       shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode,
@@ -124,52 +192,50 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
-      fields, lineItems, suppressedLines,
+      fields, lineItems, suppressedLines: suppressedLines.map(function(li){ return Object.assign({}, li, { suppressedBy: 'docai' }); }),
       invoiceNetTotal, invoiceFreightTotal: docAIFreightTotal,
       vendorTaxAmount: vendorTaxAmount ?? null,
       invoiceGrossTotal, invoiceTotalAmount: invoiceGrossTotal,
       taxHandledBy: 'tax-layer',
       pageTypeUsed, grossAmount,
       resolvedFrom: resolved.resolvedFrom,
+      resolvedFromCaption: resolved.resolvedFromCaption,
       apcReconciliation,
       consistencyChecks, manualAction,
-      generalInfo, docAIHeader,
+      fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: lineItems, claudeLines: null, visionLines: null, claudeRan: false, visionRan: false }),
+      generalInfo, docAIHeader, keepLines, fullText,
+      _provenance: {
+        invoiceNetTotal: _netProv,
+        vendorTaxAmount: { provenance: vendorTaxAmount != null ? 'extracted' : null },
+        invoiceGrossTotal: _grossProv,
+        invoiceFreightTotal: { provenance: 'extracted' },
+        shipToResolution: { provenance: 'inferred', provenanceDetail: resolved.resolvedFromCaption || 'priority-ordered address block selection' }
+      },
       processingTimeMs: Date.now() - startTime
     });
   }
 
   async _handleProcessInvoice(req) {
-    const { documentId, schemaType, invoiceBase64, mediaType } = req.data;
+    const { documentId, docAIResult: docAIResultStr } = req.data;
     const LOG = cds.log('intelligence');
     const startTime = Date.now();
-    LOG.info(`Processing invoice ${documentId} (${schemaType})`);
 
-    // ── Stage 1: Extract full PDF text locally (ground truth) ──
-    LOG.info('Stage 1: Extracting full PDF text...');
-    let fullText = '';
+    // ── Parse Doc AI result passed from client (Doc AI already ran in extractDocAI) ──
+    let docAIParsed;
     try {
-      fullText = await this._extractPdfText(invoiceBase64, mediaType);
-      LOG.info(`Stage 1 complete: ${fullText.length} chars across all pages`);
+      docAIParsed = JSON.parse(docAIResultStr);
     } catch (err) {
-      LOG.warn('PDF text extraction failed:', err.message);
+      return req.error(400, 'docAIResult is missing or invalid JSON');
     }
+    const keepLines          = docAIParsed.keepLines || [];
+    const docAISuppressedLines = docAIParsed.suppressedLines || [];
+    const docAIHeader        = docAIParsed.docAIHeader || {};
+    const routedTo           = docAIParsed.invoiceMode || 'non_construction';
+    const docAIFreightTotal  = docAIParsed.invoiceFreightTotal || 0;
+    const docAIVendorTax     = docAIParsed.vendorTaxAmount ?? null;
+    const fullText           = docAIParsed.fullText || '';
+    LOG.info(`Processing invoice ${documentId} (${routedTo}) — ${Object.keys(docAIHeader).length} header fields, ${keepLines.length} keep lines from client-supplied Doc AI result`);
 
-    // ── Stage 2: Document AI extraction (header + line items) ──
-    LOG.info('Stage 2: Calling SAP Document AI...');
-    let keepLines = [], docAISuppressedLines = [], docAIHeader = {}, routedTo = schemaType;
-    let docAIFreightTotal = 0, docAIVendorTax = null;
-    try {
-      const docAI = await this._callDocumentAI(invoiceBase64, mediaType, schemaType);
-      keepLines = docAI.keepLines || [];
-      docAISuppressedLines = docAI.suppressedLines || [];
-      docAIHeader = docAI.headerFields || {};
-      routedTo = docAI.routedTo || schemaType;
-      docAIFreightTotal = docAI.invoiceFreightTotal || 0;
-      docAIVendorTax = docAI.vendorTaxAmount ?? null;
-      LOG.info(`Stage 2 complete: ${Object.keys(docAIHeader).length} header fields, ${keepLines.length} keep lines, ${docAISuppressedLines.length} suppressed, routed to ${routedTo}`);
-    } catch (err) {
-      LOG.warn('Document AI failed:', err.message);
-    }
     const docAILineItems = keepLines; // Claude audits billable lines only
 
     // ── Stage 3: Trigger decision ──────────────────────────────
@@ -188,7 +254,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           reason: 'Doc AI high-confidence — auto-verified, Claude not called (cost saved)',
           taxCritical: false,
           page: v.page || 1,
-          boundingBox: v.coordinates || null
+          boundingBox: v.coordinates || null,
+          provenance: 'extracted'
         })),
         lineItems: routedTo === 'construction'
           ? [Object.assign(this._consolidateConstruction(keepLines, docAIFreightTotal, docAIHeader), {
@@ -201,7 +268,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
               freightAmount: li.freightAmount || 0,
               lineVerdict: 'VERIFIED', lineReason: 'Auto-verified — Doc AI confident',
               lineConfidence: 95, lineAction: li.lineAction || 'KEEP',
-              lineType: li.lineType || null, page: li.page || 1
+              lineType: li.lineType || null, page: li.page || 1,
+              provenance: 'extracted', freightProvenance: 'extracted'
             })),
         lineItemCorrections: [],
         consistencyChecks: [],
@@ -230,7 +298,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     // reflects only billable lines and each KEEP line gets its correct proportional share.
     const rawClaudeItems = intelligence.lineItems || [];
     const claudeKeepItems = rawClaudeItems.filter(function(li){ return !li.isFreight && li.lineVerdict !== 'SUPPRESSED'; });
-    const claudeSuppressedItems = rawClaudeItems.filter(function(li){ return li.isFreight || li.lineVerdict === 'SUPPRESSED'; });
+    const claudeSuppressedItems = rawClaudeItems
+      .filter(function(li){ return li.isFreight || li.lineVerdict === 'SUPPRESSED'; })
+      .map(function(li){ return Object.assign({}, li, { suppressedBy: 'claude' }); });
     const sumKeepNet = claudeKeepItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
     let freightAlloc = 0, lgIdx = 0, lgAmt = -Infinity;
     const claudeLineItems = claudeKeepItems.map(function(li, idx) {
@@ -239,7 +309,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       const rawF = sumKeepNet > 0 ? docAIFreightTotal * (net / sumKeepNet) : 0;
       const freight = +rawF.toFixed(2);
       freightAlloc += freight;
-      return Object.assign({}, li, { freightAmount: freight, itemAmount: +(net + freight).toFixed(2) });
+      return Object.assign({}, li, {
+        freightAmount: freight,
+        itemAmount: +(net + freight).toFixed(2),
+        freightProvenance: docAIFreightTotal > 0 ? 'inferred' : 'extracted',
+        freightProvenanceDetail: docAIFreightTotal > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined,
+        itemAmountProvenance: freight > 0 ? 'inferred' : (li.provenance || 'extracted'),
+        itemAmountProvenanceDetail: freight > 0 ? 'derived: netAmount + distributedFreight' : undefined
+      });
     });
     const freightRem = +(docAIFreightTotal - freightAlloc).toFixed(2);
     if (freightRem !== 0 && claudeLineItems.length > 0) {
@@ -263,18 +340,56 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const invoiceGrossTotal = vendorTaxAmount != null
       ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2) : invoiceNetTotal;
     const reconciliation = {
-      invoiceTaxRate: intelligence.invoiceTaxRate || null, vendorTaxAmount,
+      invoiceTaxRate: intelligence.invoiceTaxRate || null,
+      invoiceTaxRateProvenance: intelligence.invoiceTaxRate ? 'inferred' : null,
+      invoiceTaxRateProvenanceDetail: intelligence.invoiceTaxRate ? 'derived: vendorTaxAmount / invoiceNetTotal' : null,
+      vendorTaxAmount,
+      vendorTaxAmountProvenance: vendorTaxAmount != null ? 'extracted' : null,
       vertexTaxRate: null, vertexTaxAmount: null,
       taxRateDifference: null, taxAmountDifference: null,
       taxabilityStatus: 'Pending tax layer', chargeabilityStatus: 'Pending tax layer', acceptanceStatus: ''
     };
 
-    const fields = (intelligence.fields || []).map(function(f) {
-      const docH = docAIHeader[f.fieldName];
-      return Object.assign({}, f, {
-        boundingBox: (docH && docH.coordinates) || f.boundingBox || null,
-        page: (docH && docH.page) || f.page || 1
-      });
+    const schemaFields = schemaHeaderFields(routedTo);
+    const schemaSet = new Set(schemaFields);
+    const claudeMap = new Map((intelligence.fields || []).map(f => [f.fieldName, f]));
+    const fields = [];
+    schemaFields.forEach(k => {
+      const cf = claudeMap.get(k);
+      const docH = docAIHeader[k];
+      if (cf) {
+        const prov = cf.verdict === 'CORRECTED'
+          ? { provenance: 'inferred', provenanceDetail: 'value corrected by Claude during audit' }
+          : { provenance: 'extracted' };
+        fields.push(Object.assign({}, cf, {
+          boundingBox: (docH && docH.coordinates) || cf.boundingBox || null,
+          page: (docH && docH.page) || cf.page || 1
+        }, prov));
+      } else {
+        const dv = docH ? (docH.value || '') : '';
+        fields.push({
+          fieldName: k, docAIValue: dv, correctValue: dv,
+          confidence: docH ? (docH.confidence || 0) : 0,
+          verdict: 'VERIFIED',
+          reason: docH ? 'Not escalated to Claude — Doc AI value accepted' : 'Not extracted by Doc AI',
+          taxCritical: TAX_CRITICAL_FIELDS.has(k), routedTo: 'docai',
+          boundingBox: docH ? (docH.coordinates || null) : null,
+          page: docH ? (docH.page || 1) : 1,
+          provenance: 'extracted'
+        });
+      }
+    });
+    (intelligence.fields || []).forEach(f => {
+      if (!schemaSet.has(f.fieldName)) {
+        const docH = docAIHeader[f.fieldName];
+        const prov = f.verdict === 'CORRECTED'
+          ? { provenance: 'inferred', provenanceDetail: 'value corrected by Claude during audit' }
+          : { provenance: 'extracted' };
+        fields.push(Object.assign({}, f, {
+          boundingBox: (docH && docH.coordinates) || f.boundingBox || null,
+          page: (docH && docH.page) || f.page || 1
+        }, prov));
+      }
     });
     const verified = fields.filter(f => f.verdict === 'VERIFIED').length;
     const corrected = fields.filter(f => f.verdict === 'CORRECTED').length;
@@ -326,7 +441,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const claudeCostPerDoc = claudeTriggered ? 0.015 : 0;
 
     const consistencyChecks = this._runConsistencyChecks({
-      lineItems: claudeLineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
+      lineItems: claudeLineItems, rawLineItems: claudeLineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
       invoiceGrossTotal, invoiceFreightTotal,
       purchaseOrderNumber: inv.purchaseOrderNumber,
       shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode,
@@ -339,13 +454,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     return JSON.stringify({
       documentId,
-      schemaType,
+      schemaType: routedTo,
       fields,
       lineItems: claudeLineItems,
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
       lineItemCorrections: intelligence.lineItemCorrections || [],
       consistencyChecks,
       manualAction,
+      fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: keepLines, claudeLines: claudeLineItems, visionLines: null, claudeRan: true, visionRan: false }),
       freightTotal: intelligence.freightTotal || 0,
       summary: intelligence.summary || '',
       overallConfidence: intelligence.overallConfidence || 0,
@@ -360,6 +476,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       taxHandledBy: 'tax-layer',
       pageTypeUsed, grossAmount,
       resolvedFrom: resolved.resolvedFrom,
+      resolvedFromCaption: resolved.resolvedFromCaption,
       apcReconciliation,
       generalInfo,
       vertexTaxTotal: null,
@@ -367,6 +484,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       docAIHeader,
       docAILineItems: keepLines,
       fullTextLength: fullText.length,
+      _provenance: {
+        invoiceNetTotal: { provenance: 'inferred', provenanceDetail: 'sum of line item amounts (including distributed freight)' },
+        vendorTaxAmount: { provenance: vendorTaxAmount != null ? 'extracted' : null },
+        invoiceGrossTotal: { provenance: 'inferred', provenanceDetail: vendorTaxAmount != null ? 'derived: invoiceNetTotal + vendorTaxAmount' : 'same as invoiceNetTotal (no vendor tax)' },
+        invoiceFreightTotal: { provenance: 'extracted' },
+        invoiceTaxRate: { provenance: intelligence.invoiceTaxRate ? 'inferred' : null, provenanceDetail: intelligence.invoiceTaxRate ? 'derived: vendorTaxAmount / invoiceNetTotal' : null },
+        shipToResolution: { provenance: 'inferred', provenanceDetail: resolved.resolvedFromCaption || 'priority-ordered address block selection' }
+      },
       processingTimeMs,
       costValue: {
         claudeTriggered,
@@ -381,7 +506,11 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
   }
 
   async _handleAuditWithVision(req) {
-    const { documentId, imageBase64 } = req.data;
+    const { documentId, imageBase64, docAIResult: docAIResultStr } = req.data;
+    const prevResult   = docAIResultStr ? (() => { try { return JSON.parse(docAIResultStr); } catch(e) { return null; } })() : null;
+    const docaiLines   = prevResult ? (prevResult.keepLines || prevResult.lineItems || []) : [];
+    const claudeFields = prevResult ? (prevResult.fields  || []) : [];
+    const claudeLines  = prevResult ? (prevResult.lineItems || []) : [];
     const LOG = cds.log('intelligence');
     if (!imageBase64) return req.error(400, 'imageBase64 is required');
     LOG.info(`Vision audit requested: ${documentId}`);
@@ -395,38 +524,112 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       return req.error(500, `Vision audit failed: ${err.message}`);
     }
 
-    const fields = (intelligence.fields || []).map(function(f) {
-      return Object.assign({}, f, { routedTo: 'claude-vision' });
+    const mode = intelligence.invoiceMode || (prevResult && prevResult.invoiceMode) || 'non_construction';
+    const schemaFields = schemaHeaderFields(mode);
+    const schemaSet = new Set(schemaFields);
+
+    // Build a lookup map for Vision-returned fields and for previous-layer values
+    const visionFieldMap = new Map((intelligence.fields || []).map(f => [f.fieldName, f]));
+    const prevFieldMap   = new Map((claudeFields || []).map(f => [f.fieldName, f]));
+
+    const rawVisionFields = intelligence.fields || [];
+    const returned = rawVisionFields.map(f => f.fieldName);
+    const missing  = schemaFields.filter(k => !returned.includes(k));
+    const extra    = returned.filter(r => !schemaSet.has(r));
+    console.log('VISION FIELD RECONCILE:', JSON.stringify({
+      mode,
+      expectedCount: schemaFields.length,
+      returnedCount: returned.length,
+      verified:  rawVisionFields.filter(f => f.verdict === 'VERIFIED').length,
+      corrected: rawVisionFields.filter(f => f.verdict === 'CORRECTED').length,
+      flagged:   rawVisionFields.filter(f => f.verdict === 'FLAGGED').length,
+      missing,
+      extra
+    }));
+    const missingFromVision = missing;
+
+    const fields = [];
+    // 1. Ensure every schema field is represented
+    schemaFields.forEach(function(k) {
+      const vf = visionFieldMap.get(k);
+      if (vf) {
+        fields.push(Object.assign({}, vf, { routedTo: 'claude-vision', provenance: 'extracted' }));
+      } else {
+        const prevF = prevFieldMap.get(k);
+        const docAIVal = prevF ? (prevF.correctValue || prevF.docAIValue || '') : '';
+        fields.push({
+          fieldName: k, docAIValue: docAIVal, correctValue: '',
+          confidence: 0, verdict: 'FLAGGED',
+          reason: 'not returned by Vision / not legible in image',
+          taxCritical: TAX_CRITICAL_FIELDS.has(k),
+          routedTo: 'claude-vision', provenance: 'extracted',
+          boundingBox: prevF ? (prevF.boundingBox || null) : null,
+          page: prevF ? (prevF.page || 1) : 1
+        });
+      }
+    });
+    // 2. Append any extra fields Vision returned that are outside the schema
+    (intelligence.fields || []).forEach(function(f) {
+      if (!schemaSet.has(f.fieldName)) {
+        fields.push(Object.assign({}, f, { routedTo: 'claude-vision', provenance: 'extracted' }));
+      }
     });
 
     const verified  = fields.filter(function(f){ return f.verdict === 'VERIFIED';  }).length;
     const corrected = fields.filter(function(f){ return f.verdict === 'CORRECTED'; }).length;
     const flagged   = fields.filter(function(f){ return f.verdict === 'FLAGGED';   }).length;
+    LOG.info(`Vision fields: schema=${schemaFields.length} returned=${(intelligence.fields||[]).length} padded=${missingFromVision.length} total=${fields.length} (V=${verified} C=${corrected} F=${flagged})`);
 
     const vendorTaxAmount = intelligence.vendorTaxAmount != null
       ? parseFloat(String(intelligence.vendorTaxAmount).replace(/[^0-9.\-]/g, ''))
       : null;
 
-    // Distribute freight across any keep line items Claude Vision extracted
-    const rawItems = (intelligence.lineItems || []).filter(function(li){ return !li.isFreight && li.lineVerdict !== 'SUPPRESSED'; });
-    const lineItems = rawItems.map(function(li) {
-      return Object.assign({}, li, { freightAmount: 0, itemAmount: li.amount || 0, netAmount: li.amount || 0, vertexTaxAmount: null, freightTaxAmount: null });
+    // Apply the same suppress rules as Doc AI / Claude text: freight, SUPPRESSED verdict, zero amount
+    const visionSuppressedLines = [];
+    const visionKeepLines = [];
+    (intelligence.lineItems || []).forEach(function(li) {
+      const amt = parseFloat(li.amount) || 0;
+      if (li.isFreight || li.lineVerdict === 'SUPPRESSED') {
+        visionSuppressedLines.push(Object.assign({}, li, {
+          suppressReason: li.isFreight
+            ? 'Freight/shipping — distributed across line items'
+            : (li.lineReason || 'suppressed by Vision'),
+          provenance: 'extracted', suppressedBy: 'vision'
+        }));
+      } else if (amt === 0) {
+        visionSuppressedLines.push(Object.assign({}, li, {
+          suppressReason: 'zero amount — not billable',
+          lineVerdict: 'SUPPRESSED',
+          provenance: 'extracted', suppressedBy: 'vision'
+        }));
+      } else {
+        visionKeepLines.push(li);
+      }
+    });
+    const lineItems = visionKeepLines.map(function(li) {
+      return Object.assign({}, li, { freightAmount: 0, itemAmount: li.amount || 0, netAmount: li.amount || 0, vertexTaxAmount: null, freightTaxAmount: null, provenance: 'extracted', freightProvenance: 'extracted' });
     });
     const invoiceNetTotal = +(lineItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2) || null;
     const invoiceGrossTotal = vendorTaxAmount != null && invoiceNetTotal != null
       ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2) : invoiceNetTotal;
 
-    LOG.info(`Vision audit complete in ${Date.now() - startTime}ms — ${fields.length} fields, ${lineItems.length} lines`);
+    const lineItemTally = (docaiLines && docaiLines.length)
+      ? this._tallyLineItemsDocAIvsVision(docaiLines, lineItems)
+      : null;
+
+    LOG.info(`Vision audit complete in ${Date.now() - startTime}ms — ${fields.length} fields, ${lineItems.length} lines${lineItemTally ? ', tally: '+lineItemTally.agreeCount+'/'+lineItemTally.totalLines+' agree' : ''}`);
 
     return JSON.stringify({
       documentId,
-      schemaType: intelligence.invoiceMode || 'non_construction',
-      invoiceMode: intelligence.invoiceMode || 'non_construction',
+      schemaType: mode,
+      invoiceMode: mode,
       fields,
       lineItems,
-      suppressedLines: [],
+      suppressedLines: visionSuppressedLines,
       lineItemCorrections: [],
       consistencyChecks: intelligence.consistencyChecks || [],
+      lineItemTally,
+      fieldComparison: this._buildFieldComparison({ invoiceMode: mode, fields: claudeFields || [], visionFields: fields, docaiLines: docaiLines || [], claudeLines: claudeLines || [], visionLines: lineItems, claudeRan: Array.isArray(claudeFields) && claudeFields.length > 0, visionRan: true }),
       summary: intelligence.summary || '',
       overallConfidence: intelligence.overallConfidence || 0,
       invoiceNetTotal,
@@ -438,6 +641,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       generalInfo: [],
       reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex', chargeabilityStatus: 'Pending Vertex' },
       stats: { total: fields.length, verified, corrected, flagged },
+      _provenance: {
+        invoiceNetTotal: { provenance: 'inferred', provenanceDetail: 'sum of line item amounts from vision extraction' },
+        vendorTaxAmount: { provenance: vendorTaxAmount != null ? 'extracted' : null },
+        invoiceGrossTotal: { provenance: 'inferred', provenanceDetail: vendorTaxAmount != null ? 'derived: invoiceNetTotal + vendorTaxAmount' : 'same as invoiceNetTotal' },
+        invoiceFreightTotal: { provenance: 'extracted' }
+      },
       processingTimeMs: Date.now() - startTime,
       visionAudit: true,
       costValue: { claudeTriggered: true, docAICostPerDoc: 0, claudeCostPerDoc: 0.02, totalCostPerDoc: 0.02 }
@@ -539,15 +748,19 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const indexingSchemaId = process.env.DOC_AI_SCHEMA_INDEXING;
     const pass1 = await this._runDocAIJob(base64, mediaType, indexingSchemaId, access_token, apiUrl);
 
-    const classifiedType = pass1.headerFields?.documentType?.value || 'non_construction';
+    const indexDocumentType = pass1.headerFields?.documentType?.value ?? null;
     const indexingConfidence = pass1.headerFields?.documentType?.confidence || 0;
-    LOG.info(`Doc AI routing: classified as ${classifiedType}`);
+    console.log('RAW documentType value:', JSON.stringify(pass1.headerFields?.documentType));
+    const _dt = String(indexDocumentType || '').toLowerCase();
+    const invoiceMode = (_dt.includes('construction') && !_dt.includes('non')) ? 'construction' : 'non_construction';
+    console.log('CLASSIFICATION from index documentType:', indexDocumentType, '-> mode:', invoiceMode);
+    LOG.info(`Doc AI routing: classified as ${invoiceMode} (raw documentType: "${indexDocumentType}")`);
 
     // ── Pass 2: Routed schema — full extraction ─────────────────
-    const routedSchemaId = classifiedType === 'construction'
+    const routedSchemaId = invoiceMode === 'construction'
       ? process.env.DOC_AI_SCHEMA_CONSTRUCTION
       : process.env.DOC_AI_SCHEMA_NON_CONSTRUCTION;
-    const routedTo = classifiedType === 'construction' ? 'construction' : 'non_construction';
+    const routedTo = invoiceMode;
 
     const pass2 = await this._runDocAIJob(base64, mediaType, routedSchemaId, access_token, apiUrl);
     LOG.info(`Doc AI pass 2 complete with ${routedTo} schema`);
@@ -807,7 +1020,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
       orchestration_config: {
         module_configurations: {
           templating_module_config: { template: [{ role: 'user', content: '{{?instruction}}' }] },
-          llm_module_config: { model_name: modelName, model_params: { max_tokens: 4000 } }
+          llm_module_config: { model_name: modelName, model_params: { max_tokens: 8192 } }
         }
       },
       input_params: { instruction: 'Analyze the invoice image provided and return the structured field audit as JSON.' },
@@ -834,19 +1047,20 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     if (!response.ok) throw new Error(`AI Core vision call failed: ${response.status} ${await response.text()}`);
 
     const data = await response.json();
-    console.log('VISION RAW RESPONSE:', JSON.stringify(data.orchestration_result).substring(0, 3000));
-    const content = data.orchestration_result?.choices?.[0]?.message?.content || '';
+    const orchestrationResult = data.orchestration_result;
+    console.log('VISION RAW:', JSON.stringify(orchestrationResult).substring(0, 2000));
+    const content = orchestrationResult?.choices?.[0]?.message?.content || '';
     const cleaned = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    let parsed;
+    let parsedFields;
     try {
-      parsed = JSON.parse(cleaned);
+      parsedFields = JSON.parse(cleaned);
     } catch (e) {
-      console.log('VISION PARSE FAILED —', e.message);
+      console.log('VISION PARSED count:', 'PARSE FAILED —', e.message);
       console.log('VISION CLEANED CONTENT:', cleaned.substring(0, 2000));
       throw e;
     }
-    console.log('VISION PARSED fields:', parsed.fields ? parsed.fields.length : 'PARSE FAILED');
-    return parsed;
+    console.log('VISION PARSED count:', parsedFields.fields ? parsedFields.fields.length : 'PARSE FAILED');
+    return parsedFields;
   }
 
   _buildVisionPrompt() {
@@ -860,9 +1074,17 @@ For each field:
 5. If a field is genuinely absent from the invoice, output it with correctValue = "" and verdict = FLAGGED.
 
 ADDRESS PRIORITY (determines tax jurisdiction — critical):
-- NON-CONSTRUCTION: Ship-to Address > Project Address > Contract Address. NEVER use Bill-To (Accenture Chicago, 500 W Madison) as the tax address.
-- CONSTRUCTION: Project Address > Contract Address > Ship-to Address.
-Identify ALL address blocks visible on the invoice (Ship-to, Project, Contract, Bill-To/Accenture) and extract each one separately. The tax-jurisdiction fields (shipToAddress/City/State/PostalCode) must come from the winning block per the priority above.
+CRITICAL — VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NEVER a valid ship-to, even if it is the only address on the invoice. The supplier address appears in the letterhead, logo block, "From:", "Remit to:", or sender section — this is where the VENDOR is located. For USE tax, ship-to is where ACCENTURE received or used the goods/services. If an address appears alongside or beneath the vendor company name (e.g. top-left letterhead, remit-to box), treat it as the VENDOR address and exclude it from ship-to selection. Detection: if the street/city in a candidate block matches the vendor's letterhead location, reject it.
+
+EXPLICIT SHIP-TO BLOCK — READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED. Do NOT override an explicit Ship-To with project or contract addresses — those are fallbacks only.
+
+Use the priority chain below ONLY when no labeled Ship-To block is present:
+- NON-CONSTRUCTION fallback: Project Address > Contract/Delivery Address > Accenture Bill-To (500 W Madison, Chicago — last resort only)
+- CONSTRUCTION fallback: Project Address > Contract/Delivery Address > Accenture Bill-To (last resort only)
+
+If NONE of the above blocks are present and only the vendor address exists: set shipToAddress/City/State/PostalCode each to "Manual Action Required — no valid delivery address found" and mark each FLAGGED.
+
+Identify ALL address blocks visible on the invoice (Ship-to, Project, Contract, Bill-To/Accenture, Vendor/Sender) and extract each one separately. The tax-jurisdiction fields (shipToAddress/City/State/PostalCode) must come from the winning block per the priority above.
 
 taxCritical = true for: shipToAddress, shipToCity, shipToState, shipToPostalCode, grossAmount, taxAmount, taxAmountHeader.
 taxCritical = false for all other fields.
@@ -912,10 +1134,11 @@ Other:
 
 LINE ITEMS — extract all visible rows:
 - For each line: unspsc (if printed, else ""), description, amount (as printed on invoice), isFreight (true if shipping/freight/delivery line), lineVerdict (VERIFIED or FLAGGED), lineReason (what you saw), lineConfidence, page (page number the line appears on, default 1).
-- Freight/shipping lines: isFreight=true, lineVerdict="SUPPRESSED".
-- Tax lines: lineVerdict="SUPPRESSED", isFreight=false.
-- PO/reference-only rows with no amount: lineVerdict="SUPPRESSED".
-- Real billable lines: lineVerdict="VERIFIED" (or FLAGGED if unreadable).
+- Freight/shipping lines: isFreight=true, lineVerdict="SUPPRESSED", lineReason="Freight/shipping — distributed across line items".
+- Tax lines: lineVerdict="SUPPRESSED", isFreight=false, lineReason="Tax line — handled in tax layer".
+- Zero-amount lines (amount=0 or blank): lineVerdict="SUPPRESSED", lineReason="zero amount — not billable". This includes document/drawing/title rows, cover-sheet entries, and any line whose printed amount is $0.00.
+- PO/reference-only rows with no amount: lineVerdict="SUPPRESSED", lineReason="PO/reference — not billable".
+- Real billable lines (non-zero amount, not freight, not tax): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
 
 CONSISTENCY CHECKS — report these:
 - Do line item amounts sum to the invoice subtotal/gross?
@@ -963,9 +1186,10 @@ FIELD VERDICTS:
 WHAT IS NOT A CORRECTION — do NOT set verdict=CORRECTED for any of these:
 - Formatting differences: Doc AI returned a multi-line address block (including name, Attn, street, city/state/zip) and the data is from the right source block. Stripping it to just the street line is a formatting preference, not a correction. Mark VERIFIED.
 - Completeness preferences: Doc AI included more lines than the "minimum" needed. If the correct block was extracted, extra lines are not errors.
-- Abbreviation style: "CA" vs "California", "$1,234.56" vs "1234.56", "01/15/2025" vs "January 15, 2025" — these are not corrections if the value is factually the same.
+- Abbreviation style: "CA" vs "California", "$1,234.56" vs "1234.56" — these are not corrections if the value is factually the same.
+- Date format normalization: if Doc AI returned a date in ISO format (e.g. "2025-01-15") or long form ("January 15, 2025") and it represents the SAME calendar date as MM/DD/YYYY ("01/15/2025"), set correctValue to MM/DD/YYYY and mark VERIFIED. Only mark CORRECTED if the actual day, month, or year is wrong.
 - Rewording correct descriptions: changing the phrasing of an accurate description is a preference, not a fix.
-Reserve CORRECTED strictly for: wrong source block, wrong jurisdiction, wrong/misread amount, factually incorrect data.
+Reserve CORRECTED strictly for: wrong source block, wrong jurisdiction, wrong/misread amount, factually incorrect data, wrong calendar date.
 
 ROUTED-TO (include on every field — indicates which layer is responsible for the final value):
 - "docai": Doc AI extracted it correctly; you confirmed it (verdict=VERIFIED, confidence>=85). No Claude change was needed.
@@ -974,14 +1198,18 @@ ROUTED-TO (include on every field — indicates which layer is responsible for t
 Rule: if verdict=VERIFIED and confidence>=85 → routedTo="docai". All other cases → routedTo="claude-text".
 
 DOMAIN RULES:
-1. ADDRESS PRIORITY (determines tax jurisdiction — critical): The invoice may contain several address blocks: Ship-to Address, Project Address, Contract Address, and Bill-To (usually Accenture Chicago, 500 W Madison — NEVER use Bill-To as the tax address). Select the tax-relevant address by priority based on invoice type:
-   - CONSTRUCTION: Project Address > Contract Address > Ship-to Address
-   - NON-CONSTRUCTION: Ship-to Address > Project Address > Contract Address
-   Use the FIRST block that is present and non-empty in that priority order. Once a block wins, take shipToAddress, shipToCity, shipToState, and shipToPostalCode ALL from that SAME winning block — never mix city/state/zip from different blocks. In the reason, state which block won (e.g. "Non-construction: used Ship-to block; Project/Contract absent"). If Doc AI pulled these fields from the wrong block (e.g. Bill-To or mixed blocks), CORRECT them.
-   ADDRESS COMPLETENESS: If Doc AI extracted the correct block but included the recipient name, Attn line, or full multi-line address text, that is NOT an error — mark VERIFIED. Only CORRECT if the data came from the wrong block or if city/state/zip are factually wrong.
+1. ADDRESS PRIORITY (determines tax jurisdiction — critical):
+   CRITICAL — VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NEVER a valid ship-to. The vendor address appears in the letterhead, logo block, "From:", "Remit to:", or sender section at the top of the invoice — it is where the VENDOR is located, not where Accenture received or used the goods/services. If Doc AI placed a vendor/sender address into any ship-to field, that is a FACTUAL ERROR — mark CORRECTED. Detection: if the street/city in a Doc AI ship-to field matches the vendor's letterhead city or appears in the sender block, reject it.
+   EXPLICIT SHIP-TO BLOCK — READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED (provenance: extracted). Do NOT override an explicit Ship-To with a project or contract address — those are fallbacks only.
+   Use the priority chain below ONLY when no labeled Ship-To block is present:
+   - CONSTRUCTION: Project Address > Contract Address > Accenture Bill-To (last resort only)
+   - NON-CONSTRUCTION: Project Address > Contract Address > Accenture Bill-To (last resort only)
+   Once a fallback block wins, take all ship-to fields from that SAME block — never mix fields from different blocks. In the reason, state which block won and why Ship-To was absent. If Doc AI pulled fields from the vendor address or from the wrong block, CORRECT them.
+   If NONE of the valid blocks are present (only the vendor address exists): set correctValue to "Manual Action Required — no valid delivery address found" and mark FLAGGED for all ship-to fields.
+   ADDRESS COMPLETENESS: If Doc AI extracted the correct block but included the recipient name, Attn line, or full multi-line address text, that is NOT an error — mark VERIFIED. Only CORRECT if the data came from the wrong block, the vendor address, or if city/state/zip are factually wrong.
 2. VENDOR NAME: legal entity issuing the invoice, not the remit-to processor.
 3. PO NUMBER: 10-digit number starting with 6 for Accenture POs.
-4. DATES: normalize to MM/DD/YYYY.
+4. DATES: The app is US-based; expected display format is MM/DD/YYYY. If Doc AI returned the same date in a different format (ISO, long-form, etc.), set correctValue to MM/DD/YYYY and mark VERIFIED — format-only normalization is NOT a correction. Only mark CORRECTED if the actual calendar date (day, month, or year) is factually wrong.
 5. AMOUNTS: strip currency symbols; use current-period/total-due, not cumulative.
 6. TAX AMOUNT RECOVERY: If the docAIValue for taxAmount/vendorTaxAmount is blank or null, scan the provided line items for any suppressed tax rows (description matching "sales tax", "tax", "VAT", "GST", or similar). If one or more are found, the correct taxAmount is the sum of those line amounts. Set verdict=CORRECTED, reason="Recovered from suppressed tax line '[exact description]' = [amount]" (list each line if more than one), routedTo="claude-text". This is a legitimate correction — Doc AI captured tax as a line row rather than a header field; the intelligence layer surfaces it as the vendor tax amount.
    Conversely, if a header taxAmount field IS populated and it matches a suppressed tax line total, mark it VERIFIED (the header field and line agree).
@@ -1167,6 +1395,170 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
     return intelligence;
   }
 
+  _buildFieldComparison({ invoiceMode, fields, visionFields, docaiLines, claudeLines, visionLines, claudeRan = false, visionRan = false }) {
+    const mode = String(invoiceMode || 'non_construction');
+    const hFields = schemaHeaderFields(mode);
+    const liFields = SCHEMA_FIELDS.lineItem[mode] || SCHEMA_FIELDS.lineItem.non_construction;
+
+    const fMap = new Map((fields       || []).map(f => [f.fieldName, f]));
+    const vMap = new Map((visionFields || []).map(f => [f.fieldName, f]));
+    const norm = s => s != null ? String(s).toLowerCase().replace(/[\s,.$]/g, '') : '';
+
+    // Header comparison — one row per schema field
+    const header = hFields.map(name => {
+      const f  = fMap.get(name);
+      const vf = vMap.get(name);
+      const dv = f  ? (f.docAIValue  || null) : null;
+      const cv = claudeRan ? (f  ? (f.correctValue || f.docAIValue || null) : null) : undefined;
+      const vv = visionRan ? (vf ? (vf.correctValue || vf.docAIValue || null) : null) : undefined;
+
+      let bestValue = dv, bestLayer = dv != null ? 'docai' : null;
+      if (claudeRan && cv != null && norm(cv) !== norm(dv)) { bestValue = cv; bestLayer = 'claude'; }
+      if (visionRan && vv != null && norm(vv) !== norm(cv != null ? cv : dv)) { bestValue = vv; bestLayer = 'vision'; }
+
+      return {
+        fieldName:   name,
+        taxCritical: TAX_CRITICAL_FIELDS.has(name),
+        docAI:  f  ? { value: dv, confidence: f.confidence || 0 } : null,
+        claude: claudeRan ? (f  ? { value: cv, verdict: f.verdict  || null, reason: f.reason  || null } : null) : undefined,
+        vision: visionRan ? (vf ? { value: vv, verdict: vf.verdict || null, reason: vf.reason || null } : null) : undefined,
+        bestValue,
+        bestLayer
+      };
+    });
+
+    // Line-item comparison — one entry per docAI line, fields matched across layers
+    const getAmt    = li => parseFloat(li.itemAmount != null ? li.itemAmount : (li.amount || li.netPrice || 0)) || 0;
+    const AMT_TOL   = 0.01;
+    const matchLine = (pool, ref) => pool && pool.length
+      ? pool.find(l => Math.abs(getAmt(l) - getAmt(ref)) <= AMT_TOL) || null : null;
+    const liVal = (line, fn) => {
+      if (!line) return null;
+      const map = { materialDescription: 'description', netPrice: 'itemAmount', Amount: 'itemAmount',
+                    taxAmount: 'taxAmount', taxability: 'taxability',
+                    lineType: 'lineType', lineAction: 'lineAction', pageType: 'pageType' };
+      const v = line[map[fn] || fn];
+      return v != null ? v : null;
+    };
+
+    const lineItems = (docaiLines || []).map((dl, idx) => {
+      const cl = claudeRan ? matchLine(claudeLines, dl) : undefined;
+      const vl = visionRan ? matchLine(visionLines, dl) : undefined;
+      const fieldMap = {};
+      liFields.forEach(fn => {
+        const dv = liVal(dl, fn);
+        const cv = claudeRan ? liVal(cl, fn) : undefined;
+        const vv = visionRan ? liVal(vl, fn) : undefined;
+        const disagrees =
+          (cv !== undefined && cv !== null && norm(String(cv)) !== norm(String(dv ?? ''))) ||
+          (vv !== undefined && vv !== null && norm(String(vv)) !== norm(String(dv ?? '')));
+        fieldMap[fn] = { docAI: dv, claude: cv, vision: vv, disagrees };
+      });
+      return { lineIndex: idx, docAI: { desc: dl.description, amount: getAmt(dl) }, fields: fieldMap };
+    });
+
+    return { invoiceMode: mode, header, lineItems };
+  }
+
+  _tallyLineItemsDocAIvsVision(docaiLines, visionLines) {
+    const safeLines = arr => Array.isArray(arr) ? arr : [];
+    const dLines = safeLines(docaiLines);
+    const vLines = safeLines(visionLines);
+    if (!dLines.length && !vLines.length) return { agreeCount: 0, totalLines: 0, discrepancies: [] };
+
+    const normDesc = s => (s || '').toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const AMT_TOL = 0.01;
+    const DESC_THRESH = 0.5;
+
+    const jaccard = (a, b) => {
+      const wa = new Set(normDesc(a).split(' ').filter(Boolean));
+      const wb = new Set(normDesc(b).split(' ').filter(Boolean));
+      if (!wa.size && !wb.size) return 1;
+      if (!wa.size || !wb.size) return 0;
+      let inter = 0; wa.forEach(w => { if (wb.has(w)) inter++; });
+      return inter / (wa.size + wb.size - inter);
+    };
+
+    const getAmt = li => parseFloat(li.netAmount != null ? li.netAmount : (li.amount != null ? li.amount : (li.itemAmount || 0))) || 0;
+    const amtClose = (a, b) => Math.abs(a - b) <= AMT_TOL;
+
+    const unused = new Set(vLines.map((_, i) => i));
+    const discrepancies = [];
+    let agreeCount = 0;
+
+    dLines.forEach(dl => {
+      const da = getAmt(dl);
+      const dd = dl.description || '';
+
+      // Amount is the strong key — find any unused Vision line within ±0.01
+      let amtIdx = -1;
+      for (const i of unused) {
+        if (amtClose(da, getAmt(vLines[i]))) { amtIdx = i; break; }
+      }
+
+      if (amtIdx >= 0) {
+        const vl = vLines[amtIdx];
+        unused.delete(amtIdx);
+        const descSim = jaccard(dd, vl.description || '');
+        if (descSim >= DESC_THRESH) {
+          agreeCount++;
+        } else {
+          discrepancies.push({
+            type: 'DESC_MISMATCH',
+            docAI: { desc: dd, amount: da },
+            vision: { desc: vl.description || '', amount: getAmt(vl) },
+            note: 'Amounts agree but descriptions differ meaningfully'
+          });
+        }
+        return;
+      }
+
+      // No amount match — try description match
+      let bestIdx = -1, bestSim = 0;
+      for (const i of unused) {
+        const sim = jaccard(dd, vLines[i].description || '');
+        if (sim > bestSim) { bestSim = sim; bestIdx = i; }
+      }
+
+      if (bestIdx >= 0 && bestSim >= DESC_THRESH) {
+        const vl = vLines[bestIdx];
+        const va = getAmt(vl);
+        unused.delete(bestIdx);
+        const diff = da - va;
+        const absDiff = Math.abs(diff);
+        const nearMiss = absDiff > AMT_TOL && absDiff <= 1.00;
+        discrepancies.push({
+          type: nearMiss ? 'NEAR_MISS_OCR' : 'AMOUNT_MISMATCH',
+          docAI: { desc: dd, amount: da },
+          vision: { desc: vl.description || '', amount: va },
+          note: nearMiss
+            ? `Likely OCR single-digit misread: Doc AI ${da.toFixed(2)} vs Vision ${va.toFixed(2)} — diff ${diff >= 0 ? '+' : ''}${diff.toFixed(2)}. Verify by reading the invoice image.`
+            : `Doc AI: ${da.toFixed(2)}, Vision: ${va.toFixed(2)}, diff: ${(da - va).toFixed(2)}`
+        });
+        return;
+      }
+
+      discrepancies.push({
+        type: 'MISSING_IN_VISION',
+        docAI: { desc: dd, amount: da },
+        vision: null,
+        note: 'Doc AI found this line; Vision did not.'
+      });
+    });
+
+    for (const i of unused) {
+      const vl = vLines[i];
+      discrepancies.push({
+        type: 'MISSING_IN_DOCAI',
+        docAI: null,
+        vision: { desc: vl.description || '', amount: getAmt(vl) },
+        note: 'Vision found this line; Doc AI did not.'
+      });
+    }
+
+    return { agreeCount, totalLines: Math.max(dLines.length, vLines.length), discrepancies };
+  }
+
   _runConsistencyChecks(result) {
     const checks = [];
     const fmt = n => n != null ? (+n).toFixed(2) : '—';
@@ -1183,7 +1575,7 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
         message: passed
           ? `Line items sum to ${fmt(lineSum)} ≈ invoice net ${fmt(netTotal)}.`
           : `Line items sum to ${fmt(lineSum)} but invoice net is ${fmt(netTotal)} (diff ${diff >= 0 ? '+' : ''}${fmt(diff)}).`,
-        values: { lineSum, netTotal, diff }
+        values: { lineSum, netTotal, diff }, provenance: 'inferred'
       });
     }
 
@@ -1199,7 +1591,7 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
         message: passed
           ? `Gross ${fmt(gross)} = net ${fmt(netTotal)} + tax ${fmt(vendorTax)}.`
           : `Gross ${fmt(gross)} ≠ net ${fmt(netTotal)} + tax ${fmt(vendorTax)} = ${fmt(expected)} (diff ${diff2 >= 0 ? '+' : ''}${fmt(diff2)}).`,
-        values: { gross, netTotal, vendorTax, expected, diff: diff2 }
+        values: { gross, netTotal, vendorTax, expected, diff: diff2 }, provenance: 'inferred'
       });
     }
 
@@ -1214,7 +1606,7 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
         message: passed
           ? `Distributed freight ${fmt(freightSum)} ≈ freight source ${fmt(freightTotal)}.`
           : `Distributed freight ${fmt(freightSum)} != freight source ${fmt(freightTotal)}.`,
-        values: { freightSum, freightTotal, diff: diff3 }
+        values: { freightSum, freightTotal, diff: diff3 }, provenance: 'inferred'
       });
     }
 
@@ -1227,7 +1619,7 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
         message: passed
           ? `PO ${po} matches expected format.`
           : `PO ${po} doesn't match expected format (10-digit starting 6001).`,
-        values: { purchaseOrderNumber: po }
+        values: { purchaseOrderNumber: po }, provenance: 'inferred'
       });
     }
 
@@ -1240,8 +1632,27 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
       message: shipOk
         ? `Ship-to complete: ${shipToCity} ${shipToPostalCode}.`
         : 'Ship-to incomplete for Vertex (city or postal missing).',
-      values: { shipToCity, shipToPostalCode }
+      values: { shipToCity, shipToPostalCode }, provenance: 'inferred'
     });
+
+    // 6. retainageSelfConsistency — catch within-invoice OCR near-misses on retainage rows
+    // Uses rawLineItems (pre-consolidation) when available so construction schedules of values are checked
+    const getLineAmt = li => parseFloat(li.netAmount != null ? li.netAmount : (li.amount != null ? li.amount : 0)) || 0;
+    const checkLines = result.rawLineItems || result.lineItems || [];
+    const retainageLines = checkLines.filter(li => /retainage|retention/i.test(li.description || ''));
+    if (retainageLines.length >= 2) {
+      const amounts = retainageLines.map(getLineAmt);
+      const maxAmt = Math.max(...amounts), minAmt = Math.min(...amounts);
+      const maxDiff = +(maxAmt - minAmt).toFixed(2);
+      if (maxDiff >= 0.02) {
+        checks.push({
+          name: 'retainageSelfConsistency', passed: false, severity: 'warning',
+          message: `Retainage values on ${retainageLines.length} rows disagree: [${amounts.map(fmt).join(', ')}] — max diff ${fmt(maxDiff)}. Possible single-digit OCR misread; verify against invoice image.`,
+          values: { amounts, maxDiff, descriptions: retainageLines.map(li => li.description) },
+          provenance: 'inferred'
+        });
+      }
+    }
 
     return checks;
   }
@@ -1298,6 +1709,23 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
       shipto:    { city: g('shipToCity'),            postal: g('shipToPostalCode'),          state: g('shipToState'),           addr: g('shipToAddress') },
       accenture: { city: g('accentureAddressCity'), postal: g('accentureAddressPostalCode'), state: g('accentureAddressState'), addr: g('accentureAddress') }
     };
+
+    // Parse city/state/postal from a US address string when sub-fields are not separately extracted
+    const parseAddrParts = addr => {
+      if (!addr) return {};
+      const m = addr.match(/\b([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\b/);
+      if (!m) return {};
+      const state = m[1], postal = m[2];
+      const before = addr.slice(0, m.index).replace(/,\s*$/, '').trim();
+      const words = before.split(/[\s,]+/).filter(Boolean);
+      const cityWords = [];
+      for (let i = words.length - 1; i >= 0 && cityWords.length < 3; i--) {
+        if (/^\d/.test(words[i])) break;
+        cityWords.unshift(words[i]);
+      }
+      return { city: cityWords.join(' ') || null, state, postal };
+    };
+
     const isConstruction = invoiceMode === 'construction';
     const order = isConstruction
       ? ['project', 'contract', 'shipto', 'accenture']
@@ -1305,20 +1733,45 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
     const LABELS = { shipto: 'ShipTo Address', project: 'Project Address', contract: 'Contract Details', accenture: 'Accenture Address' };
     const priorityStr = isConstruction ? 'Project > Contract > ShipTo > Accenture' : 'ShipTo > Project > Contract > Accenture';
     const modeLabel = isConstruction ? 'construction' : 'non-construction';
+
     for (const name of order) {
       const b = blocks[name];
-      if ((b.city != null && b.city !== '') || (b.postal != null && b.postal !== '')) {
-        const priorityNum = order.indexOf(name) + 1;
-        const caption = `Resolved from: ${LABELS[name]} (priority ${priorityNum} for ${modeLabel}: ${priorityStr})`;
-        const note = name === 'accenture'
-          ? 'Accenture billing address used — no higher-priority address available on the invoice; this is an approximation, not the delivery location.'
-          : null;
-        console.log('_resolveShipTo: winner=%s city=%s postal=%s', name, b.city, b.postal);
-        return { shipToAddress: b.addr, shipToCity: b.city, shipToState: b.state, shipToPostalCode: b.postal, resolvedFrom: name, resolvedFromCaption: caption, resolvedFromNote: note };
+
+      // Fill in city/state/postal from addr string when sub-fields are null
+      let city = b.city, state = b.state, postal = b.postal;
+      if ((!city || !postal) && b.addr) {
+        const parsed = parseAddrParts(b.addr);
+        city   = city   || parsed.city   || null;
+        state  = state  || parsed.state  || null;
+        postal = postal || parsed.postal || null;
       }
+
+      if (!city && !postal) {
+        console.log('_resolveShipTo: SKIP %s — no city/postal (addr: "%s")', name, (b.addr || '').substring(0, 60));
+        continue;
+      }
+
+      const priorityNum = order.indexOf(name) + 1;
+      const caption = `Resolved from: ${LABELS[name]} (priority ${priorityNum} for ${modeLabel}: ${priorityStr})`;
+      const note = name === 'accenture'
+        ? 'Accenture billing address used — no higher-priority address available on the invoice; this is an approximation, not the delivery location.'
+        : null;
+      const isExplicit = name === 'shipto';
+      console.log('_resolveShipTo: winner=%s city=%s state=%s postal=%s explicit=%s', name, city, state, postal, isExplicit);
+      return {
+        shipToAddress: b.addr, shipToCity: city, shipToState: state, shipToPostalCode: postal,
+        resolvedFrom: name, resolvedFromCaption: caption, resolvedFromNote: note,
+        provenance: isExplicit ? 'extracted' : 'inferred',
+        provenanceDetail: isExplicit ? 'explicit Ship-To address block on invoice' : caption
+      };
     }
+
     console.log('_resolveShipTo: no block won — returning nulls');
-    return { shipToAddress: null, shipToCity: null, shipToState: null, shipToPostalCode: null, resolvedFrom: 'none', resolvedFromCaption: null, resolvedFromNote: null };
+    return {
+      shipToAddress: null, shipToCity: null, shipToState: null, shipToPostalCode: null,
+      resolvedFrom: 'none', resolvedFromCaption: null, resolvedFromNote: null,
+      provenance: 'inferred', provenanceDetail: 'no address block resolved — all priority blocks empty'
+    };
   }
 
   _consolidateConstruction(lineItems, freightTotal, headerFields) {

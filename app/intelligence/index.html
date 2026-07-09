@@ -882,14 +882,67 @@ function renderLineItems(data){
   });
   html+='</table>';
 
-  // Footer totals — most advanced layer's data
+  // totD kept for APC-reconciliation and suppressed-lines blocks below — NOT used for totals display.
   var totD=visionResult||claudeResult||docaiResult||data;
-  html+='<div style="padding:14px;text-align:right;font-size:13px;line-height:1.9;">'+
-    (totD.invoiceFreightTotal>0?'Freight total (distributed): <strong>$'+money(totD.invoiceFreightTotal)+'</strong><br>':'')+
-    'Invoice net amount (incl. freight): <strong>'+money(totD.invoiceNetTotal)+'</strong><br>'+
-    'Vendor tax amount (from invoice): <strong>'+(totD.vendorTaxAmount==null?'<span style="color:#999;">not on invoice</span>':'$'+money(totD.vendorTaxAmount))+'</strong><br>'+
-    'Invoice total amount: <strong>'+money(totD.invoiceTotalAmount)+'</strong><br>'+
-    '<span style="color:#999;font-size:12px;">Vertex tax: N/A — requires Vertex</span></div>';
+
+  // Per-layer totals table — each column reads only from its own result object.
+  // No value is ever shared between layers; re-running one layer touches only its column.
+  var _th=function(label,color,ran){
+    return '<th style="padding:7px 12px;background:#f4f6f9;font-size:11px;font-weight:700;'
+      +'color:'+(ran?color:'#bbb')+';text-align:right;border-left:1px solid #eaecef;'
+      +'border-bottom:2px solid #d8dde6;">'
+      +label+(ran?'':' <span style="font-weight:400;font-size:10px;">(not run)</span>')
+      +'</th>';
+  };
+  var _td=function(ran,result,valFn){
+    if(!ran||!result)
+      return '<td style="padding:7px 12px;text-align:right;color:#bbb;font-size:11px;border-left:1px solid #eaecef;">not run</td>';
+    return '<td style="padding:7px 12px;text-align:right;border-left:1px solid #eaecef;">'+valFn(result)+'</td>';
+  };
+  var _fNet=function(r){ return r.invoiceNetTotal!=null?'<strong>$'+money(r.invoiceNetTotal)+'</strong>':'<span style="color:#bbb;">—</span>'; };
+  var _fTax=function(r){ return r.vendorTaxAmount==null?'<span style="color:#999;">not on invoice</span>':'$'+money(r.vendorTaxAmount); };
+  var _fTot=function(r){ var v=r.invoiceGrossTotal!=null?r.invoiceGrossTotal:r.invoiceTotalAmount; return v!=null?'<strong>$'+money(v)+'</strong>':'<span style="color:#bbb;">—</span>'; };
+  var _fReco=function(r){
+    var rc=r.totalAmountReconciliation;
+    if(!rc||rc.rawTotal==null)return '<span style="color:#999;font-size:10px;">—</span>';
+    if(rc.match)
+      return '<span style="color:#166534;font-weight:700;">&#10003; MATCH</span>'
+        +'<div style="font-size:10px;color:#555;margin-top:1px;">$'+money(rc.rawTotal)+'</div>';
+    return '<span style="color:#991b1b;font-weight:700;">&#10007; MISMATCH</span>'
+      +'<div style="font-size:10px;color:#999;margin-top:1px;">diff&nbsp;$'+money(Math.abs(rc.difference))+'</div>';
+  };
+
+  html+='<div style="border-top:2px solid #e8ecf0;padding:10px 14px 6px;">';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html+='<thead><tr>'
+    +'<th style="padding:7px 10px;background:#f4f6f9;font-size:11px;font-weight:600;color:#666;text-align:left;border-bottom:2px solid #d8dde6;">Totals</th>'
+    +_th('Doc AI','#107e3e',docaiRan)
+    +_th('Claude','#3452d1',claudeRan)
+    +_th('Vision','#9d174d',visionRan)
+    +'</tr></thead><tbody>';
+  html+='<tr><td style="padding:7px 10px;color:#555;">Net (incl. freight)</td>'
+    +_td(docaiRan,docaiResult,_fNet)
+    +_td(claudeRan,claudeResult,_fNet)
+    +_td(visionRan,visionResult,_fNet)
+    +'</tr>';
+  html+='<tr style="background:#fafafa;"><td style="padding:7px 10px;color:#555;">Vendor tax</td>'
+    +_td(docaiRan,docaiResult,_fTax)
+    +_td(claudeRan,claudeResult,_fTax)
+    +_td(visionRan,visionResult,_fTax)
+    +'</tr>';
+  html+='<tr><td style="padding:7px 10px;color:#444;font-weight:600;">Invoice total</td>'
+    +_td(docaiRan,docaiResult,_fTot)
+    +_td(claudeRan,claudeResult,_fTot)
+    +_td(visionRan,visionResult,_fTot)
+    +'</tr>';
+  html+='<tr style="background:#fafafa;"><td style="padding:7px 10px;color:#555;">Reconciliation</td>'
+    +_td(docaiRan,docaiResult,_fReco)
+    +_td(claudeRan,claudeResult,_fReco)
+    +_td(visionRan,visionResult,_fReco)
+    +'</tr>';
+  html+='</tbody></table>';
+  html+='<div style="padding:6px 2px 2px;font-size:11px;color:#999;">Vertex tax: N/A — requires Vertex</div>';
+  html+='</div>';
 
   var apcR=totD.apcReconciliation||null;
   if(apcR){

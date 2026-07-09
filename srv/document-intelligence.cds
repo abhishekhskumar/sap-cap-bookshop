@@ -17,6 +17,7 @@ service DocumentIntelligenceService @(path: '/api/intelligence') {
   action auditWithVision(
     documentId : String,
     imageBase64 : LargeString,
+    imagePages : many LargeString,
     docAIResult : LargeString
   ) returns String;
 

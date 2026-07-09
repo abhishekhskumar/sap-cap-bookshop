@@ -377,7 +377,7 @@ function auditField(fieldName){if(!fileBase64)return;pendingHighlightField=field
 async function renderPdfToPng(file){
   if(!file)throw new Error('No file uploaded');
   var ext=file.name.split('.').pop().toLowerCase();
-  if(ext==='png'||ext==='jpg'||ext==='jpeg') return fileBase64;
+  if(ext==='png'||ext==='jpg'||ext==='jpeg') return [fileBase64]; // single-element array for images
   var pdfLib=window['pdfjsLib'];
   if(typeof pdfLib==='undefined') throw new Error('pdf.js not available — cannot render page image');
   var doc=pdfDoc;
@@ -385,12 +385,17 @@ async function renderPdfToPng(file){
     var buf=await file.arrayBuffer();
     doc=await pdfLib.getDocument({data:new Uint8Array(buf)}).promise;
   }
-  var page=await doc.getPage(1);
-  var vp=page.getViewport({scale:2.0});
-  var canvas=document.createElement('canvas');
-  canvas.width=vp.width; canvas.height=vp.height;
-  await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
-  return canvas.toDataURL('image/png').split(',')[1];
+  var maxPages=Math.min(doc.numPages,5);
+  var images=[];
+  for(var n=1;n<=maxPages;n++){
+    var page=await doc.getPage(n);
+    var vp=page.getViewport({scale:2.0});
+    var canvas=document.createElement('canvas');
+    canvas.width=vp.width; canvas.height=vp.height;
+    await page.render({canvasContext:canvas.getContext('2d'),viewport:vp}).promise;
+    images.push(canvas.toDataURL('image/png').split(',')[1]);
+  }
+  return images; // array of base64 strings, one per page
 }
 
 // ── PDF canvas renderer + OCR overlay ────────────────────────────────────────
@@ -515,10 +520,10 @@ async function runVision(){
   btn.disabled=true;
   _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Rendering invoice page to image…</div>');
   try{
-    var imgBase64=await renderPdfToPng(uploadedFile);
-    _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Running Claude Vision — sending to multimodal AI…</div>');
+    var imgPages=await renderPdfToPng(uploadedFile);
+    _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Running Claude Vision — sending '+imgPages.length+' page(s) to multimodal AI…</div>');
     var response=await fetch('/api/intelligence/auditWithVision',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),imageBase64:imgBase64,docAIResult:JSON.stringify(claudeResult||docaiResult||null)})});
+      body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),imageBase64:imgPages[0],imagePages:imgPages,docAIResult:JSON.stringify(claudeResult||docaiResult||null)})});
     var text=await response.text(); var data;
     try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
     visionResult=data; lastResult=data; visionRan=true; var s=data.stats||{};

@@ -858,10 +858,17 @@ function renderLineItems(data){
     if(docaiRan&&daAmt!=null&&visionRan&&vsAmt!=null&&!amtClose(daAmt,vsAmt)){daDiff=true;vsDiff=true;}
     if(claudeRan&&clAmt!=null&&visionRan&&vsAmt!=null&&!amtClose(clAmt,vsAmt)){clDiff=true;vsDiff=true;}
 
-    var verdict=best.lineVerdict||'';
+    // Verdict/reason: prefer the layer that actually corrected or flagged this line,
+    // so a real correction (e.g. Claude CORRECTED to $0 with reason) is never buried
+    // by another layer's VERIFIED on the same row. Each layer's amount still shows in its own column.
+    var verdictSrc=
+      (cl&&(cl.lineVerdict==='CORRECTED'||cl.lineVerdict==='FLAGGED'))?cl:
+      (vs&&(vs.lineVerdict==='CORRECTED'||vs.lineVerdict==='FLAGGED'))?vs:
+      best;
+    var verdict=verdictSrc.lineVerdict||'';
     var desc=escHtml(best.description||'—');
-    if((verdict==='CORRECTED'||verdict==='FLAGGED')&&best.lineReason)
-      desc+='<div class="reason">'+escHtml(best.lineReason)+'</div>';
+    if((verdict==='CORRECTED'||verdict==='FLAGGED')&&verdictSrc.lineReason)
+      desc+='<div class="reason">'+escHtml(verdictSrc.lineReason)+'</div>';
 
     var cellAmt=function(amt,layerRan,hasMatch,differs){
       var bg=differs?'background:#fff8e1;':'';

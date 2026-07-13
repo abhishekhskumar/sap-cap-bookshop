@@ -506,20 +506,19 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
   }
 
   async _handleAuditWithVision(req) {
-    const { documentId, imageBase64, imagePages, docAIResult: docAIResultStr } = req.data;
+    const { documentId, imageBase64, docAIResult: docAIResultStr } = req.data;
     const prevResult   = docAIResultStr ? (() => { try { return JSON.parse(docAIResultStr); } catch(e) { return null; } })() : null;
     const docaiLines   = prevResult ? (prevResult.keepLines || prevResult.lineItems || []) : [];
     const claudeFields = prevResult ? (prevResult.fields  || []) : [];
     const claudeLines  = prevResult ? (prevResult.lineItems || []) : [];
     const LOG = cds.log('intelligence');
     if (!imageBase64) return req.error(400, 'imageBase64 is required');
-    const pages = (Array.isArray(imagePages) && imagePages.length) ? imagePages : [imageBase64];
-    LOG.info(`Vision audit requested: ${documentId} — ${pages.length} page(s)`);
+    LOG.info(`Vision audit requested: ${documentId}`);
 
     const startTime = Date.now();
     let intelligence;
     try {
-      intelligence = await this._callVisionAudit(pages);
+      intelligence = await this._callVisionAudit(imageBase64);
     } catch (err) {
       LOG.error('Vision audit failed:', err.message);
       return req.error(500, `Vision audit failed: ${err.message}`);
@@ -999,7 +998,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     return JSON.parse(cleaned);
   }
 
-  async _callVisionAudit(imagePages) {
+  async _callVisionAudit(imageBase64) {
     const authUrl       = process.env.AI_CORE_AUTH_URL;
     const clientId      = process.env.AI_CORE_CLIENT_ID;
     const clientSecret  = process.env.AI_CORE_CLIENT_SECRET;
@@ -1030,7 +1029,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
           role: 'user',
           content: [
             { type: 'text', text: this._buildVisionPrompt() },
-            ...imagePages.map(function(b64){ return { type: 'image_url', image_url: { url: `data:image/png;base64,${b64}` } }; })
+            { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } }
           ]
         }
       ]
@@ -1133,17 +1132,13 @@ Bill-To / Accenture address block (extract if visible — for reference only, ne
 Other:
   country                 — country of the delivery/project address (e.g. "US")
 
-LINE ITEM RULE — INDIVIDUAL LINES ONLY:
-Extract ONLY individual billable line items. DO NOT extract summary, subtotal, or total rows as line items. Specifically EXCLUDE any row whose description is or starts with: "Total", "Subtotal", "Total ARCH", "Total MEP", "Total Acoustics", "Total Fee", "Total Reimbursables", "Total this Phase", "Total this Invoice", "Billings to Date", "Grand Total". These are aggregations of other lines — including them double-counts. Extract only the detail lines that roll UP into those totals (e.g. the individual "Construction", "Punch List & Closeout", "Design Development" lines under each phase, and individual reimbursable people/vendors), NOT the "Total X" rows themselves. For the current-period amount, use the Current Fee Billing column, never Previous or Earned-to-Date.
-
 LINE ITEMS — extract all visible rows:
 - For each line: unspsc (if printed, else ""), description, amount (as printed on invoice), isFreight (true if shipping/freight/delivery line), lineVerdict (VERIFIED or FLAGGED), lineReason (what you saw), lineConfidence, page (page number the line appears on, default 1).
 - Freight/shipping lines: isFreight=true, lineVerdict="SUPPRESSED", lineReason="Freight/shipping — distributed across line items".
 - Tax lines: lineVerdict="SUPPRESSED", isFreight=false, lineReason="Tax line — handled in tax layer".
 - Zero-amount lines (amount=0 or blank): lineVerdict="SUPPRESSED", lineReason="zero amount — not billable". This includes document/drawing/title rows, cover-sheet entries, and any line whose printed amount is $0.00.
 - PO/reference-only rows with no amount: lineVerdict="SUPPRESSED", lineReason="PO/reference — not billable".
-- Total/subtotal/aggregation rows: lineVerdict="SUPPRESSED", lineReason="aggregation row — double-counts detail lines above". Apply this to any row matching the LINE ITEM RULE above.
-- Real billable lines (non-zero amount, not freight, not tax, not a total/subtotal row): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
+- Real billable lines (non-zero amount, not freight, not tax): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
 
 CONSISTENCY CHECKS — report these:
 - Do line item amounts sum to the invoice subtotal/gross?

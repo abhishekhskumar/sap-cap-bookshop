@@ -606,6 +606,29 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         visionKeepLines.push(li);
       }
     });
+
+    // Merge prior-layer suppressions (docai + claude) with vision's, de-duping by description.
+    // Each unique line gets suppressedBy as an array of every layer that caught it.
+    const prevSuppressedLines = (prevResult && prevResult.suppressedLines) || [];
+    const suppMap = new Map();
+    prevSuppressedLines.forEach(function(li) {
+      const key = (li.description || '').toLowerCase().trim();
+      if (!suppMap.has(key)) suppMap.set(key, Object.assign({}, li, { suppressedBy: [] }));
+      const entry = suppMap.get(key);
+      const layers = Array.isArray(li.suppressedBy) ? li.suppressedBy : (li.suppressedBy ? [li.suppressedBy] : []);
+      layers.forEach(function(layer) { if (!entry.suppressedBy.includes(layer)) entry.suppressedBy.push(layer); });
+    });
+    visionSuppressedLines.forEach(function(li) {
+      const key = (li.description || '').toLowerCase().trim();
+      if (!suppMap.has(key)) {
+        suppMap.set(key, Object.assign({}, li, { suppressedBy: ['vision'] }));
+      } else {
+        const entry = suppMap.get(key);
+        if (!entry.suppressedBy.includes('vision')) entry.suppressedBy.push('vision');
+      }
+    });
+    const mergedSuppressedLines = Array.from(suppMap.values());
+
     const lineItems = visionKeepLines.map(function(li) {
       return Object.assign({}, li, { freightAmount: 0, itemAmount: li.amount || 0, netAmount: li.amount || 0, vertexTaxAmount: null, freightTaxAmount: null, provenance: 'extracted', freightProvenance: 'extracted' });
     });
@@ -618,6 +641,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       : null;
 
     LOG.info(`Vision audit complete in ${Date.now() - startTime}ms — ${fields.length} fields, ${lineItems.length} lines${lineItemTally ? ', tally: '+lineItemTally.agreeCount+'/'+lineItemTally.totalLines+' agree' : ''}`);
+    LOG.info('VISION_HANDLER_RETURN stats=%j fields=%d lineItems=%d', { total: fields.length, verified, corrected, flagged }, fields.length, lineItems.length);
 
     return JSON.stringify({
       documentId,
@@ -625,7 +649,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceMode: mode,
       fields,
       lineItems,
-      suppressedLines: visionSuppressedLines,
+      suppressedLines: mergedSuppressedLines,
       lineItemCorrections: [],
       consistencyChecks: intelligence.consistencyChecks || [],
       lineItemTally,
@@ -1035,32 +1059,69 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
       ]
     };
 
-    const response = await fetch(deploymentUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${access_token}`,
-        'Content-Type': 'application/json',
-        'AI-Resource-Group': resourceGroup
-      },
-      body: JSON.stringify(orchBody)
-    });
-    if (!response.ok) throw new Error(`AI Core vision call failed: ${response.status} ${await response.text()}`);
-
-    const data = await response.json();
-    const orchestrationResult = data.orchestration_result;
-    console.log('VISION RAW:', JSON.stringify(orchestrationResult).substring(0, 2000));
-    const content = orchestrationResult?.choices?.[0]?.message?.content || '';
-    const cleaned = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    let parsedFields;
+    console.log('VISION_DIAG calling model=%s image_b64_len=%d url=%s', modelName, imageBase64 ? imageBase64.length : 0, deploymentUrl);
+    let rawResponseText;
     try {
-      parsedFields = JSON.parse(cleaned);
-    } catch (e) {
-      console.log('VISION PARSED count:', 'PARSE FAILED —', e.message);
-      console.log('VISION CLEANED CONTENT:', cleaned.substring(0, 2000));
-      throw e;
+      const response = await fetch(deploymentUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+          'Content-Type': 'application/json',
+          'AI-Resource-Group': resourceGroup
+        },
+        body: JSON.stringify(orchBody)
+      });
+
+      // Capture raw text before any parsing so we can log it unconditionally
+      rawResponseText = await response.text();
+      console.log('VISION_DIAG HTTP status=%d raw_body_len=%d', response.status, rawResponseText.length);
+      console.log('VISION_DIAG RAW BODY (first 4000):', rawResponseText.substring(0, 4000));
+
+      if (!response.ok) {
+        throw new Error(`AI Core vision call failed: ${response.status} ${rawResponseText}`);
+      }
+
+      const data = JSON.parse(rawResponseText);
+      const orchestrationResult = data.orchestration_result;
+      const rawContent = orchestrationResult?.choices?.[0]?.message?.content;
+      console.log('VISION_DIAG top_keys=%j', Object.keys(data));
+      console.log('VISION_DIAG orch_present=%s choices=%d finish=%s', !!orchestrationResult, orchestrationResult?.choices?.length ?? 0, orchestrationResult?.choices?.[0]?.finish_reason ?? 'n/a');
+      console.log('VISION_DIAG content_type=%s is_array=%s raw_len=%d', typeof rawContent, Array.isArray(rawContent), rawContent == null ? -1 : (typeof rawContent === 'string' ? rawContent.length : JSON.stringify(rawContent).length));
+
+      // Claude via Orchestration may return content as an array of content blocks rather than a plain string
+      let content;
+      if (Array.isArray(rawContent)) {
+        const textBlocks = rawContent.filter(b => b.type === 'text').map(b => b.text);
+        content = textBlocks.join('');
+        console.log('VISION_DIAG content was array: %d block(s), %d text block(s), joined_len=%d', rawContent.length, textBlocks.length, content.length);
+      } else {
+        content = rawContent || '';
+      }
+      // Log the exact string the model returned, before any cleaning or parsing
+      console.log('VISION_DIAG MODEL RAW CONTENT len=%d first-char=%s last-char=%s', content.length, JSON.stringify(content[0]), JSON.stringify(content[content.length - 1]));
+      console.log('VISION_DIAG MODEL RAW CONTENT (first 6000):\n', content.substring(0, 6000));
+      if (content.length > 6000) console.log('VISION_DIAG MODEL RAW CONTENT (last 500):\n', content.substring(content.length - 500));
+
+      const cleaned = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      console.log('VISION_DIAG cleaned_len=%d preview=%s', cleaned.length, cleaned.substring(0, 200));
+      let parsedFields;
+      try {
+        parsedFields = JSON.parse(cleaned);
+      } catch (e) {
+        console.log('VISION PARSE FAILED:', e.message, '| cleaned_len:', cleaned.length);
+        console.log('VISION CLEANED CONTENT:', cleaned.substring(0, 3000));
+        throw e;
+      }
+      console.log('VISION PARSED: fields=%d lineItems=%d corrections=%d', parsedFields.fields ? parsedFields.fields.length : 0, parsedFields.lineItems ? parsedFields.lineItems.length : 0, parsedFields.lineItemCorrections ? parsedFields.lineItemCorrections.length : 0);
+      return parsedFields;
+    } catch (err) {
+      console.log('VISION_DIAG CAUGHT ERROR name=%s message=%s', err.name, err.message);
+      console.log('VISION_DIAG CAUGHT ERROR stack=%s', err.stack || '(no stack)');
+      if (rawResponseText !== undefined) {
+        console.log('VISION_DIAG raw body at time of error (first 2000):', rawResponseText.substring(0, 2000));
+      }
+      throw err;
     }
-    console.log('VISION PARSED count:', parsedFields.fields ? parsedFields.fields.length : 'PARSE FAILED');
-    return parsedFields;
   }
 
   _buildVisionPrompt() {
@@ -1133,12 +1194,13 @@ Other:
   country                 — country of the delivery/project address (e.g. "US")
 
 LINE ITEMS — extract all visible rows:
-- For each line: unspsc (if printed, else ""), description, amount (as printed on invoice), isFreight (true if shipping/freight/delivery line), lineVerdict (VERIFIED or FLAGGED), lineReason (what you saw), lineConfidence, page (page number the line appears on, default 1).
-- Freight/shipping lines: isFreight=true, lineVerdict="SUPPRESSED", lineReason="Freight/shipping — distributed across line items".
-- Tax lines: lineVerdict="SUPPRESSED", isFreight=false, lineReason="Tax line — handled in tax layer".
+- For each line: unspsc (if printed, else ""), description, amount (as printed on invoice), isFreight, lineVerdict, lineReason (what you saw), lineConfidence, page (page number the line appears on, default 1).
+- Freight/shipping lines: isFreight=true if description matches (case-insensitive): "shipping", "freight", "delivery", "estimated travel and shipping", "travel and shipping", "handling", "shipping & handling". Set lineVerdict="SUPPRESSED", lineReason="Freight/shipping — distributed across line items".
+- Tax lines: lineVerdict="SUPPRESSED", isFreight=false, lineReason="Tax line — handled in tax layer". Detect by description matching "sales tax", "tax", "VAT", "GST", or similar.
+- Subtotal/total/aggregation rows: lineVerdict="SUPPRESSED", lineReason="Subtotal/total row — not a billable line item".
+- PO/Ariba reference rows with no real billable amount: lineVerdict="SUPPRESSED", lineReason="PO/reference — not billable".
 - Zero-amount lines (amount=0 or blank): lineVerdict="SUPPRESSED", lineReason="zero amount — not billable". This includes document/drawing/title rows, cover-sheet entries, and any line whose printed amount is $0.00.
-- PO/reference-only rows with no amount: lineVerdict="SUPPRESSED", lineReason="PO/reference — not billable".
-- Real billable lines (non-zero amount, not freight, not tax): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
+- Real billable lines (non-zero amount, not freight, not tax, not PO/PR reference, not a total row): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
 
 CONSISTENCY CHECKS — report these:
 - Do line item amounts sum to the invoice subtotal/gross?
@@ -1231,6 +1293,7 @@ LINE ITEM VERDICT RULES (audit each line against the invoice text):
 - "VERIFIED" — amount and description match the source document; this is a real billable line.
 - "CORRECTED" — Doc AI misread the amount or description; output the corrected amount/description and explain in lineReason (e.g. "Doc AI read 3,930 as 39.30 — corrected to match invoice").
 - "SUPPRESSED" — this row must NOT be a billable line: PO/Ariba reference rows, subtotal/total rows, breakdown sub-rows labeled "included in total above", tax lines, or freight/shipping lines (use isFreight=true for freight; still set lineVerdict="SUPPRESSED" on freight lines). Explain in lineReason.
+- "SUPPRESSED" (REIMBURSABLE BACKUP RECEIPTS): Expense invoices sometimes list a named-expense or reimbursable-total SUMMARY line (e.g. "Sheehan, David — $114.00 Reimbursable Expenses") immediately followed by individual receipt/backup lines (e.g. "$2.90 subway fare", "transit ticket $3.50"). The backup lines document the summary — they are NOT additional billable items. Detection: (a) a summary/named-expense line exists AND (b) the backup line amounts sum to approximately the summary amount (within ±5%). When detected: keep the summary line as VERIFIED; set each backup receipt line to lineVerdict="SUPPRESSED", lineReason="Backup receipt for [summary description] — rolled up into summary total; suppressed to prevent double-counting". For each suppressed backup line emit a lineItemCorrections entry: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt detail for [summary description] — amounts sum to [total]", oldValue=[backup amount as string], newValue="0". ONLY suppress when a matching summary line exists AND amounts approximately sum to it; if no clear summary exists, keep all lines as VERIFIED/FLAGGED.
 - "FLAGGED" — ambiguous; needs human review.
 
 LINE ITEM OUTPUT MODE:

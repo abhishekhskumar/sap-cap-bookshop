@@ -526,6 +526,11 @@ async function runVision(){
       body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),imageBase64:imgPages[0],imagePages:imgPages,docAIResult:JSON.stringify(claudeResult||docaiResult||null)})});
     var text=await response.text(); var data;
     try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
+    console.log('[VISION_FRONT] raw text (first 500):', text.substring(0,500));
+    console.log('[VISION_FRONT] data.stats:', JSON.stringify(data ? data.stats : 'NO DATA'));
+    console.log('[VISION_FRONT] data.fields?.length:', data ? (data.fields ? data.fields.length : 'no fields key') : 'NO DATA');
+    console.log('[VISION_FRONT] data.lineItems?.length:', data ? (data.lineItems ? data.lineItems.length : 'no lineItems key') : 'NO DATA');
+    console.log('[VISION_FRONT] data.processingTimeMs:', data ? data.processingTimeMs : 'NO DATA');
     visionResult=data; lastResult=data; visionRan=true; var s=data.stats||{};
     _statusVision='✅ Claude Vision audit complete in '+(data.processingTimeMs||'?')+'ms — '+(s.verified||0)+' verified, '+(s.corrected||0)+' corrected, '+(s.flagged||0)+' flagged';
     _renderStatusAll();
@@ -978,15 +983,18 @@ function renderLineItems(data){
       var tl=lt==='shipping'?'Shipping':lt==='tax'?'Tax':'PO/PR';
       var tb=lt==='shipping'?'#dbeafe':lt==='tax'?'#fef3c7':'#e5e7eb';
       var tf=lt==='shipping'?'#1d4ed8':lt==='tax'?'#92400e':'#374151';
-      var sb=li.suppressedBy||'docai';
-      var sbl=sb==='claude'?'Claude':sb==='vision'?'Vision':'Doc AI';
-      var sbb=sb==='claude'?'#ede9fe':sb==='vision'?'#d1fae5':'#dbeafe';
-      var sbf=sb==='claude'?'#5b21b6':sb==='vision'?'#065f46':'#1e40af';
+      var sb=Array.isArray(li.suppressedBy)?li.suppressedBy:(li.suppressedBy?[li.suppressedBy]:['docai']);
+      var badges=sb.map(function(layer){
+        var lbl=layer==='claude'?'Claude':layer==='vision'?'Vision':'Doc AI';
+        var bg=layer==='claude'?'#ede9fe':layer==='vision'?'#d1fae5':'#dbeafe';
+        var fg=layer==='claude'?'#5b21b6':layer==='vision'?'#065f46':'#1e40af';
+        return '<span style="display:inline-block;background:'+bg+';color:'+fg+';padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;margin-right:3px;">'+lbl+'</span>';
+      }).join('');
       html+='<tr style="color:#999;"><td><span style="text-decoration:line-through;">'+(li.description||'—')+'</span></td>';
       html+='<td><span style="display:inline-block;background:'+tb+';color:'+tf+';padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">'+tl+'</span></td>';
       html+='<td class="num" style="text-decoration:line-through;">'+money(li.amount)+'</td>';
       html+='<td style="font-size:12px;">'+(li.suppressReason||li.lineReason||'—')+'</td>';
-      html+='<td><span style="display:inline-block;background:'+sbb+';color:'+sbf+';padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">'+sbl+'</span></td></tr>';
+      html+='<td>'+badges+'</td></tr>';
     });
     html+='</table>';
   }

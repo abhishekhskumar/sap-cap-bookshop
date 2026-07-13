@@ -23,3 +23,8 @@ mta_archives/
 .env.*
 *.pdf
 uploads/
+
+cds-out.log
+cds-err.log
+cds-watch.log
+*.log

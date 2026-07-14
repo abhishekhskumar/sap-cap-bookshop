@@ -506,19 +506,21 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
   }
 
   async _handleAuditWithVision(req) {
-    const { documentId, imageBase64, docAIResult: docAIResultStr } = req.data;
+    const { documentId, imageBase64, imagePages: imagePagesRaw, docAIResult: docAIResultStr } = req.data;
     const prevResult   = docAIResultStr ? (() => { try { return JSON.parse(docAIResultStr); } catch(e) { return null; } })() : null;
     const docaiLines   = prevResult ? (prevResult.keepLines || prevResult.lineItems || []) : [];
     const claudeFields = prevResult ? (prevResult.fields  || []) : [];
     const claudeLines  = prevResult ? (prevResult.lineItems || []) : [];
     const LOG = cds.log('intelligence');
     if (!imageBase64) return req.error(400, 'imageBase64 is required');
-    LOG.info(`Vision audit requested: ${documentId}`);
+    // Use full page array when available; fall back to single page-1 image
+    const imagePages = (Array.isArray(imagePagesRaw) && imagePagesRaw.length > 0) ? imagePagesRaw : [imageBase64];
+    LOG.info(`Vision audit requested: ${documentId} (${imagePages.length} page(s))`);
 
     const startTime = Date.now();
     let intelligence;
     try {
-      intelligence = await this._callVisionAudit(imageBase64);
+      intelligence = await this._callVisionAudit(imagePages);
     } catch (err) {
       LOG.error('Vision audit failed:', err.message);
       return req.error(500, `Vision audit failed: ${err.message}`);
@@ -1022,7 +1024,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     return JSON.parse(cleaned);
   }
 
-  async _callVisionAudit(imageBase64) {
+  async _callVisionAudit(imagePages) {
     const authUrl       = process.env.AI_CORE_AUTH_URL;
     const clientId      = process.env.AI_CORE_CLIENT_ID;
     const clientSecret  = process.env.AI_CORE_CLIENT_SECRET;
@@ -1040,6 +1042,12 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     if (!tokenRes.ok) throw new Error(`AI Core token failed: ${tokenRes.status}`);
     const { access_token } = await tokenRes.json();
 
+    // Build one image_url content block per page — multi-page invoice support
+    const pageImageBlocks = imagePages.map(b64 => ({
+      type: 'image_url',
+      image_url: { url: `data:image/png;base64,${b64}` }
+    }));
+
     const orchBody = {
       orchestration_config: {
         module_configurations: {
@@ -1047,19 +1055,19 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
           llm_module_config: { model_name: modelName, model_params: { max_tokens: 8192 } }
         }
       },
-      input_params: { instruction: 'Analyze the invoice image provided and return the structured field audit as JSON.' },
+      input_params: { instruction: 'Analyze the invoice image(s) provided and return the structured field audit as JSON.' },
       messages_history: [
         {
           role: 'user',
           content: [
             { type: 'text', text: this._buildVisionPrompt() },
-            { type: 'image_url', image_url: { url: `data:image/png;base64,${imageBase64}` } }
+            ...pageImageBlocks
           ]
         }
       ]
     };
 
-    console.log('VISION_DIAG calling model=%s image_b64_len=%d url=%s', modelName, imageBase64 ? imageBase64.length : 0, deploymentUrl);
+    console.log('VISION_DIAG calling model=%s pages=%d url=%s', modelName, imagePages.length, deploymentUrl);
     let rawResponseText;
     try {
       const response = await fetch(deploymentUrl, {
@@ -1173,15 +1181,17 @@ Winning tax-jurisdiction address (per priority rule above):
   shipToState             — two-letter state abbreviation
   shipToPostalCode        — ZIP code
 
-Project address block (extract if visible — may be the winning block for construction):
-  projectAddress          — street address
-  projectAddressCity      — city
-  projectAddressState     — state abbreviation
-  projectAddressPostalCode — ZIP
+Project address block — valid ONLY if a dedicated block with BOTH street AND city is visible (ZIP optional, not required):
+  projectAddress          — street address of the project block; NULL if no street+city block exists
+  projectAddressCity      — derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
+  projectAddressState     — derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
+  projectAddressPostalCode — derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
+DERIVATION RULE: projectAddressCity / projectAddressState / projectAddressCounty / projectAddressPostalCode are NOT independent fields — they derive strictly from projectAddress. If projectAddress is NULL, ALL of these MUST be NULL. Never extract them from any other source.
+PROJECT NAME ≠ PROJECT ADDRESS: A project/contract/job name line that includes a location (e.g. "Accenture: Denver 999 18th Street Ste. 900S") is a PROJECT NAME, not an address block. Do NOT populate projectAddress* from it. Instead: route the location city (e.g. "Denver") to contractDetailsCity and the street (if any street follows) to contractDetails.
 
 Contract/delivery address block (extract if visible):
   contractDetails         — street address
-  contractDetailsCity     — city
+  contractDetailsCity     — city (also receives the location from a project name line when no valid projectAddress block exists)
   contractDetailsPostalcode — ZIP (no state field for this block)
 
 Bill-To / Accenture address block (extract if visible — for reference only, never the tax address):
@@ -1193,14 +1203,31 @@ Bill-To / Accenture address block (extract if visible — for reference only, ne
 Other:
   country                 — country of the delivery/project address (e.g. "US")
 
-LINE ITEMS — extract all visible rows:
-- For each line: unspsc (if printed, else ""), description, amount (as printed on invoice), isFreight, lineVerdict, lineReason (what you saw), lineConfidence, page (page number the line appears on, default 1).
-- Freight/shipping lines: isFreight=true if description matches (case-insensitive): "shipping", "freight", "delivery", "estimated travel and shipping", "travel and shipping", "handling", "shipping & handling". Set lineVerdict="SUPPRESSED", lineReason="Freight/shipping — distributed across line items".
-- Tax lines: lineVerdict="SUPPRESSED", isFreight=false, lineReason="Tax line — handled in tax layer". Detect by description matching "sales tax", "tax", "VAT", "GST", or similar.
-- Subtotal/total/aggregation rows: lineVerdict="SUPPRESSED", lineReason="Subtotal/total row — not a billable line item".
-- PO/Ariba reference rows with no real billable amount: lineVerdict="SUPPRESSED", lineReason="PO/reference — not billable".
-- Zero-amount lines (amount=0 or blank): lineVerdict="SUPPRESSED", lineReason="zero amount — not billable". This includes document/drawing/title rows, cover-sheet entries, and any line whose printed amount is $0.00.
-- Real billable lines (non-zero amount, not freight, not tax, not PO/PR reference, not a total row): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
+LINE ITEMS — extract line items from ALL pages provided (multi-page: all detail pages). Continuation pages that have no column header keep the same columns as the first detail page; the current-period / rightmost money column still applies. Negative amounts: a leading "-" OR parentheses (e.g. "(500)") both mean negative.
+
+For EACH line item include "page": <N> (1-based page number the row was read from) for auditability.
+
+NON-INVOICE PAGES — do NOT output any line items (not even with lineVerdict="SUPPRESSED") from the following page types. These pages contribute nothing to billable extraction:
+- Email / cover-letter pages: pages whose content starts with or prominently contains From:, To:, Sent:, Cc:, Subject:, RE:, FW:, "Hello", "Thank you", or "please find attached / please see attached"
+- Purchase Order / Ariba / SAP / SAP Business Network / Buy Now pages
+- Waiver / Lien / Affidavit pages
+- SUMMARY / QUICK GLANCE / Breakdown / Backup / Subaccount / CHARGES & CREDITS / TAXES FEES & SURCHARGES pages
+
+ROW-LEVEL SUPPRESSION — within valid invoice pages, set lineVerdict="SUPPRESSED" for:
+- "Reimbursables Breakdown This Period" rows and their associated total row
+- Sub-rows labeled "Included in Total above" or equivalent
+- Subtotal / Total / Total This Phase / Total Reimbursables / Balance rows (any row that aggregates other rows)
+- Shipping / Freight / Handling / Delivery / Courier / Air Freight / "Shipping & Handling" lines — isFreight=true, lineReason="Freight/shipping — distributed across line items". Match these as whole terms, NOT naive substrings. A service description that merely contains the word "deliver" is NOT a freight line unless the description as a whole names a freight/delivery service.
+- Tax lines (Sales Tax / Tax / VAT / GST or similar) — isFreight=false, lineReason="Tax line — handled in tax layer". This applies even in Credit or reversal rows.
+- Any of the above freight/tax categories combined with "Travel" or any other word on the same description line are still SUPPRESSED.
+- PO / Ariba reference rows with no real billable amount — lineReason="PO/reference — not billable"
+- Zero-amount lines (amount=0, blank, or $0.00) — lineReason="zero amount — not billable". Includes document/drawing/title rows and cover-sheet entries.
+
+KEEP exceptions — these are billable and must NOT be suppressed:
+- Standalone "Travel" or "Travel Expenses" lines (no freight/shipping component)
+- A delivery-only service line (where the service IS the delivery, e.g. "Software Delivery Service") — keep if no freight keyword applies as the primary descriptor
+
+Real billable lines (non-zero amount, not any suppression category above): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
 
 CONSISTENCY CHECKS — report these:
 - Do line item amounts sum to the invoice subtotal/gross?
@@ -1269,6 +1296,9 @@ DOMAIN RULES:
    Once a fallback block wins, take all ship-to fields from that SAME block — never mix fields from different blocks. In the reason, state which block won and why Ship-To was absent. If Doc AI pulled fields from the vendor address or from the wrong block, CORRECT them.
    If NONE of the valid blocks are present (only the vendor address exists): set correctValue to "Manual Action Required — no valid delivery address found" and mark FLAGGED for all ship-to fields.
    ADDRESS COMPLETENESS: If Doc AI extracted the correct block but included the recipient name, Attn line, or full multi-line address text, that is NOT an error — mark VERIFIED. Only CORRECT if the data came from the wrong block, the vendor address, or if city/state/zip are factually wrong.
+   PROJECT ADDRESS DERIVATION DISCIPLINE: projectAddress is valid ONLY if a dedicated block with BOTH street AND city is present on the invoice (ZIP is optional). A project/contract/job NAME line that contains a location (e.g. "Accenture: Denver 999 18th Street Ste. 900S") is a PROJECT NAME — it is NOT a project address block. Do NOT extract projectAddress* fields from a name line.
+   projectAddressCity, projectAddressState, projectAddressCounty, and projectAddressPostalCode derive ONLY from a valid projectAddress block. If projectAddress is null or blank (no valid street+city block exists), ALL of these MUST be null — never populate them independently from any other source.
+   When a project name line contains a location (e.g. "Accenture: Denver"), route the location city (e.g. "Denver") to contractDetailsCity and the street to contractDetails (if a street follows the name). If Doc AI incorrectly populated projectAddressCity/State from a name line rather than a valid block, mark those fields CORRECTED with correctValue="" and route the city to contractDetailsCity instead.
 2. VENDOR NAME: legal entity issuing the invoice, not the remit-to processor.
 3. PO NUMBER: 10-digit number starting with 6 for Accenture POs.
 4. DATES: The app is US-based; expected display format is MM/DD/YYYY. If Doc AI returned the same date in a different format (ISO, long-form, etc.), set correctValue to MM/DD/YYYY and mark VERIFIED — format-only normalization is NOT a correction. Only mark CORRECTED if the actual calendar date (day, month, or year) is factually wrong.

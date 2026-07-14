@@ -177,6 +177,7 @@
       <div id="statusBox"></div>
       <div class="card" id="fieldVerifCard" style="display:none;">
         <div class="card-title">Three-Layer Field Comparison <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
+        <div id="triageBanner" style="margin-bottom:8px;"></div>
         <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
       </div>
 
@@ -385,7 +386,7 @@ async function renderPdfToPng(file){
     var buf=await file.arrayBuffer();
     doc=await pdfLib.getDocument({data:new Uint8Array(buf)}).promise;
   }
-  var maxPages=Math.min(doc.numPages,5);
+  var maxPages=Math.min(doc.numPages,50);
   var images=[];
   for(var n=1;n<=maxPages;n++){
     var page=await doc.getPage(n);
@@ -553,6 +554,144 @@ function setView(mode){
 
 function renderAll(data){ renderGeneral(data); renderRecon(data); renderLineItems(data); renderChangelog(data); renderIntel(data); drawOcrBoxes(pdfCurrentPage); }
 
+// ── Frontend normalize — mirrors srv/eval.js normalize() exactly ──────────
+var _FE_DATE_FIELDS=new Set(['documentDate']);
+var _FE_AMOUNT_FIELDS=new Set(['grossAmount','taxAmount','netAmount','taxAmountHeader',
+  'totalTaxableAmount','nonTaxableAmount','subTotal','shippingCostHeader',
+  'workCompletedThisPeriodTotal','freight','invoiceNetTotal','freightAmount','itemAmount']);
+var _FE_ADDRESS_FIELDS=new Set(['shipToAddress','projectAddress','contractDetails','accentureAddress']);
+var _FE_STATE_MAP={
+  'alabama':'al','alaska':'ak','arizona':'az','arkansas':'ar','california':'ca',
+  'colorado':'co','connecticut':'ct','delaware':'de','florida':'fl','georgia':'ga',
+  'hawaii':'hi','idaho':'id','illinois':'il','indiana':'in','iowa':'ia','kansas':'ks',
+  'kentucky':'ky','louisiana':'la','maine':'me','maryland':'md','massachusetts':'ma',
+  'michigan':'mi','minnesota':'mn','mississippi':'ms','missouri':'mo','montana':'mt',
+  'nebraska':'ne','nevada':'nv','new hampshire':'nh','new jersey':'nj','new mexico':'nm',
+  'new york':'ny','north carolina':'nc','north dakota':'nd','ohio':'oh','oklahoma':'ok',
+  'oregon':'or','pennsylvania':'pa','rhode island':'ri','south carolina':'sc',
+  'south dakota':'sd','tennessee':'tn','texas':'tx','utah':'ut','vermont':'vt',
+  'virginia':'va','washington':'wa','west virginia':'wv','wisconsin':'wi','wyoming':'wy',
+  'district of columbia':'dc'
+};
+function _feNormalizeDate(v){
+  var m=v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(m){var yr=m[3].length===2?'20'+m[3]:m[3];return yr+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');}
+  m=v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m)return m[1]+'-'+m[2]+'-'+m[3];
+  var months={january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',
+    july:'07',august:'08',september:'09',october:'10',november:'11',december:'12'};
+  m=v.match(/^(\w+)\s+(\d{1,2}),?\s*(\d{4})$/i);
+  if(m){var mo=months[m[1].toLowerCase()];if(mo)return m[3]+'-'+mo+'-'+m[2].padStart(2,'0');}
+  return v.toLowerCase().trim();
+}
+function _feNormalizeAmount(v){
+  var n=parseFloat(String(v).replace(/[$,\s]/g,''));
+  return isNaN(n)?'':n.toFixed(2);
+}
+function _feNormalize(fieldName,val){
+  if(val==null)return '';
+  var v=String(val).trim();
+  if(!v)return '';
+  if(_FE_DATE_FIELDS.has(fieldName))return _feNormalizeDate(v);
+  if(_FE_AMOUNT_FIELDS.has(fieldName))return _feNormalizeAmount(v);
+  if(fieldName==='shipToCounty')return v.toLowerCase().replace(/\s+county\s*$/i,'').replace(/\s+/g,' ').trim();
+  if(fieldName==='shipToState'){var low=v.toLowerCase().trim();return _FE_STATE_MAP[low]||low;}
+  if(_FE_ADDRESS_FIELDS.has(fieldName)){
+    return v.toLowerCase().replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim()
+      .split(' ').filter(Boolean).sort().join(' ');
+  }
+  return v.toLowerCase().replace(/\s+/g,' ').trim();
+}
+// True if every token in `smaller` appears in `larger` (with multiplicity).
+// Used to detect truncation: a shorter fragment is never a correction.
+function _feTokenSubset(smaller,larger){
+  if(!smaller)return true;
+  var st=smaller.split(' ').filter(Boolean).sort();
+  var lt=larger.split(' ').filter(Boolean).slice();
+  for(var i=0;i<st.length;i++){var idx=lt.indexOf(st[i]);if(idx===-1)return false;lt.splice(idx,1);}
+  return true;
+}
+// Should `challN` beat `baseN` as the better value?
+// Returns 'chall' only when challenger genuinely corrects or fills blank — never for truncation or reformat.
+function _pickBest(baseN,challN){
+  if(!challN)return 'base';
+  if(!baseN)return 'chall';         // gap-fill: base was blank
+  if(challN===baseN)return 'base';  // normalized equal → base wins (Rule 5: reformat = agreement)
+  if(_feTokenSubset(challN,baseN))return 'base';  // challenger is a truncation/subset of base → base wins
+  // Neither is a subset: prefer the value with more token-components; base wins ties (Rule 4)
+  var bc=baseN.split(' ').filter(Boolean).length;
+  var cc=challN.split(' ').filter(Boolean).length;
+  return cc>bc?'chall':'base';
+}
+
+// ── Triage helpers ────────────────────────────────────────────────────
+function _fieldTriageStatus(df, cf, vf, d_run, c_run, v_run, fieldName){
+  var dv=df?(df.docAIValue||''):'';
+  var cv=cf?(cf.correctValue||cf.docAIValue||''):'';
+  var vv=vf?(vf.correctValue||vf.docAIValue||''):'';
+  var hasD=d_run&&dv.trim()!=='';
+  var hasC=c_run&&cv.trim()!=='';
+  var hasV=v_run&&vv.trim()!=='';
+  if(!hasD&&!hasC&&!hasV){
+    // CAPM-defined MANUAL_ACTION triggers visible at extraction level: SCNID missing
+    // All other blank fields are NOT_APPLICABLE (field doesn't apply to this invoice — not a problem)
+    var fn=(fieldName||'').toLowerCase().trim();
+    if(fn==='scnid') return 'MANUAL_ACTION';
+    return 'NOT_APPLICABLE';
+  }
+  // Claude verdict is the normalization-aware comparison: CORRECTED/FLAGGED = real disagreement
+  if(c_run&&cf){if(cf.verdict==='CORRECTED'||cf.verdict==='FLAGGED') return 'REVIEW';}
+  // Vision: compare against docAI value (Vision VERIFIED = legible, not a docAI comparison)
+  if(v_run&&hasV&&hasD&&vv.trim().toLowerCase()!==dv.trim().toLowerCase()) return 'REVIEW';
+  // docAI blank but another layer filled it → needs confirmation
+  if(!hasD&&(hasC||hasV)) return 'REVIEW';
+  return 'AUTO_APPROVE';
+}
+
+function _buildTriageBanner(triageMap, allNames, d_run, c_run, v_run){
+  if(!triageMap||!allNames.length) return '';
+  var statuses=allNames.map(function(n){return triageMap[n]||{status:'NOT_APPLICABLE',taxCritical:false};});
+  // NOT_APPLICABLE (field absent on this invoice) is excluded from all triage counts — benign null is not a problem
+  var applicable=statuses.filter(function(s){return s.status!=='NOT_APPLICABLE';});
+  var autoApprove=applicable.filter(function(s){return s.status==='AUTO_APPROVE';}).length;
+  var review=applicable.filter(function(s){return s.status==='REVIEW';}).length;
+  var manual=applicable.filter(function(s){return s.status==='MANUAL_ACTION';}).length;
+  var taxCritReview=applicable.filter(function(s){return s.status==='REVIEW'&&s.taxCritical;}).length;
+  var overall=manual>0?'BLOCKED':review>0?'NEEDS_REVIEW':'CLEAN';
+
+  // Roll-up bar
+  var rollBg=overall==='CLEAN'?'#d1fae5':overall==='BLOCKED'?'#fee2e2':'#fef3c7';
+  var rollFg=overall==='CLEAN'?'#065f46':overall==='BLOCKED'?'#991b1b':'#92400e';
+  var rollLabel=overall==='CLEAN'?'Clean — ready for review':overall==='BLOCKED'?'Blocked':'Needs Review';
+  var rollHtml='<div style="display:flex;align-items:center;gap:14px;padding:9px 14px;background:'+rollBg
+    +';border-radius:8px;margin-bottom:8px;font-size:12px;font-weight:600;color:'+rollFg+';">'
+    +'<span>Triage: <strong>'+rollLabel+'</strong></span>'
+    +(autoApprove?'<span style="font-weight:400;">&#10003; '+autoApprove+' auto-approved</span>':'')
+    +(review?'<span style="font-weight:400;">&#9888; '+review+' to review</span>':'')
+    +(manual?'<span style="font-weight:400;">&#9679; '+manual+' manual</span>':'')
+    +'</div>';
+
+  // Recommendation banner — only fires on populated disagreements or genuine CAPM triggers, never on nulls
+  var recHtml='';
+  if(overall==='CLEAN'){
+    recHtml='<div style="padding:8px 14px;background:#d1fae5;color:#065f46;border-radius:8px;margin-bottom:8px;font-size:12px;">'
+      +'&#10003; All fields resolved — ready for Global Tax sign-off.</div>';
+  } else if(manual>0){
+    recHtml='<div style="padding:8px 14px;background:#fee2e2;color:#991b1b;border-radius:8px;margin-bottom:8px;font-size:12px;">'
+      +'&#9679; Manual review required: check SCNID or jurisdiction address — a CAPM trigger fired.</div>';
+  } else if(taxCritReview>0&&!c_run){
+    recHtml='<div style="padding:8px 14px;background:#fef3c7;color:#92400e;border-radius:8px;margin-bottom:8px;font-size:12px;">'
+      +'&#9888; '+taxCritReview+' tax-critical field'+(taxCritReview>1?'s':'')+' disagree — running Claude audit may resolve them.</div>';
+  } else if(taxCritReview>0&&c_run&&!v_run){
+    recHtml='<div style="padding:8px 14px;background:#fef3c7;color:#92400e;border-radius:8px;margin-bottom:8px;font-size:12px;">'
+      +'&#9888; '+taxCritReview+' tax-critical field'+(taxCritReview>1?'s':'')+' still disagree — Vision audit may help.</div>';
+  } else if(review>0){
+    recHtml='<div style="padding:8px 14px;background:#fef3c7;color:#92400e;border-radius:8px;margin-bottom:8px;font-size:12px;">'
+      +'&#9888; '+review+' field'+(review>1?'s':'')+' need review — layers disagree on populated values.</div>';
+  }
+  return rollHtml+recHtml;
+}
+
 function renderGeneral(data){
   // ── General Information (asset comparison) ─────────────────────
   var gi=data.generalInfo||[];
@@ -631,6 +770,20 @@ function renderGeneral(data){
   fvCard.style.display='';
 
   var d_run=!!docaiResult, c_run=!!claudeResult, v_run=!!visionResult;
+
+  // Compute triage for every field
+  var triageMap={};
+  allNames.forEach(function(name){
+    var df2=docaiResult&&docaiResult.fields?docaiResult.fields.find(function(f){return f.fieldName===name;}):null;
+    var cf2=claudeResult&&claudeResult.fields?claudeResult.fields.find(function(f){return f.fieldName===name;}):null;
+    var vf2=visionResult&&visionResult.fields?visionResult.fields.find(function(f){return f.fieldName===name;}):null;
+    var taxCrit2=!!(df2&&df2.taxCritical)||(cf2&&cf2.taxCritical)||(vf2&&vf2.taxCritical);
+    triageMap[name]={status:_fieldTriageStatus(df2,cf2,vf2,d_run,c_run,v_run,name),taxCritical:!!taxCrit2};
+  });
+
+  // Banner + roll-up (injected above the table via a container div)
+  var bannerEl=document.getElementById('triageBanner');
+  if(bannerEl) bannerEl.innerHTML=_buildTriageBanner(triageMap,allNames,d_run,c_run,v_run);
   var dot=function(run){return run
     ?'<span style="display:block;color:#107e3e;font-size:10px;font-weight:400;margin-top:2px;">&#9679; run</span>'
     :'<span style="display:block;color:#bbb;font-size:10px;font-weight:400;margin-top:2px;">&#9675; not run</span>';};
@@ -643,6 +796,7 @@ function renderGeneral(data){
     +'<th style="'+TH+'">+ Claude'+dot(c_run)+'</th>'
     +'<th style="'+TH+'">Vision'+dot(v_run)+'</th>'
     +'<th style="'+TH+'width:180px;">Best Value</th>'
+    +'<th style="'+TH+'width:72px;text-align:center;">Triage</th>'
     +'</tr></thead><tbody>';
 
   allNames.forEach(function(name){
@@ -656,20 +810,24 @@ function renderGeneral(data){
 
     var rowDisagrees=disagree([d_run?dv:null,c_run?cv:null,v_run?vv:null]);
 
-    // Best value: Doc AI is primary — wins all ties. Another layer only wins when it genuinely changed/filled the value.
+    // Best value — normalization-aware selection (Rule 4 + Rule 5):
+    //   • Reformat-only diffs (date, amount, address tokens) count as AGREEMENT → Doc AI wins.
+    //   • A challenger returning LESS data (token-subset / truncation) never wins.
+    //   • A challenger wins only when it genuinely corrects (different tokens) or fills a blank.
+    //   • Tiebreak on token count: more components wins; Doc AI wins ties.
     var bestVal='', bestLayer='';
-    var dvN=dv?dv.trim().toLowerCase():'', cvN=cv?cv.trim().toLowerCase():'', vvN=vv?vv.trim().toLowerCase():'';
+    var dvN=_feNormalize(name,dv), cvN=_feNormalize(name,cv), vvN=_feNormalize(name,vv);
     if(dvN){
-      // Doc AI has a value: wins unless a later layer explicitly changed it
-      if(v_run&&vvN&&vvN!==dvN){bestVal=vv;bestLayer='vision';}
-      else if(c_run&&cvN&&cvN!==dvN){bestVal=cv;bestLayer='claude';}
+      // Doc AI has a value: Vision checked first (latest layer), then Claude
+      if(v_run&&vvN&&_pickBest(dvN,vvN)==='chall'){bestVal=vv;bestLayer='vision';}
+      else if(c_run&&cvN&&_pickBest(dvN,cvN)==='chall'){bestVal=cv;bestLayer='claude';}
       else{bestVal=dv;bestLayer='docai';}
     } else if(cvN){
-      // Doc AI blank — Claude filled it; Vision wins only if it changed Claude's value
-      if(v_run&&vvN&&vvN!==cvN){bestVal=vv;bestLayer='vision';}
+      // Doc AI blank — Claude gap-fill; Vision wins only if it genuinely improves on Claude
+      if(v_run&&vvN&&_pickBest(cvN,vvN)==='chall'){bestVal=vv;bestLayer='vision';}
       else{bestVal=cv;bestLayer='claude';}
     } else if(vvN){
-      // Both blank — Vision is the only source
+      // Both blank — Vision is the sole source
       bestVal=vv;bestLayer='vision';
     }
 
@@ -704,8 +862,15 @@ function renderGeneral(data){
     else if(bestLayer==='vision')badge='<span style="display:inline-block;background:#fce7f3;color:#9d174d;padding:1px 5px;border-radius:6px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:middle;">Vision</span>';
     var bestCell=bestVal?'<strong>'+escHtml(bestVal)+'</strong>'+badge:'<span style="color:#aaa;">—</span>';
 
-    var rowBg=rowDisagrees?'background:#fffbeb;':'';
+    var ts=triageMap[name]||{status:'AUTO_APPROVE',taxCritical:false};
+    var rowBg=ts.status==='MANUAL_ACTION'?'background:#fef2f2;':
+              ts.status==='REVIEW'&&ts.taxCritical?'background:#fffbeb;':
+              rowDisagrees?'background:#fffbeb;':'';
     var tcBorder=taxCrit?'border-left:3px solid #0a6ed1;':'border-left:3px solid transparent;';
+    var triagePill=ts.status==='NOT_APPLICABLE'?'<span style="color:#ccc;font-size:11px;">—</span>'
+      :ts.status==='AUTO_APPROVE'?'<span title="Auto-approve" style="display:inline-block;background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#10003;</span>'
+      :ts.status==='REVIEW'?'<span title="Needs review" style="display:inline-block;background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#9888;</span>'
+      :'<span title="Manual review required" style="display:inline-block;background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">!</span>';
     html+='<tr class="kv-field-row" data-field="'+name+'" onmouseenter="hoverField(\''+name+'\')" onmouseleave="hoverField(null)"'
       +' style="border-bottom:1px solid #f0f0f0;'+rowBg+tcBorder+'">';
     html+='<td style="padding:7px 10px;font-weight:500;color:#333;font-size:12px;">'
@@ -714,6 +879,7 @@ function renderGeneral(data){
     html+='<td style="padding:7px 10px;line-height:1.4;">'+cCell+'</td>';
     html+='<td style="padding:7px 10px;line-height:1.4;">'+vCell+'</td>';
     html+='<td style="padding:7px 10px;line-height:1.4;">'+bestCell+'</td>';
+    html+='<td style="padding:7px 10px;text-align:center;">'+triagePill+'</td>';
     html+='</tr>';
   });
   html+='</tbody></table>';

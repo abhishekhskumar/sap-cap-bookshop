@@ -517,10 +517,13 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const imagePages = (Array.isArray(imagePagesRaw) && imagePagesRaw.length > 0) ? imagePagesRaw : [imageBase64];
     LOG.info(`Vision audit requested: ${documentId} (${imagePages.length} page(s))`);
 
+    // Derive schema type from prior layer result so the Vision prompt can be construction-aware
+    const prevMode = (prevResult && (prevResult.invoiceMode || prevResult.schemaType)) || 'non_construction';
+
     const startTime = Date.now();
     let intelligence;
     try {
-      intelligence = await this._callVisionAudit(imagePages);
+      intelligence = await this._callVisionAudit(imagePages, prevMode);
     } catch (err) {
       LOG.error('Vision audit failed:', err.message);
       return req.error(500, `Vision audit failed: ${err.message}`);
@@ -631,10 +634,46 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     });
     const mergedSuppressedLines = Array.from(suppMap.values());
 
-    const lineItems = visionKeepLines.map(function(li) {
-      return Object.assign({}, li, { freightAmount: 0, itemAmount: li.amount || 0, netAmount: li.amount || 0, vertexTaxAmount: null, freightTaxAmount: null, provenance: 'extracted', freightProvenance: 'extracted' });
-    });
-    const invoiceNetTotal = +(lineItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2) || null;
+    let lineItems;
+    if (mode === 'construction') {
+      // Build a headerFields proxy from Vision's extracted fields (same shape _consolidateConstruction expects)
+      const visionHeaderProxy = {};
+      (intelligence.fields || []).forEach(function(f) {
+        visionHeaderProxy[f.fieldName] = { value: f.correctValue || f.docAIValue || '' };
+      });
+      // Fall back to prevResult for workCompletedThisPeriodTotal if Vision didn't capture it
+      if (!visionHeaderProxy.workCompletedThisPeriodTotal || !visionHeaderProxy.workCompletedThisPeriodTotal.value) {
+        const prevWctp = prevFieldMap.get('workCompletedThisPeriodTotal');
+        if (prevWctp) visionHeaderProxy.workCompletedThisPeriodTotal = { value: prevWctp.correctValue || prevWctp.docAIValue || '' };
+      }
+      // Vision freight total: sum suppressed lines flagged isFreight
+      const visionFreightTotal = visionSuppressedLines
+        .filter(function(li){ return li.isFreight; })
+        .reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
+      // Normalize keep lines for _consolidateConstruction (lineAction defaults to KEEP, pageType defaults to cont)
+      const constructionKeepLines = visionKeepLines.map(function(li) {
+        return Object.assign({}, li, {
+          lineAction: li.lineAction || 'KEEP',
+          pageType:   li.pageType   || 'cont',
+          amount:     parseFloat(li.amount) || 0
+        });
+      });
+      const consolidated = this._consolidateConstruction(constructionKeepLines, visionFreightTotal, visionHeaderProxy);
+      lineItems = [Object.assign({}, consolidated, {
+        lineVerdict:   'VERIFIED',
+        lineReason:    'Construction invoice — consolidated per FD/CAPM category 5',
+        lineConfidence: 95,
+        provenance:    'extracted',
+        freightProvenance: 'extracted'
+      })];
+    } else {
+      lineItems = visionKeepLines.map(function(li) {
+        return Object.assign({}, li, { freightAmount: 0, itemAmount: li.amount || 0, netAmount: li.amount || 0, vertexTaxAmount: null, freightTaxAmount: null, provenance: 'extracted', freightProvenance: 'extracted' });
+      });
+    }
+    const invoiceNetTotal = mode === 'construction'
+      ? (lineItems[0] ? lineItems[0].itemAmount : 0)
+      : (+(lineItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2) || null);
     const invoiceGrossTotal = vendorTaxAmount != null && invoiceNetTotal != null
       ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2) : invoiceNetTotal;
 
@@ -1024,7 +1063,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     return JSON.parse(cleaned);
   }
 
-  async _callVisionAudit(imagePages) {
+  async _callVisionAudit(imagePages, schemaType) {
     const authUrl       = process.env.AI_CORE_AUTH_URL;
     const clientId      = process.env.AI_CORE_CLIENT_ID;
     const clientSecret  = process.env.AI_CORE_CLIENT_SECRET;
@@ -1060,7 +1099,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
         {
           role: 'user',
           content: [
-            { type: 'text', text: this._buildVisionPrompt() },
+            { type: 'text', text: this._buildVisionPrompt(schemaType) },
             ...pageImageBlocks
           ]
         }
@@ -1132,7 +1171,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     }
   }
 
-  _buildVisionPrompt() {
+  _buildVisionPrompt(schemaType) {
     return `You are auditing an invoice by reading its image directly. You are the primary extraction source — there is no prior OCR output to compare against. Extract and verify the COMPLETE field set from what you see in the image, matching the same coverage as a full Doc AI + Claude text audit.
 
 For each field:
@@ -1227,7 +1266,7 @@ KEEP exceptions — these are billable and must NOT be suppressed:
 - Standalone "Travel" or "Travel Expenses" lines (no freight/shipping component)
 - A delivery-only service line (where the service IS the delivery, e.g. "Software Delivery Service") — keep if no freight keyword applies as the primary descriptor
 
-Real billable lines (non-zero amount, not any suppression category above): lineVerdict="VERIFIED" (or FLAGGED if unreadable).
+${schemaType === 'construction' ? `LINE ITEM OUTPUT MODE — CONSTRUCTION: Extract EACH individual current-period line item separately (PCO lines, cost codes, sworn statement lines, etc.). Do NOT consolidate into a single line — the backend code will sum and consolidate them. For each line output: description (from the description column), amount (from the current-period / "Work Completed This Period" column — use sworn statement amounts if a Sworn Statement page is present), lineVerdict="VERIFIED". Exclude freight, tax, subtotal/total, and zero-amount rows (suppress per rules above). Also extract workCompletedThisPeriodTotal as a header field.` : `Real billable lines (non-zero amount, not any suppression category above): lineVerdict="VERIFIED" (or FLAGGED if unreadable).`}
 
 CONSISTENCY CHECKS — report these:
 - Do line item amounts sum to the invoice subtotal/gross?

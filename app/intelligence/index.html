@@ -982,6 +982,24 @@ function renderLineItems(data){
 
   _renderedLineItems=rows.map(function(r){return r.vs||r.cl||r.da;});
 
+  // Cross-layer net reconciliation
+  var daNet=docaiRan&&docaiResult?(docaiResult.invoiceNetTotal||0):null;
+  var clNet=claudeRan&&claudeResult?(claudeResult.invoiceNetTotal||0):null;
+  var vsNet=visionRan&&visionResult?(visionResult.invoiceNetTotal||0):null;
+  var refNet=clNet!=null?clNet:(vsNet!=null?vsNet:null);
+  var daReconcileMismatch=daNet!=null&&refNet!=null&&Math.abs(daNet-refNet)>0.05;
+  var challengersAgree=clNet!=null&&vsNet!=null?Math.abs(clNet-vsNet)<0.05:true;
+  // Doc AI-only rows: Doc AI has the line but no ran challenger layer matched it
+  var daOnlyIndices=new Set();
+  rows.forEach(function(r,idx){
+    if(!r.da)return;
+    var matched=(claudeRan&&r.cl)||(visionRan&&r.vs);
+    if(!matched&&(claudeRan||visionRan))daOnlyIndices.add(idx);
+  });
+  var daOnlyAmtTotal=0;
+  daOnlyIndices.forEach(function(idx){daOnlyAmtTotal+=rawAmt(rows[idx].da)||0;});
+  daOnlyAmtTotal=+daOnlyAmtTotal.toFixed(2);
+
   var html='';
   html+='<div style="padding:10px 14px;font-size:12px;color:#666;background:#f4f9fd;border-bottom:1px solid #d5e5f0;">'+
     (mode==='construction'?'Construction invoice — one consolidated line (CAPM logic). ':'Non-construction — individual lines; freight distributed proportionally. ')+
@@ -1020,8 +1038,9 @@ function renderLineItems(data){
     } else if(vs&&vsAmt!=null){
       bestAmt=vsAmt;bestLayer='vision';
     } else{bestAmt=daAmt;bestLayer='docai';}
-    var bestColor={docai:'#107e3e',claude:'#3452d1',vision:'#9d174d'}[bestLayer];
-    var bestLabel={docai:'Doc AI',claude:'Claude',vision:'Vision'}[bestLayer];
+    var daOnly=daOnlyIndices.has(idx)&&daReconcileMismatch;
+    var bestColor=daOnly?'#92400e':{docai:'#107e3e',claude:'#3452d1',vision:'#9d174d'}[bestLayer];
+    var bestLabel=daOnly?'Doc AI ⚠':{docai:'Doc AI',claude:'Claude',vision:'Vision'}[bestLayer];
 
     // Per-cell disagree flags — compare only ran layers, raw-vs-raw
     var daDiff=false,clDiff=false,vsDiff=false;
@@ -1051,7 +1070,7 @@ function renderLineItems(data){
     };
 
     var freight=best.freightAmount||0;
-    html+='<tr>';
+    html+='<tr'+(daOnly?' style="background:#fffbeb;"':'')+'>';
     html+='<td>'+desc+'</td>';
     html+=cellAmt(daAmt, docaiRan, !!da, daDiff);
     html+=cellAmt(clAmt, claudeRan, !!cl, clDiff);
@@ -1126,6 +1145,18 @@ function renderLineItems(data){
   html+='</tbody></table>';
   html+='<div style="padding:6px 2px 2px;font-size:11px;color:#999;">Vertex tax: N/A — requires Vertex</div>';
   html+='</div>';
+
+  if(daReconcileMismatch&&daOnlyIndices.size>0){
+    var _refLabel=clNet!=null&&vsNet!=null?'Claude & Vision':clNet!=null?'Claude':'Vision';
+    var _diffAmt=Math.abs(daNet-refNet);
+    html+='<div style="margin:10px 14px;padding:10px 14px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;font-size:13px;color:#78350f;display:flex;align-items:flex-start;gap:10px;">';
+    html+='<span style="font-size:18px;font-weight:700;margin-top:1px;">&#9888;</span>';
+    html+='<div><strong>Doc AI total ($'+money(daNet)+') does not match '+_refLabel+' total ($'+money(refNet)+') — difference $'+money(_diffAmt)+'.</strong>';
+    html+='<div style="margin-top:5px;font-size:12px;line-height:1.5;">'+daOnlyIndices.size+' Doc AI line'+(daOnlyIndices.size!==1?'s':'')+' (rows highlighted in amber, summing to $'+money(daOnlyAmtTotal)+') '
+      +'were not matched by '+_refLabel+'\'s kept lines — likely a subtotal or double-counted row Doc AI incorrectly kept. '
+      +(challengersAgree?_refLabel+' totals agree with each other; recommend using '+_refLabel+' values for this invoice.':'')+'</div>';
+    html+='</div></div>';
+  }
 
   var apcR=totD.apcReconciliation||null;
   if(apcR){

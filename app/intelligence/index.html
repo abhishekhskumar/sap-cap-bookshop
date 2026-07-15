@@ -1075,8 +1075,14 @@ function renderLineItems(data){
     html+=cellAmt(daAmt, docaiRan, !!da, daDiff);
     html+=cellAmt(clAmt, claudeRan, !!cl, clDiff);
     html+=cellAmt(vsAmt, visionRan, !!vs, vsDiff);
-    html+='<td class="num"><strong>$'+money(bestAmt)+'</strong><br>'
-      +'<span style="display:inline-block;background:'+bestColor+';color:#fff;font-size:9px;padding:1px 6px;border-radius:8px;margin-top:2px;white-space:nowrap;">'+bestLabel+'</span></td>';
+    if(daOnly){
+      var excLabel=claudeRan&&visionRan?'Claude & Vision excluded':claudeRan?'Claude excluded':'Vision excluded';
+      html+='<td class="num"><span style="text-decoration:line-through;color:#9ca3af;font-size:11px;">$'+money(daAmt)+'</span><br>'
+        +'<span style="display:inline-block;background:#92400e;color:#fff;font-size:9px;padding:1px 6px;border-radius:8px;margin-top:2px;white-space:nowrap;">'+excLabel+'</span></td>';
+    } else {
+      html+='<td class="num"><strong>$'+money(bestAmt)+'</strong><br>'
+        +'<span style="display:inline-block;background:'+bestColor+';color:#fff;font-size:9px;padding:1px 6px;border-radius:8px;margin-top:2px;white-space:nowrap;">'+bestLabel+'</span></td>';
+    }
     html+='<td class="num">'+(freight>0&&verdict!=='SUPPRESSED'&&!best.isFreight?'$'+money(freight):'<span style="color:#ccc;">—</span>')+'</td>';
     html+='<td>'+(verdict?lineVerdictPill(verdict):'')+'</td>';
     html+='<td><span class="link" onclick="openItemDetails('+idx+')">&#9656; Click</span></td>';

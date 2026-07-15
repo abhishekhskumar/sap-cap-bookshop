@@ -1000,6 +1000,7 @@ function renderLineItems(data){
   daOnlyIndices.forEach(function(idx){daOnlyAmtTotal+=rawAmt(rows[idx].da)||0;});
   daOnlyAmtTotal=+daOnlyAmtTotal.toFixed(2);
 
+  var zeroRows=[];
   var html='';
   html+='<div style="padding:10px 14px;font-size:12px;color:#666;background:#f4f9fd;border-bottom:1px solid #d5e5f0;">'+
     (mode==='construction'?'Construction invoice — one consolidated line (CAPM logic). ':'Non-construction — individual lines; freight distributed proportionally. ')+
@@ -1024,6 +1025,13 @@ function renderLineItems(data){
     var da=row.da,cl=row.cl,vs=row.vs;
     var best=vs||cl||da;
     var daAmt=rawAmt(da),clAmt=rawAmt(cl),vsAmt=rawAmt(vs);
+
+    // Genuinely-$0 across every layer that ran: move to zero-rows section, not billable table.
+    // Guard: null means the layer excluded or missed the line — NOT confirmation of zero.
+    // Every layer that RAN must affirmatively return 0 (not null) for this row to be bucketed here.
+    if(da&&daAmt===0&&(!claudeRan||clAmt===0)&&(!visionRan||vsAmt===0)){
+      zeroRows.push(row);return;
+    }
 
     // Best value from most-advanced layer that has a match
     // Doc AI wins ties; another layer only wins when it genuinely changed/filled the amount
@@ -1198,6 +1206,23 @@ function renderLineItems(data){
       html+='<td class="num" style="text-decoration:line-through;">'+money(li.amount)+'</td>';
       html+='<td style="font-size:12px;">'+(li.suppressReason||li.lineReason||'—')+'</td>';
       html+='<td>'+badges+'</td></tr>';
+    });
+    html+='</table>';
+  }
+  if(zeroRows.length){
+    html+='<div style="padding:10px 14px;font-size:12px;font-weight:600;color:#888;background:#fafafa;border-top:1px solid #e0e0e0;">Zero-amount rows — no billable value</div>';
+    html+='<table><tr><th>Description</th><th>Type</th><th class="num">Amount</th><th>Reason</th><th>Layers</th></tr>';
+    zeroRows.forEach(function(r){
+      var li=r.da;
+      var layerBadges=[];
+      if(r.da)layerBadges.push('<span style="display:inline-block;background:#dbeafe;color:#1e40af;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;margin-right:3px;">Doc AI</span>');
+      if(r.cl)layerBadges.push('<span style="display:inline-block;background:#ede9fe;color:#5b21b6;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;margin-right:3px;">Claude</span>');
+      if(r.vs)layerBadges.push('<span style="display:inline-block;background:#d1fae5;color:#065f46;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;margin-right:3px;">Vision</span>');
+      html+='<tr style="color:#999;"><td><span style="text-decoration:line-through;">'+(li.description||'—')+'</span></td>';
+      html+='<td><span style="display:inline-block;background:#e5e7eb;color:#374151;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">Zero amt</span></td>';
+      html+='<td class="num" style="text-decoration:line-through;">$0.00</td>';
+      html+='<td style="font-size:12px;">Zero amount — no billable value</td>';
+      html+='<td>'+layerBadges.join('')+'</td></tr>';
     });
     html+='</table>';
   }

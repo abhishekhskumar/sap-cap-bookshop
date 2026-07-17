@@ -1004,6 +1004,80 @@ function lineVerdictPill(v){
   return '<span class="pill '+(m[v]||'verified')+'" style="font-size:10px;padding:2px 7px;">'+v+'</span>';
 }
 
+function _renderApcPerLayer(){
+  // Pull apcEnd from whichever layer the service computed it (Doc AI or Claude)
+  var apcEnd=null;
+  if(docaiResult&&docaiResult.apcReconciliation&&docaiResult.apcReconciliation.apcEnd!=null)
+    apcEnd=docaiResult.apcReconciliation.apcEnd;
+  else if(claudeResult&&claudeResult.apcReconciliation&&claudeResult.apcReconciliation.apcEnd!=null)
+    apcEnd=claudeResult.apcReconciliation.apcEnd;
+
+  // If no layer has run yet, nothing to show
+  if(!docaiRan&&!claudeRan&&!visionRan)return '';
+
+  // If no APC data exists in the asset report
+  var anyNoApc=(docaiResult&&docaiResult.apcReconciliation&&docaiResult.apcReconciliation.status==='no-apc')
+    ||(claudeResult&&claudeResult.apcReconciliation&&claudeResult.apcReconciliation.status==='no-apc');
+  if(apcEnd==null){
+    if(anyNoApc)return '<div style="margin:10px 14px;padding:8px 14px;font-size:12px;color:#999;font-style:italic;">APC End: not in Asset Report</div>';
+    return ''; // asset data not loaded yet
+  }
+
+  var apcWithin=function(a,b){return a!=null&&b!=null&&Math.abs(a-b)<=1.0;};
+
+  // Derive a brief reason for the gap; returns empty string if none derivable
+  var _reason=function(r,gap){
+    var abs=Math.abs(gap);
+    if(abs<2)return 'within rounding tolerance';
+    var tax=r&&r.vendorTaxAmount!=null?parseFloat(r.vendorTaxAmount)||0:0;
+    var freight=r&&r.invoiceFreightTotal!=null?parseFloat(r.invoiceFreightTotal)||0:0;
+    if(tax>0&&Math.abs(abs-tax)<2)return 'gap ≈ tax amount — tax line not in header total';
+    if(freight>0&&Math.abs(abs-freight)<2)return 'gap ≈ freight pool — shipping not in gross';
+    return 'difference — review';
+  };
+
+  var layers=[
+    {ran:docaiRan,r:docaiResult,label:'Doc AI',color:'#107e3e',bg:'#f0fdf4'},
+    {ran:claudeRan,r:claudeResult,label:'Claude',color:'#3452d1',bg:'#f0f4ff'},
+    {ran:visionRan,r:visionResult,label:'Vision',color:'#9d174d',bg:'#fdf2f8'}
+  ];
+
+  var rows='';
+  layers.forEach(function(lyr){
+    if(!lyr.ran||!lyr.r)return;
+    // Prefer service-computed gross (already stored in apcReconciliation.gross for Doc AI/Claude);
+    // for Vision (apcReconciliation=null) fall back to invoiceGrossTotal / invoiceTotalAmount.
+    var apcR=lyr.r.apcReconciliation;
+    var gross=apcR&&apcR.gross!=null?apcR.gross
+      :lyr.r.invoiceGrossTotal!=null?parseFloat(lyr.r.invoiceGrossTotal)
+      :lyr.r.invoiceTotalAmount!=null?parseFloat(lyr.r.invoiceTotalAmount)
+      :null;
+    if(gross==null)return;
+    var match=apcWithin(gross,apcEnd);
+    var diff=+(gross-apcEnd).toFixed(2);
+    var sign=diff>=0?'+':'';
+    var statusBg=match?'#dcfce7':'#fee2e2';
+    var statusFg=match?'#166534':'#991b1b';
+    var icon=match?'&#10003;':'&#10007;';
+    rows+='<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid #f0f0f0;flex-wrap:wrap;">';
+    rows+='<span style="display:inline-block;background:'+lyr.bg+';color:'+lyr.color+';padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;min-width:58px;text-align:center;">'+lyr.label+'</span>';
+    rows+='<span style="font-size:12px;color:#444;font-family:Consolas,monospace;min-width:88px;">$'+money(gross)+'</span>';
+    rows+='<span style="display:inline-flex;align-items:center;gap:4px;background:'+statusBg+';color:'+statusFg+';padding:2px 10px;border-radius:10px;font-size:11px;font-weight:700;">';
+    rows+=icon+' '+(match?'matches APC End':'diff '+sign+'$'+money(Math.abs(diff)));
+    rows+='</span>';
+    if(!match){
+      rows+='<span style="font-size:11px;color:#888;font-style:italic;">'+_reason(lyr.r,diff)+'</span>';
+    }
+    rows+='</div>';
+  });
+
+  if(!rows)return '';
+  return '<div style="margin:10px 14px;border:1px solid #e0e4ea;border-radius:7px;overflow:hidden;">'
+    +'<div style="padding:7px 14px;background:#f4f6fa;font-size:11px;font-weight:700;color:#666;letter-spacing:.04em;text-transform:uppercase;border-bottom:1px solid #e0e4ea;">Gross vs APC End ($'+money(apcEnd)+') &mdash; per layer</div>'
+    +rows
+    +'</div>';
+}
+
 function _renderSuppressedSBS(){
   var daSupp=docaiRan&&docaiResult?(docaiResult.suppressedLines||[]):null;
   var clSupp=claudeRan&&claudeResult?(claudeResult.suppressedLines||[]):null;
@@ -1359,18 +1433,7 @@ function renderLineItems(data){
     html+='</div></div>';
   }
 
-  var apcR=totD.apcReconciliation||null;
-  if(apcR){
-    if(apcR.status==='all-good'||apcR.status==='gross-apc-match'){
-      html+='<div style="margin:10px 14px;padding:10px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:13px;color:#166534;display:flex;align-items:center;gap:10px;">';
-      html+='<span style="font-size:16px;font-weight:700;">&#10003;</span><span><strong>'+apcR.label+'</strong> &nbsp; Gross <strong>'+money(apcR.gross)+'</strong> = APC End <strong>'+money(apcR.apcEnd)+'</strong></span></div>';
-    } else if(apcR.status==='mismatch'){
-      html+='<div style="margin:10px 14px;padding:10px 14px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;font-size:13px;color:#991b1b;display:flex;align-items:center;gap:10px;">';
-      html+='<span style="font-size:16px;font-weight:700;">&#10007;</span><span><strong>'+apcR.label+'</strong> &nbsp; Gross <strong>'+money(apcR.gross)+'</strong> vs APC End <strong>'+money(apcR.apcEnd)+'</strong> &nbsp;<span style="background:#fca5a5;border-radius:4px;padding:1px 7px;font-size:12px;">diff '+money(apcR.diff)+'</span></span></div>';
-    } else {
-      html+='<div style="margin:10px 14px;padding:8px 14px;font-size:12px;color:#999;font-style:italic;">'+apcR.label+'</div>';
-    }
-  }
+  html+=_renderApcPerLayer();
 
   html+=_renderSuppressedSBS();
   document.getElementById('lineItemsContent').innerHTML=html;

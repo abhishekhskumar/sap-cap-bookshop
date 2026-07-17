@@ -297,8 +297,18 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     // Must filter out isFreight and SUPPRESSED lines BEFORE distributing so the denominator
     // reflects only billable lines and each KEEP line gets its correct proportional share.
     const rawClaudeItems = intelligence.lineItems || [];
-    const claudeKeepItems = rawClaudeItems.filter(function(li){ return !li.isFreight && li.lineVerdict !== 'SUPPRESSED'; });
-    const claudeSuppressedItems = rawClaudeItems
+    // Guard: LLM may infer isFreight=true by amount-matching against shippingCostHeader rather than
+    // reading the description. Require the description to contain a freight/shipping keyword before
+    // honouring the flag — this prevents "Travel Expenses" from being silently swallowed as freight.
+    const _freightDescRe = /\b(shipping|freight|handling|delivery|courier|air\s+freight)\b/i;
+    const claudeNormItems = rawClaudeItems.map(function(li) {
+      if (li.isFreight && !_freightDescRe.test(li.description || '')) {
+        return Object.assign({}, li, { isFreight: false });
+      }
+      return li;
+    });
+    const claudeKeepItems = claudeNormItems.filter(function(li){ return !li.isFreight && li.lineVerdict !== 'SUPPRESSED'; });
+    const claudeSuppressedItems = claudeNormItems
       .filter(function(li){ return li.isFreight || li.lineVerdict === 'SUPPRESSED'; })
       .map(function(li){ return Object.assign({}, li, { suppressedBy: 'claude' }); });
     const sumKeepNet = claudeKeepItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
@@ -589,14 +599,19 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       ? parseFloat(String(intelligence.vendorTaxAmount).replace(/[^0-9.\-]/g, ''))
       : (prevResult && prevResult.vendorTaxAmount != null ? prevResult.vendorTaxAmount : null);
 
-    // Apply the same suppress rules as Doc AI / Claude text: freight, SUPPRESSED verdict, zero amount
+    // Apply the same suppress rules as Doc AI / Claude text: freight, SUPPRESSED verdict, zero amount.
+    // Guard: Vision LLM may flag isFreight=true by matching the line amount to shippingCostHeader rather
+    // than reading the description. Only honour isFreight when the description itself contains a freight
+    // keyword — prevents "Travel Expenses" from being suppressed as shipping.
+    const _visionFreightDescRe = /\b(shipping|freight|handling|delivery|courier|air\s+freight)\b/i;
     const visionSuppressedLines = [];
     const visionKeepLines = [];
     (intelligence.lineItems || []).forEach(function(li) {
       const amt = parseFloat(li.amount) || 0;
-      if (li.isFreight || li.lineVerdict === 'SUPPRESSED') {
+      const isFreightVerified = li.isFreight && _visionFreightDescRe.test(li.description || '');
+      if (isFreightVerified || li.lineVerdict === 'SUPPRESSED') {
         visionSuppressedLines.push(Object.assign({}, li, {
-          suppressReason: li.isFreight
+          suppressReason: isFreightVerified
             ? 'Freight/shipping — distributed across line items'
             : (li.lineReason || 'suppressed by Vision'),
           provenance: 'extracted', suppressedBy: 'vision'
@@ -1258,7 +1273,7 @@ ROW-LEVEL SUPPRESSION — within valid invoice pages, set lineVerdict="SUPPRESSE
 - Subtotal / Total / Total This Phase / Total Reimbursables / Balance rows (any row that aggregates other rows)
 - Shipping / Freight / Handling / Delivery / Courier / Air Freight / "Shipping & Handling" lines — isFreight=true, lineReason="Freight/shipping — distributed across line items". Match these as whole terms, NOT naive substrings. A service description that merely contains the word "deliver" is NOT a freight line unless the description as a whole names a freight/delivery service.
 - Tax lines (Sales Tax / Tax / VAT / GST or similar) — isFreight=false, lineReason="Tax line — handled in tax layer". This applies even in Credit or reversal rows.
-- Any of the above freight/tax categories combined with "Travel" or any other word on the same description line are still SUPPRESSED.
+- A description that combines BOTH a freight keyword AND "Travel" in the same line (e.g. "Estimated Travel and Shipping", "Travel and Freight") is still SUPPRESSED — isFreight=true. A line described as only "Travel", "Travel Expenses", or any travel label WITHOUT a freight/shipping keyword has no freight component and must NOT be suppressed as shipping — regardless of its dollar amount.
 - REIMBURSABLE BACKUP RECEIPTS: An expense invoice may show per-person/vendor reimbursable SUMMARY LINES (a person's name or consulting-firm name paired with a dollar total, e.g. "Sheehan, David $114.00", "THE ROCK BROOK CONSULTING GROUP PA $2,930.00", "Ivanoff $128.80") alongside individual backup-detail receipts for each person (subway fare, bus/transit ticket, taxi, Uber/Lyft, parking, hotel night, meal, mileage, gas, toll — often with a date prefix, e.g. "1/8/2025 Subway to Penn Station NYC $2.90"). KEEP the per-person/vendor SUMMARY LINES — they are real billable lines (lineVerdict="VERIFIED"). SUPPRESS the individual backup receipts only: lineVerdict="SUPPRESSED", lineReason="Backup receipt detail — rolls into reimbursable summary; suppressed to prevent double-counting". Emit a lineItemCorrections entry for each suppressed receipt: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt for [person/vendor name] — individual transaction rolled into summary total", oldValue=[amount as string], newValue="0". CRITICAL DISTINCTIONS — (a) Named person/vendor lines (Rock Brook, Sheehan, Ivanoff) are ALWAYS summary lines — NEVER suppress them as backup receipts. (b) "Total Reimbursables" / "Total Expenses" aggregate lines are already caught by the Subtotal rule above — do NOT use them as the summary-line anchor here. (c) Individual transit/expense receipts are NOT PO/PR references — do not classify them under the PO/PR rule. ONLY suppress when a matching named-person summary line exists for that person's expenses; if no clear summary exists, keep lines as VERIFIED.
 - PO / Ariba reference rows with no real billable amount — lineReason="PO/reference — not billable". NOTE: individual travel/expense receipts (subway fare, taxi, hotel, meal, transit) are NOT PO/PR references — classify them under REIMBURSABLE BACKUP RECEIPTS above.
 - Zero-amount lines (amount=0, blank, or $0.00) — lineReason="zero amount — not billable". Includes document/drawing/title rows and cover-sheet entries.
@@ -1358,7 +1373,7 @@ LINE ITEMS - audit every line; classify freight; code does the math:
 - CORRECT page-2+ column drift using page-1 headers.
 - ${schemaType === 'construction' ? 'CONSTRUCTION: current-period column (Work Completed This Period > Current Bill > This Period); prefer Sworn Statement totals.' : 'NON-CONSTRUCTION: keep lines where amount != 0; use current-period/invoice column.'}
 - For EACH line output: unspsc, description, amount (raw, exactly as extracted), isFreight, lineVerdict, lineReason, lineConfidence.
-- isFreight=true if description matches (case-insensitive): "shipping", "freight", "delivery", "estimated travel and shipping", "travel and shipping", "handling", "shipping & handling". Otherwise false.
+- isFreight=true ONLY when the line description itself names a freight/shipping service — it must contain one of these as a core term (case-insensitive): "shipping", "freight", "delivery", "estimated travel and shipping", "travel and shipping", "handling", "shipping & handling". NEVER set isFreight=true based on the dollar amount — a line described as "Travel Expenses" or "Travel" is NOT freight even if its amount equals the invoice's shipping total. Match the description, not the amount.
 - Do NOT compute freightAmount, netAmount, or itemAmount — code handles freight distribution.
 
 LINE ITEM VERDICT RULES (audit each line against the invoice text):

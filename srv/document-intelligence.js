@@ -587,7 +587,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     const vendorTaxAmount = intelligence.vendorTaxAmount != null
       ? parseFloat(String(intelligence.vendorTaxAmount).replace(/[^0-9.\-]/g, ''))
-      : null;
+      : (prevResult && prevResult.vendorTaxAmount != null ? prevResult.vendorTaxAmount : null);
 
     // Apply the same suppress rules as Doc AI / Claude text: freight, SUPPRESSED verdict, zero amount
     const visionSuppressedLines = [];
@@ -1394,7 +1394,7 @@ OUTPUT - return ONLY this JSON, no markdown:
   "overallConfidence": 0
 }
 
-Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRESSED". Set invoiceTaxRate to the tax rate printed on the invoice (0 if absent). Set vendorTaxAmount to the total tax dollar amount printed on the invoice (header tax total, or sum of line taxes if shown) — extract only what is printed, do NOT compute or estimate; set to null if the invoice shows no tax amount. Audit at minimum these fields, each with its own independent verdict, confidence, and specific evidence-based reason: vendorName, invoiceNumber, documentDate, purchaseOrderNumber, grossAmount, taxAmount, shipToAddress, shipToCity, shipToState, shipToPostalCode. Mark shipTo*, grossAmount, taxAmount as taxCritical=true. A reason of "Verified against invoice" or "Matches extracted value" is not acceptable — every reason must state what the text actually shows and where.`;
+Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRESSED". Set invoiceTaxRate to the tax rate printed on the invoice (0 if absent). Set vendorTaxAmount to the total tax dollar amount from the invoice: use the printed header tax field if present; if that field is absent or null, scan your suppressed line items for any tax row (description matching "Sales Tax", "Tax", "VAT", "GST", or similar) and return their sum as vendorTaxAmount — this is a legitimate recovery, not an estimate, because tax printed only as a line item rather than a header field is still the vendor's stated tax amount. Set to null only if no tax amount appears anywhere on the invoice (neither as a header field nor as a suppressed line item). Audit at minimum these fields, each with its own independent verdict, confidence, and specific evidence-based reason: vendorName, invoiceNumber, documentDate, purchaseOrderNumber, grossAmount, taxAmount, shipToAddress, shipToCity, shipToState, shipToPostalCode. Mark shipTo*, grossAmount, taxAmount as taxCritical=true. A reason of "Verified against invoice" or "Matches extracted value" is not acceptable — every reason must state what the text actually shows and where.`;
   }
 
   _getMockAudit(docAIHeader, docAILineItems) {

@@ -1606,98 +1606,112 @@ function renderManualActionBanner(ma){
   return '<div class="ma-banner-ok"><span style="font-size:18px;color:#2e7d32;">&#10003;</span><span style="font-weight:600;color:#1b5e20;font-size:13px;">All consistency checks passed &mdash; no manual action needed.</span></div>';
 }
 
+// ── TAX ENGINE card builders (module-level so teSelect can reuse them) ──────
+
+function _teChip(l,v){return '<div style="padding:8px 14px;border-right:1px solid #dbeafe;"><span style="color:#6b7280;">'+l+'</span><br><strong>'+(v||'<span style="color:#bbb;">—</span>')+'</strong></div>';}
+
+function _teStubCard(result,borderColor,headerBg,headerBorder,badge,badgeBg,vendorTax){
+  var c='';
+  c+='<div style="border:2px solid '+borderColor+';border-radius:8px;overflow:hidden;">';
+  c+='<div style="padding:10px 14px;background:'+headerBg+';border-bottom:1px solid '+headerBorder+';display:flex;justify-content:space-between;align-items:center;">';
+  c+='<span style="font-weight:700;font-size:13px;color:#1e1b4b;">'+escHtml(result.engineName||'Engine')+'</span>';
+  c+='<span style="font-size:10px;background:'+badgeBg+';color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;">'+badge+'</span>';
+  c+='</div>';
+  c+='<div style="padding:14px;">';
+  c+='<div style="font-size:12px;color:#374151;font-weight:600;margin-bottom:6px;">Jurisdiction Breakdown</div>';
+  c+='<div style="background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:12px;color:#6b7280;margin-bottom:10px;">'
+    +'<em>Not connected in this POC.</em><br><br>'+escHtml(result.note||'')+'</div>';
+  c+='<div style="display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #e5e7eb;padding-top:8px;">'
+    +'<span style="color:#6b7280;">Calculated Tax</span>'
+    +'<span style="color:#aaa;font-style:italic;">— requires enterprise engine</span>'
+    +'</div>';
+  if(vendorTax!=null){
+    c+='<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;">'
+      +'<span style="color:#6b7280;">Vendor-stated Tax</span>'
+      +'<span>$'+money(vendorTax)+'</span>'
+      +'</div>';
+  }
+  c+='</div></div>';
+  return c;
+}
+
+function _teSalestaxzipCard(alt,vendorTax){
+  var avail=alt.available;
+  var borderColor=avail?'#059669':'#d1d5db';
+  var c='';
+  c+='<div style="border:2px solid '+borderColor+';border-radius:8px;overflow:hidden;">';
+  c+='<div style="padding:10px 14px;background:'+(avail?'#ecfdf5':'#f9fafb')+';border-bottom:1px solid '+(avail?'#a7f3d0':'#e5e7eb')+';display:flex;justify-content:space-between;align-items:center;">';
+  c+='<div>';
+  c+='<div style="font-weight:700;font-size:13px;color:'+(avail?'#065f46':'#374151')+';">'+escHtml(alt.engineName||'SalesTaxZip')+'</div>';
+  c+='<div style="font-size:10px;color:#6b7280;margin-top:1px;">Illustrative estimate only &mdash; not compliance-grade; production uses enterprise engine</div>';
+  c+='</div>';
+  var badge=avail?(alt.rateSource==='api'?'LIVE ZIP LOOKUP':'LOCAL TABLE'):'NO RATE DATA';
+  var badgeBg=avail?(alt.rateSource==='api'?'#0891b2':'#10b981'):'#9ca3af';
+  c+='<span style="font-size:10px;background:'+badgeBg+';color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;white-space:nowrap;margin-left:8px;">'+badge+'</span>';
+  c+='</div>';
+  c+='<div style="padding:14px;">';
+  var sourceLabel=alt.rateSource==='api'?'SalesTaxZip API':alt.rateSource==='local'?'local rate table':'—';
+  c+='<div style="font-size:12px;color:#065f46;font-weight:600;margin-bottom:6px;">Jurisdiction Breakdown'
+    +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
+    +(avail?' <span style="font-weight:400;font-size:10px;color:#0891b2;">via '+sourceLabel+'</span>':'')
+    +'</div>';
+  if(avail&&alt.jurisdictionBreakdown){
+    var jb=alt.jurisdictionBreakdown;
+    c+='<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">';
+    c+='<tr style="background:#f0fdf4;"><th style="padding:5px 8px;text-align:left;">Level</th><th style="padding:5px 8px;text-align:right;">Rate</th><th style="padding:5px 8px;text-align:right;">Tax on Line</th><th style="padding:5px 8px;text-align:right;">Tax on Freight</th><th style="padding:5px 8px;text-align:right;">Total</th></tr>';
+    (jb.rows||[]).forEach(function(r,i){
+      var bg=i%2===1?'background:#f9fafb;':'';
+      c+='<tr style="'+bg+'"><td style="padding:5px 8px;">'+escHtml(r.jurisdiction)+'</td>'
+        +'<td style="padding:5px 8px;text-align:right;">'+money(r.rate)+'%</td>'
+        +'<td style="padding:5px 8px;text-align:right;">$'+money(r.taxOnLine)+'</td>'
+        +'<td style="padding:5px 8px;text-align:right;">$'+money(r.taxOnFreight)+'</td>'
+        +'<td style="padding:5px 8px;text-align:right;font-weight:600;">$'+money(r.total)+'</td>'
+        +'</tr>';
+    });
+    c+='<tr style="border-top:2px solid #a7f3d0;font-weight:700;"><td style="padding:5px 8px;">Total</td>'
+      +'<td style="padding:5px 8px;text-align:right;">'+money(jb.totalRate)+'%</td>'
+      +'<td colspan="2"></td>'
+      +'<td style="padding:5px 8px;text-align:right;">$'+money(jb.totalTax)+'</td></tr>';
+    c+='</table>';
+  } else {
+    var msg=alt.note||'No rate data for this jurisdiction.';
+    c+='<div style="background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:12px;color:#6b7280;margin-bottom:10px;">'+escHtml(msg)+'</div>';
+  }
+  c+='<div style="display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #e5e7eb;padding-top:8px;">'
+    +'<span style="color:#6b7280;">Calculated Tax</span>'
+    +(avail&&alt.totalTax!=null?'<strong>$'+money(alt.totalTax)+'</strong>':'<span style="color:#aaa;font-style:italic;">— no rate data</span>')
+    +'</div>';
+  if(vendorTax!=null&&avail&&alt.totalTax!=null){
+    var diff=+(vendorTax-alt.totalTax).toFixed(2);
+    var match=Math.abs(diff)<=0.50;
+    c+='<div style="border-top:1px solid #e5e7eb;margin-top:8px;padding-top:8px;">';
+    if(match){
+      c+='<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">'
+        +'<span style="color:#6b7280;">Vendor-stated Tax</span>'
+        +'<span>$'+money(vendorTax)+'</span>'
+        +'</div>';
+      c+='<div style="text-align:right;">'
+        +'<span style="background:#dcfce7;color:#166534;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;">&#10003; Within $0.50 of vendor</span>'
+        +'</div>';
+    } else {
+      c+='<div style="background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:10px 12px;font-size:12px;color:#78350f;">';
+      c+='<div style="font-weight:700;margin-bottom:4px;">SalesTaxZip (free ZIP-based estimate): $'+money(alt.totalTax)+'</div>';
+      c+='<div style="margin-bottom:6px;">Differs from vendor-stated $'+money(vendorTax)+' by <strong>$'+money(Math.abs(diff))+'</strong>.</div>';
+      c+='<div style="color:#92400e;font-size:11px;line-height:1.5;">'
+        +'ZIP-level estimates are not compliance-grade — this divergence is exactly why production uses an enterprise engine (Vertex). '
+        +'The engine-agnostic payload above lets you swap in the accurate engine without changing anything else.'
+        +'</div>';
+      c+='</div>';
+    }
+    c+='</div>';
+  }
+  c+='</div></div>';
+  return c;
+}
+
 function renderTaxEngine(data){
   var el=document.getElementById('taxEngineContent');
   if(!el)return;
-
-  function chip(l,v){return '<div style="padding:8px 14px;border-right:1px solid #dbeafe;"><span style="color:#6b7280;">'+l+'</span><br><strong>'+(v||'<span style="color:#bbb;">—</span>')+'</strong></div>';}
-
-  function stubCard(result,borderColor,headerBg,headerBorder,badge,badgeBg,vendorTax){
-    var c='';
-    c+='<div style="border:2px solid '+borderColor+';border-radius:8px;overflow:hidden;">';
-    c+='<div style="padding:10px 14px;background:'+headerBg+';border-bottom:1px solid '+headerBorder+';display:flex;justify-content:space-between;align-items:center;">';
-    c+='<span style="font-weight:700;font-size:13px;color:#1e1b4b;">'+escHtml(result.engineName||'Engine')+'</span>';
-    c+='<span style="font-size:10px;background:'+badgeBg+';color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;">'+badge+'</span>';
-    c+='</div>';
-    c+='<div style="padding:14px;">';
-    c+='<div style="font-size:12px;color:#374151;font-weight:600;margin-bottom:6px;">Jurisdiction Breakdown</div>';
-    c+='<div style="background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:12px;color:#6b7280;margin-bottom:10px;">'
-      +'<em>Not connected in this POC.</em><br><br>'+(escHtml(result.note||''))+'</div>';
-    c+='<div style="display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #e5e7eb;padding-top:8px;">'
-      +'<span style="color:#6b7280;">Calculated Tax</span>'
-      +'<span style="color:#aaa;font-style:italic;">— requires enterprise engine</span>'
-      +'</div>';
-    if(vendorTax!=null){
-      c+='<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;">'
-        +'<span style="color:#6b7280;">Vendor-stated Tax</span>'
-        +'<span>$'+money(vendorTax)+'</span>'
-        +'</div>';
-    }
-    c+='</div></div>';
-    return c;
-  }
-
-  function salestaxzipCard(alt,vendorTax){
-    var avail=alt.available;
-    var borderColor=avail?'#059669':'#d1d5db';
-    var c='';
-    c+='<div style="border:2px solid '+borderColor+';border-radius:8px;overflow:hidden;">';
-    c+='<div style="padding:10px 14px;background:'+(avail?'#ecfdf5':'#f9fafb')+';border-bottom:1px solid '+(avail?'#a7f3d0':'#e5e7eb')+';display:flex;justify-content:space-between;align-items:center;">';
-    c+='<div>';
-    c+='<div style="font-weight:700;font-size:13px;color:'+(avail?'#065f46':'#374151')+';">'+escHtml(alt.engineName||'SalesTaxZip')+'</div>';
-    c+='<div style="font-size:10px;color:#6b7280;margin-top:1px;">Illustrative estimate only &mdash; not compliance-grade; production uses enterprise engine</div>';
-    c+='</div>';
-    var badge=avail?(alt.rateSource==='api'?'LIVE ZIP LOOKUP':'LOCAL TABLE'):'NO RATE DATA';
-    var badgeBg=avail?(alt.rateSource==='api'?'#0891b2':'#10b981'):'#9ca3af';
-    c+='<span style="font-size:10px;background:'+badgeBg+';color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;white-space:nowrap;margin-left:8px;">'+badge+'</span>';
-    c+='</div>';
-    c+='<div style="padding:14px;">';
-    var sourceLabel=alt.rateSource==='api'?'SalesTaxZip API':alt.rateSource==='local'?'local rate table':'—';
-    c+='<div style="font-size:12px;color:#065f46;font-weight:600;margin-bottom:6px;">Jurisdiction Breakdown'
-      +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
-      +(avail?' <span style="font-weight:400;font-size:10px;color:#0891b2;">via '+sourceLabel+'</span>':'')
-      +'</div>';
-    if(avail&&alt.jurisdictionBreakdown){
-      var jb=alt.jurisdictionBreakdown;
-      c+='<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">';
-      c+='<tr style="background:#f0fdf4;"><th style="padding:5px 8px;text-align:left;">Level</th><th style="padding:5px 8px;text-align:right;">Rate</th><th style="padding:5px 8px;text-align:right;">Tax on Line</th><th style="padding:5px 8px;text-align:right;">Tax on Freight</th><th style="padding:5px 8px;text-align:right;">Total</th></tr>';
-      (jb.rows||[]).forEach(function(r,i){
-        var bg=i%2===1?'background:#f9fafb;':'';
-        c+='<tr style="'+bg+'"><td style="padding:5px 8px;">'+escHtml(r.jurisdiction)+'</td>'
-          +'<td style="padding:5px 8px;text-align:right;">'+money(r.rate)+'%</td>'
-          +'<td style="padding:5px 8px;text-align:right;">$'+money(r.taxOnLine)+'</td>'
-          +'<td style="padding:5px 8px;text-align:right;">$'+money(r.taxOnFreight)+'</td>'
-          +'<td style="padding:5px 8px;text-align:right;font-weight:600;">$'+money(r.total)+'</td>'
-          +'</tr>';
-      });
-      c+='<tr style="border-top:2px solid #a7f3d0;font-weight:700;"><td style="padding:5px 8px;">Total</td>'
-        +'<td style="padding:5px 8px;text-align:right;">'+money(jb.totalRate)+'%</td>'
-        +'<td colspan="2"></td>'
-        +'<td style="padding:5px 8px;text-align:right;">$'+money(jb.totalTax)+'</td></tr>';
-      c+='</table>';
-    } else {
-      c+='<div style="background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:12px;color:#6b7280;margin-bottom:10px;">'+escHtml(alt.note||'Rate not available for this jurisdiction.')+'</div>';
-    }
-    c+='<div style="display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #e5e7eb;padding-top:8px;">'
-      +'<span style="color:#6b7280;">Calculated Tax</span>'
-      +(avail&&alt.totalTax!=null?'<strong>$'+money(alt.totalTax)+'</strong>':'<span style="color:#aaa;font-style:italic;">— no rate data</span>')
-      +'</div>';
-    if(vendorTax!=null&&avail&&alt.totalTax!=null){
-      var diff=+(vendorTax-alt.totalTax).toFixed(2);
-      var match=Math.abs(diff)<=0.50;
-      c+='<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;">'
-        +'<span style="color:#6b7280;">Vendor-stated Tax</span>'
-        +'<span>$'+money(vendorTax)+'</span>'
-        +'</div>';
-      c+='<div style="margin-top:6px;text-align:right;">';
-      c+=match
-        ?'<span style="background:#dcfce7;color:#166534;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;">&#10003; Within $0.50</span>'
-        :'<span style="background:#fee2e2;color:#991b1b;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;">Variance: $'+money(Math.abs(diff))+'</span>';
-      c+='</div>';
-    }
-    c+='</div></div>';
-    return c;
-  }
 
   // Collect the best available result that has taxPayload
   var src=(claudeResult&&claudeResult.taxPayload)?claudeResult
@@ -1707,12 +1721,11 @@ function renderTaxEngine(data){
   if(!src){el.innerHTML='<div class="placeholder">Process an invoice to see the tax engine demo</div>';return;}
 
   var tp=src.taxPayload;
-  var ter=src.taxEngineResults||{};
-  var vertex=ter.vertex||{};
-  var avalara=ter.avalara||{};
-  var onesource=ter.onesource||{};
-  var stzip=ter.salestaxzip||{};
   var vendorTax=src.vendorTaxAmount;
+
+  // Persist payload and vendorTax so teSelect can use them after innerHTML is set
+  window._teTaxPayload=tp;
+  window._teVendorTax=vendorTax;
 
   var html='';
 
@@ -1731,13 +1744,13 @@ function renderTaxEngine(data){
   var jur=tp.jurisdiction||{};
   var tot=tp.totals||{};
   html+='<div style="display:flex;flex-wrap:wrap;border-bottom:1px solid #bfdbfe;font-size:12px;">';
-  html+=chip('State',escHtml(jur.state||''));
-  html+=chip('City',escHtml(jur.city||''));
-  html+=chip('ZIP',escHtml(jur.postalCode||''));
-  html+=chip('Mode',escHtml(tp.invoiceMode||''));
-  html+=chip('Net',tot.net!=null?'$'+money(tot.net):'—');
-  html+=chip('Freight',tot.freight!=null&&tot.freight>0?'$'+money(tot.freight):'—');
-  html+=chip('Gross',tot.gross!=null?'$'+money(tot.gross):'—');
+  html+=_teChip('State',escHtml(jur.state||''));
+  html+=_teChip('City',escHtml(jur.city||''));
+  html+=_teChip('ZIP',escHtml(jur.postalCode||''));
+  html+=_teChip('Mode',escHtml(tp.invoiceMode||''));
+  html+=_teChip('Net',tot.net!=null?'$'+money(tot.net):'—');
+  html+=_teChip('Freight',tot.freight!=null&&tot.freight>0?'$'+money(tot.freight):'—');
+  html+=_teChip('Gross',tot.gross!=null?'$'+money(tot.gross):'—');
   html+='</div>';
   var li_items=tp.lineItems||[];
   if(li_items.length){
@@ -1764,7 +1777,7 @@ function renderTaxEngine(data){
   html+='</div>'; // hero payload box
 
   // ── Engine Selector ──────────────────────────────────────────────────────
-  html+='<div style="margin:16px 16px 0;">';
+  html+='<div style="margin:16px 16px 8px;">';
   html+='<div style="font-weight:700;font-size:13px;color:#111827;margin-bottom:10px;">Select Tax Engine &mdash; same payload, four adapters</div>';
   var engines=[
     {key:'vertex',    label:'Vertex',        sub:'production',  color:'#6366f1'},
@@ -1783,44 +1796,77 @@ function renderTaxEngine(data){
   });
   html+='</div>';
 
-  // Engine output panels (single visible at a time — teSelect controls display)
-  html+='<div id="teCard-vertex" style="display:none;">';
-  html+=stubCard(vertex,'#6366f1','#eef2ff','#c7d2fe','PRODUCTION STUB','#6366f1',vendorTax);
-  html+='</div>';
-
-  html+='<div id="teCard-avalara" style="display:none;">';
-  html+=stubCard(avalara,'#0891b2','#f0f9ff','#bae6fd','ENTERPRISE STUB','#0891b2',vendorTax);
-  html+='</div>';
-
-  html+='<div id="teCard-onesource" style="display:none;">';
-  html+=stubCard(onesource,'#7c3aed','#f5f3ff','#ddd6fe','ENTERPRISE STUB','#7c3aed',vendorTax);
-  html+='</div>';
-
-  html+='<div id="teCard-salestaxzip" style="display:none;">';
-  html+=salestaxzipCard(stzip,vendorTax);
-  html+='</div>';
+  // Empty output containers — teSelect fills them on demand via calculateTaxWithEngine
+  engines.forEach(function(e){
+    html+='<div id="teCard-'+e.key+'" style="display:none;"></div>';
+  });
 
   html+='</div>'; // selector section
   el.innerHTML=html;
-  teSelect('salestaxzip'); // default: show SalesTaxZip (has live data)
+  teSelect('salestaxzip'); // default: load SalesTaxZip immediately
 }
 
-function teSelect(engine){
+async function teSelect(engine){
   var keys=['vertex','avalara','onesource','salestaxzip'];
   var colors={vertex:'#6366f1',avalara:'#0891b2',onesource:'#7c3aed',salestaxzip:'#059669'};
+
+  // Update button styles and show/hide cards
   keys.forEach(function(k){
     var card=document.getElementById('teCard-'+k);
     var btn=document.getElementById('teBtn-'+k);
     var col=colors[k]||'#6366f1';
     if(card) card.style.display=(k===engine)?'block':'none';
     if(btn){
-      if(k===engine){
-        btn.style.background=col;btn.style.color='#fff';btn.style.borderColor=col;
-      } else {
-        btn.style.background='#fff';btn.style.color=col;btn.style.borderColor=col;
-      }
+      if(k===engine){btn.style.background=col;btn.style.color='#fff';btn.style.borderColor=col;}
+      else{btn.style.background='#fff';btn.style.color=col;btn.style.borderColor=col;}
     }
   });
+
+  var card=document.getElementById('teCard-'+engine);
+  if(!card)return;
+
+  // Already populated — skip API call
+  if(card.dataset.loaded==='1')return;
+
+  var tp=window._teTaxPayload;
+  var vendorTax=window._teVendorTax;
+
+  if(!tp){
+    card.innerHTML='<div style="padding:20px;text-align:center;color:#9ca3af;font-size:12px;">No tax payload available — process an invoice first.</div>';
+    return;
+  }
+
+  // Show loading state
+  var loadColor=colors[engine]||'#6b7280';
+  card.innerHTML='<div style="padding:20px;text-align:center;font-size:12px;color:'+loadColor+';">'
+    +'<span style="display:inline-block;width:14px;height:14px;border:2px solid '+loadColor+';border-top-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:6px;"></span>'
+    +'Calling '+escHtml(engine)+' adapter…</div>';
+
+  try{
+    var res=await fetch('/api/intelligence/calculateTaxWithEngine',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({taxPayload:JSON.stringify(tp),engineName:engine})
+    });
+    var text=await res.text();
+    var data=JSON.parse(text);
+    if(data&&typeof data.value==='string') data=JSON.parse(data.value);
+
+    var html='';
+    if(engine==='salestaxzip'){
+      html=_teSalestaxzipCard(data,vendorTax);
+    } else if(engine==='vertex'){
+      html=_teStubCard(data,'#6366f1','#eef2ff','#c7d2fe','PRODUCTION STUB','#6366f1',vendorTax);
+    } else if(engine==='avalara'){
+      html=_teStubCard(data,'#0891b2','#f0f9ff','#bae6fd','ENTERPRISE STUB','#0891b2',vendorTax);
+    } else {
+      html=_teStubCard(data,'#7c3aed','#f5f3ff','#ddd6fe','ENTERPRISE STUB','#7c3aed',vendorTax);
+    }
+    card.innerHTML=html;
+    card.dataset.loaded='1';
+  }catch(e){
+    card.innerHTML='<div style="padding:20px;color:#991b1b;font-size:12px;"><strong>Error:</strong> '+escHtml(e.message)+'</div>';
+  }
 }
 
 function renderIntel(data){

@@ -26,4 +26,9 @@ service DocumentIntelligenceService @(path: '/api/intelligence') {
   action getInvoiceFile(
     fileName : String
   ) returns String;
+
+  action calculateTaxWithEngine(
+    taxPayload : LargeString,
+    engineName : String
+  ) returns String;
 }

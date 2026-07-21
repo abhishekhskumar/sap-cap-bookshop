@@ -65,6 +65,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     this.on('auditWithVision', this._handleAuditWithVision);
     this.on('listInvoices', this._handleListInvoices);
     this.on('getInvoiceFile', this._handleGetInvoiceFile);
+    this.on('calculateTaxWithEngine', this._handleCalculateTaxWithEngine);
     await super.init();
   }
 
@@ -879,6 +880,38 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     }
     const buf = fs.readFileSync(resolvedFile);
     return buf.toString('base64');
+  }
+
+  async _handleCalculateTaxWithEngine(req) {
+    const { taxPayload: payloadStr, engineName } = req.data;
+    let payload;
+    try { payload = JSON.parse(payloadStr); } catch (e) {
+      return JSON.stringify({ error: 'Invalid taxPayload JSON' });
+    }
+    const adapters = {
+      vertex:      vertexAdapter,
+      avalara:     avalaraAdapter,
+      onesource:   oneSourceAdapter,
+      salestaxzip: salesTaxZipAdapter
+    };
+    const adapter = adapters[engineName];
+    if (!adapter) return JSON.stringify({ error: `Unknown engineName: ${engineName}` });
+    try {
+      const result = await Promise.resolve(adapter.calculateTax(payload));
+      // Clamp near-zero rates to exactly 0 for display cleanliness
+      if (result.jurisdictionBreakdown && result.jurisdictionBreakdown.rows) {
+        result.jurisdictionBreakdown.rows = result.jurisdictionBreakdown.rows.map(r => ({
+          ...r,
+          rate: Math.abs(r.rate) < 1e-6 ? 0 : r.rate,
+          taxOnLine: Math.abs(r.taxOnLine) < 1e-6 ? 0 : r.taxOnLine,
+          taxOnFreight: Math.abs(r.taxOnFreight) < 1e-6 ? 0 : r.taxOnFreight,
+          total: Math.abs(r.total) < 1e-6 ? 0 : r.total
+        }));
+      }
+      return JSON.stringify(result);
+    } catch (e) {
+      return JSON.stringify({ error: e.message });
+    }
   }
 
   _computeTriggerDecision(docAIHeader) {

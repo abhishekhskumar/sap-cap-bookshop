@@ -33,11 +33,14 @@ async function fetchRateByZip(zip) {
     return null;
   }
 
+  const city_pct     = +((parseFloat(r.city)    || 0) * 100).toFixed(4);
+  const district_pct = +((parseFloat(r.local)   || 0) * 100).toFixed(4);
   const rates = {
     state:    +((parseFloat(r.state)    || 0) * 100).toFixed(4),
     county:   +((parseFloat(r.county)   || 0) * 100).toFixed(4),
-    city:     +((parseFloat(r.city)     || 0) * 100).toFixed(4),
-    district: +((parseFloat(r.local)    || 0) * 100).toFixed(4),  // SalesTaxZip calls it "local"
+    city:     city_pct,
+    // When local ≈ city the API double-reports the same rate — suppress the duplicate
+    district: Math.abs(district_pct - city_pct) < 0.001 ? 0 : district_pct,
     combined: +((parseFloat(r.combined) || 0) * 100).toFixed(4)
   };
   _zipCache.set(zip, rates);

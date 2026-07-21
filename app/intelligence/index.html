@@ -188,6 +188,7 @@
         <div class="tab" onclick="showTab('lineitems',this)">INVOICE LINE ITEMS</div>
         <div class="tab" onclick="showTab('changelog',this)">CHANGE LOG</div>
         <div class="tab ai-tab" onclick="showTab('intel',this)">&#9889; INTELLIGENCE REPORT<span class="badge-new">NEW</span></div>
+        <div class="tab" onclick="showTab('taxengine',this)">&#9636; TAX ENGINE</div>
       </div>
       <div class="controls">
         <button class="primary" id="docaiBtn" disabled onclick="runDocAI()">1. Run Doc AI Extraction</button>
@@ -231,6 +232,10 @@
           <div class="hero-banner"><h2>&#9889; Extraction Intelligence Report</h2><p>An engine-agnostic AI layer that verifies, corrects, and explains every extracted field &mdash; turning ~80% raw OCR into audit-ready data.</p></div>
           <div class="placeholder">Upload an invoice to generate the intelligence report</div>
         </div>
+      </div>
+
+      <div class="panel" id="panel-taxengine">
+        <div id="taxEngineContent"><div class="placeholder">Process an invoice to see the tax engine demo</div></div>
       </div>
     </div>
   </div>
@@ -580,7 +585,7 @@ function setLineView(mode){
   renderLineItems(lastResult||docaiResult||{});
 }
 
-function renderAll(data){ renderGeneral(data); renderRecon(data); renderLineItems(data); renderChangelog(data); renderIntel(data); drawOcrBoxes(pdfCurrentPage); }
+function renderAll(data){ renderGeneral(data); renderRecon(data); renderLineItems(data); renderChangelog(data); renderIntel(data); renderTaxEngine(data); drawOcrBoxes(pdfCurrentPage); }
 
 // ── Frontend normalize — mirrors srv/eval.js normalize() exactly ──────────
 var _FE_DATE_FIELDS=new Set(['documentDate']);
@@ -1599,6 +1604,195 @@ function renderManualActionBanner(ma){
     return '<div class="ma-banner-fail"><div style="font-weight:700;color:#c62828;margin-bottom:4px;">&#9888; Manual Action Required</div><ul class="ma-reason-list">'+items+'</ul></div>';
   }
   return '<div class="ma-banner-ok"><span style="font-size:18px;color:#2e7d32;">&#10003;</span><span style="font-weight:600;color:#1b5e20;font-size:13px;">All consistency checks passed &mdash; no manual action needed.</span></div>';
+}
+
+function renderTaxEngine(data){
+  var el=document.getElementById('taxEngineContent');
+  if(!el)return;
+
+  // Collect the best available result that has taxPayload
+  var src=(claudeResult&&claudeResult.taxPayload)?claudeResult
+    :(docaiResult&&docaiResult.taxPayload)?docaiResult
+    :(visionResult&&visionResult.taxPayload)?visionResult:null;
+
+  if(!src){el.innerHTML='<div class="placeholder">Process an invoice to see the tax engine demo</div>';return;}
+
+  var tp=src.taxPayload;
+  var ter=src.taxEngineResults||{};
+  var vertex=ter.vertex||{};
+  var alt=ter.alternative||{};
+  var vendorTax=src.vendorTaxAmount;
+
+  var html='';
+
+  // ── Disclaimer banner ──────────────────────────────────────────────────────
+  html+='<div style="padding:10px 16px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#78350f;display:flex;align-items:center;gap:8px;">'
+    +'<strong>Demo only.</strong> The Alternative Engine uses illustrative placeholder rates (0.000%). '
+    +'Vertex is a stub. Neither output is compliance-grade — this panel demonstrates the adapter pattern, not production tax logic.'
+    +'</div>';
+
+  // ── Section 1: Standardized Tax Input payload ──────────────────────────────
+  html+='<div style="margin:16px 16px 0;border:1.5px solid #d1d5db;border-radius:8px;overflow:hidden;">';
+  html+='<div style="padding:10px 14px;background:#f9fafb;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;">';
+  html+='<span style="font-weight:700;font-size:13px;color:#111827;">Standardized Tax Input &mdash; engine-agnostic</span>';
+  html+='<span style="font-size:11px;color:#6b7280;background:#e5e7eb;padding:2px 8px;border-radius:8px;">Same payload feeds every adapter</span>';
+  html+='</div>';
+
+  // Jurisdiction + metadata strip
+  var jur=tp.jurisdiction||{};
+  var tot=tp.totals||{};
+  html+='<div style="display:flex;gap:0;flex-wrap:wrap;border-bottom:1px solid #e5e7eb;font-size:12px;">';
+  var chip=function(label,val){return '<div style="padding:8px 14px;border-right:1px solid #e5e7eb;"><span style="color:#6b7280;">'+label+'</span><br><strong>'+(val||'<span style="color:#bbb;">—</span>')+'</strong></div>';};
+  html+=chip('State', escHtml(jur.state||''));
+  html+=chip('City',  escHtml(jur.city||''));
+  html+=chip('ZIP',   escHtml(jur.postalCode||''));
+  html+=chip('Mode',  escHtml(tp.invoiceMode||''));
+  html+=chip('Net (incl. freight)', tot.net!=null?'$'+money(tot.net):'—');
+  html+=chip('Freight pool', tot.freight!=null&&tot.freight>0?'$'+money(tot.freight):'—');
+  html+=chip('Gross total', tot.gross!=null?'$'+money(tot.gross):'—');
+  html+='</div>';
+
+  // Line items table
+  var li_items=tp.lineItems||[];
+  if(li_items.length){
+    html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html+='<thead><tr style="background:#f3f4f6;">'
+      +'<th style="padding:6px 10px;text-align:left;font-weight:600;color:#374151;">Description</th>'
+      +'<th style="padding:6px 10px;text-align:left;font-weight:600;color:#374151;">UNSPSC</th>'
+      +'<th style="padding:6px 10px;text-align:right;font-weight:600;color:#374151;">Net Amt</th>'
+      +'<th style="padding:6px 10px;text-align:right;font-weight:600;color:#374151;">Freight Share</th>'
+      +'<th style="padding:6px 10px;text-align:right;font-weight:600;color:#374151;">Taxable Total</th>'
+      +'</tr></thead><tbody>';
+    li_items.forEach(function(li,i){
+      var bg=i%2===1?'background:#fafafa;':'';
+      html+='<tr style="'+bg+'">'
+        +'<td style="padding:6px 10px;color:#111827;">'+escHtml(li.description||'—')+'</td>'
+        +'<td style="padding:6px 10px;font-family:monospace;color:#1d4ed8;">'+escHtml(li.unspscCode||'—')+'</td>'
+        +'<td style="padding:6px 10px;text-align:right;">$'+money(li.amount)+'</td>'
+        +'<td style="padding:6px 10px;text-align:right;color:#6b7280;">'+(li.freightShare>0?'$'+money(li.freightShare):'—')+'</td>'
+        +'<td style="padding:6px 10px;text-align:right;font-weight:600;">$'+money(li.taxableAmount)+'</td>'
+        +'</tr>';
+    });
+    html+='</tbody></table>';
+  }
+  html+='</div>';
+
+  // ── Section 2: Engine outputs, side by side ────────────────────────────────
+  // Active-engine state
+  html+='<div style="margin:14px 16px 0;">';
+  html+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
+  html+='<span style="font-weight:700;font-size:13px;color:#111827;">Tax Engine Outputs</span>';
+  html+='<div style="display:flex;gap:6px;">'
+    +'<button id="teBtn-vertex" onclick="teSelect(\'vertex\')" style="font-size:11px;font-weight:700;padding:4px 12px;border-radius:8px;border:1.5px solid #6366f1;background:#6366f1;color:#fff;cursor:pointer;">Select Vertex</button>'
+    +'<button id="teBtn-alt" onclick="teSelect(\'alt\')" style="font-size:11px;font-weight:700;padding:4px 12px;border-radius:8px;border:1.5px solid #d1d5db;background:#fff;color:#374151;cursor:pointer;">Select Alternative</button>'
+    +'</div>';
+  html+='</div>';
+
+  html+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
+
+  // — Vertex card —
+  html+='<div id="teCard-vertex" style="border:2px solid #6366f1;border-radius:8px;overflow:hidden;transition:box-shadow .15s;">';
+  html+='<div style="padding:10px 14px;background:#eef2ff;border-bottom:1px solid #c7d2fe;display:flex;justify-content:space-between;align-items:center;">';
+  html+='<span style="font-weight:700;font-size:13px;color:#3730a3;">'+escHtml(vertex.engineName||'Vertex')+'</span>';
+  html+='<span style="font-size:10px;background:#818cf8;color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;">PRODUCTION STUB</span>';
+  html+='</div>';
+  html+='<div style="padding:14px;">';
+  html+='<div style="font-size:12px;color:#4338ca;font-weight:600;margin-bottom:8px;">Jurisdiction Breakdown</div>';
+  html+='<div style="background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:12px;color:#6b7280;margin-bottom:10px;">'
+    +'<em>Not connected in this POC.</em><br><br>'
+    +(escHtml(vertex.note||''))
+    +'</div>';
+  html+='<div style="display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #e5e7eb;padding-top:8px;">'
+    +'<span style="color:#6b7280;">Calculated Tax</span>'
+    +'<span style="color:#aaa;font-style:italic;">— requires Vertex</span>'
+    +'</div>';
+  if(vendorTax!=null){
+    html+='<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;">'
+      +'<span style="color:#6b7280;">Vendor-stated Tax</span>'
+      +'<span>$'+money(vendorTax)+'</span>'
+      +'</div>';
+  }
+  html+='</div></div>';
+
+  // — Alternative card —
+  var altAvail=alt.available;
+  var altBorderColor=altAvail?'#059669':'#d1d5db';
+  html+='<div id="teCard-alt" style="border:2px solid '+altBorderColor+';border-radius:8px;overflow:hidden;transition:box-shadow .15s;">';
+  html+='<div style="padding:10px 14px;background:'+(altAvail?'#ecfdf5':'#f9fafb')+';border-bottom:1px solid '+(altAvail?'#a7f3d0':'#e5e7eb')+';display:flex;justify-content:space-between;align-items:center;">';
+  html+='<span style="font-weight:700;font-size:13px;color:'+(altAvail?'#065f46':'#374151')+';">'+escHtml(alt.engineName||'Alternative Engine')+'</span>';
+  html+='<span style="font-size:10px;background:'+(altAvail?'#10b981':'#9ca3af')+';color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;">'+(altAvail?'ILLUSTRATIVE':'NO RATE DATA')+'</span>';
+  html+='</div>';
+  html+='<div style="padding:14px;">';
+  html+='<div style="font-size:12px;color:#065f46;font-weight:600;margin-bottom:8px;">Jurisdiction Breakdown'+(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">key: <code>'+escHtml(alt.rateKey)+'</code></span>':'')+'</div>';
+  if(altAvail&&alt.jurisdictionBreakdown){
+    var jb=alt.jurisdictionBreakdown;
+    html+='<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">';
+    html+='<tr style="background:#f0fdf4;"><th style="padding:5px 8px;text-align:left;">Level</th><th style="padding:5px 8px;text-align:right;">Rate</th><th style="padding:5px 8px;text-align:right;">Tax on Line</th><th style="padding:5px 8px;text-align:right;">Tax on Freight</th><th style="padding:5px 8px;text-align:right;">Total</th></tr>';
+    (jb.rows||[]).forEach(function(r,i){
+      var bg=i%2===1?'background:#f9fafb;':'';
+      html+='<tr style="'+bg+'"><td style="padding:5px 8px;">'+escHtml(r.jurisdiction)+'</td>'
+        +'<td style="padding:5px 8px;text-align:right;">'+money(r.rate)+'%</td>'
+        +'<td style="padding:5px 8px;text-align:right;">$'+money(r.taxOnLine)+'</td>'
+        +'<td style="padding:5px 8px;text-align:right;">$'+money(r.taxOnFreight)+'</td>'
+        +'<td style="padding:5px 8px;text-align:right;font-weight:600;">$'+money(r.total)+'</td>'
+        +'</tr>';
+    });
+    html+='<tr style="border-top:2px solid #a7f3d0;font-weight:700;"><td style="padding:5px 8px;">Total</td>'
+      +'<td style="padding:5px 8px;text-align:right;">'+money(jb.totalRate)+'%</td>'
+      +'<td colspan="2"></td>'
+      +'<td style="padding:5px 8px;text-align:right;">$'+money(jb.totalTax)+'</td></tr>';
+    html+='</table>';
+  } else {
+    html+='<div style="background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:12px;color:#6b7280;margin-bottom:10px;">'+escHtml(alt.note||'Rate not available for this jurisdiction.')+'</div>';
+  }
+  html+='<div style="display:flex;justify-content:space-between;font-size:13px;border-top:1px solid #e5e7eb;padding-top:8px;">'
+    +'<span style="color:#6b7280;">Calculated Tax</span>'
+    +(altAvail&&alt.totalTax!=null?'<strong>$'+money(alt.totalTax)+'</strong>':'<span style="color:#aaa;font-style:italic;">— no rate data</span>')
+    +'</div>';
+  if(vendorTax!=null&&altAvail&&alt.totalTax!=null){
+    var diff=+(vendorTax-alt.totalTax).toFixed(2);
+    var match=Math.abs(diff)<=0.50;
+    html+='<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;">'
+      +'<span style="color:#6b7280;">Vendor-stated Tax</span>'
+      +'<span>$'+money(vendorTax)+'</span>'
+      +'</div>';
+    html+='<div style="margin-top:6px;text-align:right;">';
+    html+=match
+      ?'<span style="background:#dcfce7;color:#166534;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;">&#10003; Within $0.50</span>'
+      :'<span style="background:#fee2e2;color:#991b1b;font-size:11px;font-weight:700;padding:2px 8px;border-radius:8px;">Variance: $'+money(Math.abs(diff))+'</span>';
+    html+='</div>';
+  }
+  html+='</div></div>';
+
+  html+='</div>'; // grid
+
+  // Same payload note
+  html+='<div style="margin-top:10px;text-align:center;font-size:11px;color:#9ca3af;">'
+    +'&#8593; Both engines received the identical standardized payload built above &#8593;'
+    +'</div>';
+
+  html+='</div>'; // outer margin div
+  el.innerHTML=html;
+}
+
+// Toggle engine highlight
+function teSelect(engine){
+  var vCard=document.getElementById('teCard-vertex');
+  var aCard=document.getElementById('teCard-alt');
+  var vBtn=document.getElementById('teBtn-vertex');
+  var aBtn=document.getElementById('teBtn-alt');
+  if(!vCard||!aCard)return;
+  if(engine==='vertex'){
+    vCard.style.boxShadow='0 0 0 3px #6366f1';
+    aCard.style.boxShadow='none';
+    vBtn.style.background='#6366f1';vBtn.style.color='#fff';vBtn.style.borderColor='#6366f1';
+    aBtn.style.background='#fff';aBtn.style.color='#374151';aBtn.style.borderColor='#d1d5db';
+  } else {
+    aCard.style.boxShadow='0 0 0 3px #059669';
+    vCard.style.boxShadow='none';
+    aBtn.style.background='#059669';aBtn.style.color='#fff';aBtn.style.borderColor='#059669';
+    vBtn.style.background='#fff';vBtn.style.color='#374151';vBtn.style.borderColor='#d1d5db';
+  }
 }
 
 function renderIntel(data){

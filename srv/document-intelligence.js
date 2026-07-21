@@ -9,6 +9,8 @@ let scnMapping = {};
 try { scnMapping = require('./data/scn-mapping.json'); } catch (e) { console.log('scn-mapping.json not present'); }
 let taxRates = {};
 try { taxRates = require('./data/tax-rates.json'); } catch (e) { console.log('tax-rates.json not present'); }
+const vertexAdapter      = require('./adapters/vertex-adapter');
+const alternativeAdapter = require('./adapters/alternative-adapter');
 
 const TAX_CRITICAL_FIELDS = new Set([
   'shipToAddress','shipToCity','shipToState','shipToPostalCode',
@@ -185,6 +187,16 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     // Simplified destination-based tax calc — additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(lineItems, resolved.shipToState, resolved.shipToCity);
     lineItems = taxCalc.lineItems;
+    // Pluggable tax-engine adapter pattern — builds engine-agnostic payload, runs both adapters
+    const taxPayload = this._buildTaxPayload(lineItems,
+      { state: resolved.shipToState, city: resolved.shipToCity, postalCode: resolved.shipToPostalCode },
+      routedTo,
+      { net: invoiceNetTotal, freight: docAIFreightTotal, gross: invoiceGrossTotal }
+    );
+    const taxEngineResults = {
+      vertex:      vertexAdapter.calculateTax(taxPayload),
+      alternative: alternativeAdapter.calculateTax(taxPayload)
+    };
 
     const consistencyChecks = this._runConsistencyChecks({
       lineItems, rawLineItems: keepLines, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
@@ -206,6 +218,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceGrossTotal, invoiceTotalAmount: invoiceGrossTotal,
       taxHandledBy: 'tax-layer',
       simplifiedTax: taxCalc,
+      taxPayload, taxEngineResults,
       pageTypeUsed, grossAmount,
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
@@ -470,6 +483,16 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     // Simplified destination-based tax calc — additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(claudeLineItems, resolved.shipToState, resolved.shipToCity);
     claudeLineItems = taxCalc.lineItems;
+    // Pluggable tax-engine adapter pattern
+    const taxPayload = this._buildTaxPayload(claudeLineItems,
+      { state: resolved.shipToState, city: resolved.shipToCity, postalCode: resolved.shipToPostalCode },
+      routedTo,
+      { net: invoiceNetTotal, freight: invoiceFreightTotal, gross: invoiceGrossTotal }
+    );
+    const taxEngineResults = {
+      vertex:      vertexAdapter.calculateTax(taxPayload),
+      alternative: alternativeAdapter.calculateTax(taxPayload)
+    };
 
     const consistencyChecks = this._runConsistencyChecks({
       lineItems: claudeLineItems, rawLineItems: claudeLineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
@@ -506,6 +529,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceFreightTotal,
       taxHandledBy: 'tax-layer',
       simplifiedTax: taxCalc,
+      taxPayload, taxEngineResults,
       pageTypeUsed, grossAmount,
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
@@ -754,6 +778,17 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const invoiceGrossTotal = vendorTaxAmount != null && invoiceNetTotal != null
       ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2) : invoiceNetTotal;
 
+    // Pluggable tax-engine adapter pattern
+    const taxPayload = this._buildTaxPayload(lineItems,
+      { state: _getVF('shipToState'), city: _getVF('shipToCity'), postalCode: _getVF('shipToPostalCode') },
+      mode,
+      { net: invoiceNetTotal, freight: 0, gross: invoiceGrossTotal }
+    );
+    const taxEngineResults = {
+      vertex:      vertexAdapter.calculateTax(taxPayload),
+      alternative: alternativeAdapter.calculateTax(taxPayload)
+    };
+
     const lineItemTally = (docaiLines && docaiLines.length)
       ? this._tallyLineItemsDocAIvsVision(docaiLines, lineItems)
       : null;
@@ -782,6 +817,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       apcReconciliation: null,
       generalInfo: [],
       simplifiedTax: taxCalc,
+      taxPayload, taxEngineResults,
       reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex', chargeabilityStatus: 'Pending Vertex' },
       stats: { total: fields.length, verified, corrected, flagged },
       _provenance: {
@@ -1602,6 +1638,27 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
       LOG.warn('_classifyLineItemsUNSPSC failed — skipping UNSPSC classification: ' + err.message);
       return lineItems;
     }
+  }
+
+  _buildTaxPayload(lineItems, jurisdiction, invoiceMode, totals) {
+    const billable = lineItems.filter(li => !li.isFreight && li.lineVerdict !== 'SUPPRESSED');
+    return {
+      lineItems: billable.map(li => ({
+        description:    li.description || '',
+        unspscCode:     li.unspsc || '',
+        amount:         parseFloat(li.netAmount || li.amount) || 0,
+        freightShare:   parseFloat(li.freightAmount) || 0,
+        taxableAmount:  parseFloat(li.itemAmount) || 0
+      })),
+      jurisdiction: {
+        state:      jurisdiction.state      || null,
+        county:     jurisdiction.county     || null,
+        city:       jurisdiction.city       || null,
+        postalCode: jurisdiction.postalCode || null
+      },
+      invoiceMode,
+      totals
+    };
   }
 
   _computeSimplifiedTax(lineItems, shipToState, shipToCity) {

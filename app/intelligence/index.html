@@ -1720,10 +1720,16 @@ function renderTaxEngine(data){
   html+='<div id="teCard-alt" style="border:2px solid '+altBorderColor+';border-radius:8px;overflow:hidden;transition:box-shadow .15s;">';
   html+='<div style="padding:10px 14px;background:'+(altAvail?'#ecfdf5':'#f9fafb')+';border-bottom:1px solid '+(altAvail?'#a7f3d0':'#e5e7eb')+';display:flex;justify-content:space-between;align-items:center;">';
   html+='<span style="font-weight:700;font-size:13px;color:'+(altAvail?'#065f46':'#374151')+';">'+escHtml(alt.engineName||'Alternative Engine')+'</span>';
-  html+='<span style="font-size:10px;background:'+(altAvail?'#10b981':'#9ca3af')+';color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;">'+(altAvail?'ILLUSTRATIVE':'NO RATE DATA')+'</span>';
+  var altBadge=altAvail?(alt.rateSource==='api'?'LIVE ZIP LOOKUP':'LOCAL TABLE'):'NO RATE DATA';
+  var altBadgeBg=altAvail?(alt.rateSource==='api'?'#0891b2':'#10b981'):'#9ca3af';
+  html+='<span style="font-size:10px;background:'+altBadgeBg+';color:#fff;padding:2px 8px;border-radius:8px;font-weight:700;">'+altBadge+'</span>';
   html+='</div>';
   html+='<div style="padding:14px;">';
-  html+='<div style="font-size:12px;color:#065f46;font-weight:600;margin-bottom:8px;">Jurisdiction Breakdown'+(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">key: <code>'+escHtml(alt.rateKey)+'</code></span>':'')+'</div>';
+  var altSourceLabel=alt.rateSource==='api'?'SalesTaxZip API':alt.rateSource==='local'?'local table':'—';
+  html+='<div style="font-size:12px;color:#065f46;font-weight:600;margin-bottom:8px;">Jurisdiction Breakdown'
+    +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
+    +(altAvail?' <span style="font-weight:400;font-size:10px;color:#0891b2;">via '+altSourceLabel+'</span>':'')
+    +'</div>';
   if(altAvail&&alt.jurisdictionBreakdown){
     var jb=alt.jurisdictionBreakdown;
     html+='<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">';

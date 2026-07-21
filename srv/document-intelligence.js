@@ -195,7 +195,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
-      alternative: alternativeAdapter.calculateTax(taxPayload)
+      alternative: await alternativeAdapter.calculateTax(taxPayload)
     };
 
     const consistencyChecks = this._runConsistencyChecks({
@@ -491,7 +491,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
-      alternative: alternativeAdapter.calculateTax(taxPayload)
+      alternative: await alternativeAdapter.calculateTax(taxPayload)
     };
 
     const consistencyChecks = this._runConsistencyChecks({
@@ -786,7 +786,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
-      alternative: alternativeAdapter.calculateTax(taxPayload)
+      alternative: await alternativeAdapter.calculateTax(taxPayload)
     };
 
     const lineItemTally = (docaiLines && docaiLines.length)

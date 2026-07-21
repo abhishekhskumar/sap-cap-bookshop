@@ -1004,6 +1004,19 @@ function lineVerdictPill(v){
   return '<span class="pill '+(m[v]||'verified')+'" style="font-size:10px;padding:2px 7px;">'+v+'</span>';
 }
 
+function unspscCell(li){
+  if(!li||!li.unspsc)return '<td style="color:#bbb;font-size:11px;">—</td>';
+  var conf=li.unspscConfidence||'low';
+  var confColor=conf==='high'?'#166534':conf==='medium'?'#92400e':'#991b1b';
+  var confBg=conf==='high'?'#dcfce7':conf==='medium'?'#fef3c7':'#fee2e2';
+  var confLabel=conf==='high'?'high':conf==='medium'?'med':'low ⚠';
+  return '<td style="font-size:11px;min-width:140px;">'
+    +'<span style="font-family:Consolas,monospace;font-weight:700;color:#1d4ed8;">'+escHtml(li.unspsc)+'</span>'
+    +(li.unspscDescription?'<div style="color:#555;font-size:10px;margin-top:1px;">'+escHtml(li.unspscDescription)+'</div>':'')
+    +'<span style="display:inline-block;margin-top:3px;background:'+confBg+';color:'+confColor+';font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;">'+confLabel+'</span>'
+    +'</td>';
+}
+
 function _renderApcPerLayer(){
   // Pull apcEnd from whichever layer the service computed it (Doc AI or Claude)
   var apcEnd=null;
@@ -1201,13 +1214,14 @@ function renderLineItems(data){
       +(mode==='construction'?'Construction invoice — consolidated view. ':'Non-construction — individual lines. ')
       +'Showing <strong style="color:'+_slColor+';">'+_slLabel+'</strong> layer only &mdash; '+_slLines.length+' line item'+(_slLines.length!==1?'s':'')+' kept.'
       +'</div>';
-    slHtml+='<table><tr><th>Description</th><th class="num">Amount</th><th class="num">Freight</th><th>Verdict</th></tr>';
+    slHtml+='<table><tr><th>Description</th><th>AI-suggested UNSPSC</th><th class="num">Amount</th><th class="num">Freight</th><th>Verdict</th></tr>';
     _slLines.forEach(function(li){
       var amt=rawAmt(li);
       var freight=li.freightAmount||0;
       var verdict=li.lineVerdict||'';
       slHtml+='<tr>';
       slHtml+='<td>'+escHtml(li.description||'—')+(li.lineReason?'<div class="reason">'+escHtml(li.lineReason)+'</div>':'')+'</td>';
+      slHtml+=unspscCell(li);
       slHtml+='<td class="num">'+(amt!=null?'$'+money(amt):'—')+'</td>';
       slHtml+='<td class="num">'+(freight>0?'$'+money(freight):'—')+'</td>';
       slHtml+='<td>'+(verdict?lineVerdictPill(verdict):'')+'</td>';
@@ -1280,6 +1294,7 @@ function renderLineItems(data){
   };
   html+='<table><tr>';
   html+='<th>Item Description</th>';
+  html+='<th>AI-suggested UNSPSC</th>';
   html+='<th class="num">'+layerHdr('Doc AI','#107e3e',docaiRan)+'Amount</th>';
   html+='<th class="num">'+layerHdr('Claude','#3452d1',claudeRan)+'Amount</th>';
   html+='<th class="num">'+layerHdr('Vision','#9d174d',visionRan)+'Amount</th>';
@@ -1341,6 +1356,7 @@ function renderLineItems(data){
     var freight=best.freightAmount||0;
     html+='<tr'+(daOnly?' style="background:#fffbeb;"':'')+'>';
     html+='<td>'+desc+'</td>';
+    html+=unspscCell(best);
     html+=cellAmt(daAmt, docaiRan, !!da, daDiff);
     html+=cellAmt(clAmt, claudeRan, !!cl, clDiff);
     html+=cellAmt(vsAmt, visionRan, !!vs, vsDiff);
@@ -1441,12 +1457,26 @@ function renderLineItems(data){
 
 function openItemDetails(i){
   var li=_renderedLineItems[i]||(lastResult&&(lastResult.lineItems||[])[i]); if(!li)return;
-  var html;
+  var html='';
+  if(li.unspsc){
+    var conf=li.unspscConfidence||'low';
+    var confColor=conf==='high'?'#166534':conf==='medium'?'#92400e':'#991b1b';
+    var confBg=conf==='high'?'#dcfce7':conf==='medium'?'#fef3c7':'#fee2e2';
+    html+='<div style="padding:12px 16px;border-bottom:1px solid #eee;background:#f8fafc;">'
+      +'<div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">AI-suggested UNSPSC</div>'
+      +'<div style="display:flex;align-items:center;gap:10px;">'
+      +'<span style="font-family:Consolas,monospace;font-size:18px;font-weight:700;color:#1d4ed8;">'+escHtml(li.unspsc)+'</span>'
+      +(li.unspscDescription?'<span style="font-size:13px;color:#334155;">'+escHtml(li.unspscDescription)+'</span>':'')
+      +'<span style="background:'+confBg+';color:'+confColor+';font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">'+conf+' confidence</span>'
+      +'</div>'
+      +'<div style="margin-top:6px;font-size:11px;color:#94a3b8;">Family-level code (4-digit segment+family). Draft only — verify against official UNSPSC taxonomy before use.</div>'
+      +'</div>';
+  }
   if(!li.jurisdictions){
-    html='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">NOT WIRED</span><p style="margin-top:12px;">Jurisdiction tax breakdown (State / County / City / District) requires the Vertex integration, which is not connected in this POC.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';
+    html+='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">NOT WIRED</span><p style="margin-top:12px;">Jurisdiction tax breakdown (State / County / City / District) requires the Vertex integration, which is not connected in this POC.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';
   } else {
     var t=li.jurisdictionTotals||{};
-    html='<div style="padding:6px 0 10px;"><span class="pill mock">MOCK</span> <span style="font-size:12px;color:#8a5a00;">Simulated Vertex jurisdiction split (State/County/City/District) — rates sum correctly for illustration.</span></div>';
+    html+='<div style="padding:6px 0 10px;"><span class="pill mock">MOCK</span> <span style="font-size:12px;color:#8a5a00;">Simulated Vertex jurisdiction split (State/County/City/District) — rates sum correctly for illustration.</span></div>';
     html+='<table><tr><th>Jurisdiction</th><th>Taxability</th><th class="num">Tax Rate</th><th class="num">Taxable Amount (Line)</th><th class="num">Tax Amount (Line)</th><th class="num">Taxable Amount (Freight)</th><th class="num">Tax Amount (Freight)</th><th class="num">Total Tax</th></tr>';
     li.jurisdictions.forEach(function(j){
       html+='<tr><td>'+j.jurisdiction+'</td><td>'+j.taxability+'</td><td class="num">'+money(j.taxRate)+'</td>';

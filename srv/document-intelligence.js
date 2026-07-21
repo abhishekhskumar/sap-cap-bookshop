@@ -178,6 +178,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       apcReconciliation = { status: 'mismatch', label: 'Amounts do not reconcile with APC End', match: false, apcEnd, gross: apcGross, lineSum: apcLineSum, diff: +(apcGross - apcEnd).toFixed(2) };
     }
 
+    // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
+    lineItems = await this._classifyLineItemsUNSPSC(lineItems);
+
     const consistencyChecks = this._runConsistencyChecks({
       lineItems, rawLineItems: keepLines, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
       invoiceGrossTotal, invoiceFreightTotal: docAIFreightTotal,
@@ -303,7 +306,13 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const _freightDescRe = /\b(shipping|freight|handling|delivery|courier|air\s+freight)\b/i;
     const claudeNormItems = rawClaudeItems.map(function(li) {
       if (li.isFreight && !_freightDescRe.test(li.description || '')) {
-        return Object.assign({}, li, { isFreight: false });
+        // LLM inferred freight from a header/totals-section amount-match, not from the description.
+        // Freight lines are always tagged SUPPRESSED by convention, so restore both flags together —
+        // otherwise the lineVerdict='SUPPRESSED' alone would still drop the line from keep items.
+        return Object.assign({}, li, {
+          isFreight: false,
+          lineVerdict: li.lineVerdict === 'SUPPRESSED' ? 'VERIFIED' : li.lineVerdict
+        });
       }
       return li;
     });
@@ -449,6 +458,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const claudeTriggered = trigger.triggered;
     const docAICostPerDoc = 0.02;
     const claudeCostPerDoc = claudeTriggered ? 0.015 : 0;
+
+    // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
+    claudeLineItems = await this._classifyLineItemsUNSPSC(claudeLineItems);
 
     const consistencyChecks = this._runConsistencyChecks({
       lineItems: claudeLineItems, rawLineItems: claudeLineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
@@ -649,6 +661,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     });
     const mergedSuppressedLines = Array.from(suppMap.values());
 
+    // ── Vision header freight — mirrors Doc AI's headerFreightAmt in _normalizeDocAI ──
+    const _visionShippingHdrField = (intelligence.fields || []).find(function(f){ return f.fieldName === 'shippingCostHeader'; });
+    const _rawVisionHdrFreight = (_visionShippingHdrField
+      ? (_visionShippingHdrField.correctValue || _visionShippingHdrField.docAIValue || '')
+      : '').trim();
+    const visionHdrFreightAmt = _rawVisionHdrFreight && _rawVisionHdrFreight !== 'None'
+      ? (parseFloat(_rawVisionHdrFreight.replace(/[^0-9.\-]/g, '')) || 0) : 0;
+
     let lineItems;
     if (mode === 'construction') {
       // Build a headerFields proxy from Vision's extracted fields (same shape _consolidateConstruction expects)
@@ -682,13 +702,41 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         freightProvenance: 'extracted'
       })];
     } else {
-      lineItems = visionKeepLines.map(function(li) {
-        return Object.assign({}, li, { freightAmount: 0, itemAmount: li.amount || 0, netAmount: li.amount || 0, vertexTaxAmount: null, freightTaxAmount: null, provenance: 'extracted', freightProvenance: 'extracted' });
+      // Non-construction: distribute freight across keep lines, mirroring Doc AI's _normalizeDocAI.
+      const visionLineFreightTotal = +(visionSuppressedLines
+        .filter(function(li){ return li.isFreight; })
+        .reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2);
+      const visionFreightTotal = +(visionLineFreightTotal + visionHdrFreightAmt).toFixed(2);
+      const visionSumKeepNet = visionKeepLines.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
+      let visionFreightAlloc = 0, visionLgIdx = 0, visionLgAmt = -Infinity;
+      lineItems = visionKeepLines.map(function(li, idx) {
+        const net = parseFloat(li.amount) || 0;
+        if (net > visionLgAmt) { visionLgAmt = net; visionLgIdx = idx; }
+        const freight = visionSumKeepNet > 0 ? +(visionFreightTotal * (net / visionSumKeepNet)).toFixed(2) : 0;
+        visionFreightAlloc += freight;
+        return Object.assign({}, li, {
+          freightAmount: freight,
+          itemAmount: +(net + freight).toFixed(2),
+          netAmount: net, vertexTaxAmount: null, freightTaxAmount: null,
+          provenance: 'extracted',
+          freightProvenance: visionFreightTotal > 0 ? 'inferred' : 'extracted',
+          freightProvenanceDetail: visionFreightTotal > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined
+        });
       });
+      // Rounding remainder → largest line (mirrors Doc AI)
+      const visionFreightRem = +(visionFreightTotal - visionFreightAlloc).toFixed(2);
+      if (visionFreightRem !== 0 && lineItems.length > 0) {
+        const lg = lineItems[visionLgIdx];
+        lg.freightAmount = +(lg.freightAmount + visionFreightRem).toFixed(2);
+        lg.itemAmount = +((parseFloat(lg.amount) || 0) + lg.freightAmount).toFixed(2);
+      }
     }
+    // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
+    lineItems = await this._classifyLineItemsUNSPSC(lineItems);
+
     const invoiceNetTotal = mode === 'construction'
       ? (lineItems[0] ? lineItems[0].itemAmount : 0)
-      : (+(lineItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2) || null);
+      : (+(lineItems.reduce(function(s, li){ return s + (li.itemAmount || 0); }, 0)).toFixed(2) || null);
     const invoiceGrossTotal = vendorTaxAmount != null && invoiceNetTotal != null
       ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2) : invoiceNetTotal;
 
@@ -1257,7 +1305,11 @@ Bill-To / Accenture address block (extract if visible — for reference only, ne
 Other:
   country                 — country of the delivery/project address (e.g. "US")
 
-LINE ITEMS — extract line items from ALL pages provided (multi-page: all detail pages). Continuation pages that have no column header keep the same columns as the first detail page; the current-period / rightmost money column still applies. Negative amounts: a leading "-" OR parentheses (e.g. "(500)") both mean negative.
+LINE ITEMS — extract line items ONLY from the INVOICE LINE-ITEM TABLE (the structured grid of description/quantity/amount rows, typically in the body of the invoice). Continuation pages that have no column header keep the same columns as the first detail page; the current-period / rightmost money column still applies. Negative amounts: a leading "-" OR parentheses (e.g. "(500)") both mean negative.
+
+CRITICAL — TOTALS SECTION EXCLUSION: Do NOT emit rows from the invoice TOTALS SECTION or SUMMARY AREA (the block at the bottom typically showing Subtotal, Shipping, Tax/GST/VAT, and Grand Total) as line items. These are header-level summary aggregates, not rows in the line-item table, and they are already captured as header fields (shippingCostHeader, taxAmount, grossAmount). If you output "Shipping $3,632.99" from the totals block as a line item, it will be wrongly suppressed as freight and permanently lost from the gross — so do NOT emit it. Extract only from the actual line-item table rows.
+
+SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE (identified by its description). Never suppress a line item because its amount matches a shippingCostHeader, a totals-section shipping figure, a tax total, or any header/aggregate value — those are captured elsewhere and must not drive line-item suppression.
 
 For EACH line item include "page": <N> (1-based page number the row was read from) for auditability.
 
@@ -1374,6 +1426,9 @@ LINE ITEMS - audit every line; classify freight; code does the math:
 - ${schemaType === 'construction' ? 'CONSTRUCTION: current-period column (Work Completed This Period > Current Bill > This Period); prefer Sworn Statement totals.' : 'NON-CONSTRUCTION: keep lines where amount != 0; use current-period/invoice column.'}
 - For EACH line output: unspsc, description, amount (raw, exactly as extracted), isFreight, lineVerdict, lineReason, lineConfidence.
 - isFreight=true ONLY when the line description itself names a freight/shipping service — it must contain one of these as a core term (case-insensitive): "shipping", "freight", "delivery", "estimated travel and shipping", "travel and shipping", "handling", "shipping & handling". NEVER set isFreight=true based on the dollar amount — a line described as "Travel Expenses" or "Travel" is NOT freight even if its amount equals the invoice's shipping total. Match the description, not the amount.
+- SOURCE CONSTRAINT: Only emit line items from the INVOICE LINE-ITEM TABLE (the structured grid of description/amount rows). Do NOT emit freight/shipping/tax amounts visible in the invoice TOTALS SECTION or SUMMARY AREA (e.g. a row "Shipping: $3,632.99" or "Tax: $700" in the totals block at the bottom of the invoice) as lineItems — those are header-level summary values already captured as fields (shippingCostHeader, taxAmount, grossAmount). Emitting totals-section rows as line items causes them to be suppressed and permanently lost from the gross.
+- SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE. Never suppress a line item because its amount matches shippingCostHeader, a subtotal row, or a totals-section value — those are header/aggregate figures and must not drive individual line-item suppression.
+- Credit, discount, or adjustment lines (e.g. "Credit", "Service Credit", "Rate Adjustment") are real billable line items — NEVER suppress them as freight or tax, even if their dollar amount equals a freight or tax figure shown elsewhere on the invoice.
 - Do NOT compute freightAmount, netAmount, or itemAmount — code handles freight distribution.
 
 LINE ITEM VERDICT RULES (audit each line against the invoice text):
@@ -1435,6 +1490,103 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
       summary: 'AI Core unavailable - showing Document AI output without intelligence audit.',
       overallConfidence: 0
     };
+  }
+
+  async _classifyLineItemsUNSPSC(lineItems) {
+    const billable = lineItems.filter(li => !li.isFreight && li.lineVerdict !== 'SUPPRESSED');
+    if (!billable.length) return lineItems;
+
+    const authUrl       = process.env.AI_CORE_AUTH_URL;
+    const clientId      = process.env.AI_CORE_CLIENT_ID;
+    const clientSecret  = process.env.AI_CORE_CLIENT_SECRET;
+    const deploymentUrl = process.env.AI_CORE_DEPLOYMENT_URL;
+    const resourceGroup = process.env.AI_CORE_RESOURCE_GROUP || 'use-tax';
+    const modelName     = process.env.AI_CORE_MODEL || 'anthropic--claude-4.5-sonnet';
+
+    if (!authUrl || !clientId || !deploymentUrl) {
+      LOG.warn('_classifyLineItemsUNSPSC: AI Core credentials not configured — skipping');
+      return lineItems;
+    }
+
+    try {
+      const tokenRes = await fetch(authUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret })
+      });
+      if (!tokenRes.ok) throw new Error(`Token failed: ${tokenRes.status}`);
+      const { access_token } = await tokenRes.json();
+
+      const itemList = billable.map((li, i) =>
+        `${i + 1}. "${li.description || ''}" — $${(+(li.itemAmount || li.amount || 0)).toFixed(2)}`
+      ).join('\n');
+
+      const prompt = `You are a procurement taxonomy expert. Classify each invoice line item with a UNSPSC code at the FAMILY level (4 digits: segment + family, e.g. "4320" not "43201500").
+
+Return ONLY a JSON array with exactly ${billable.length} object(s), one per input line, in the same order:
+{"unspscCode":"4320","unspscDescription":"Computers and peripherals and components","confidence":"high"}
+
+Confidence rules:
+- "high": clear product/service match to a known UNSPSC family
+- "medium": plausible but description is generic or spans categories
+- "low": vague description, unfamiliar product, or could reasonably be multiple families — mark low rather than guess
+
+Anchor examples (calibrate here):
+- "Cisco Catalyst 9300 48-Port Switch" → {"unspscCode":"4320","unspscDescription":"Computers and peripherals and components","confidence":"high"}
+- "Annual SonicWall Firewall Support Renewal" → {"unspscCode":"4323","unspscDescription":"Software","confidence":"high"}
+- "Professional Services - Implementation" → {"unspscCode":"8010","unspscDescription":"Management advisory services","confidence":"medium"}
+- "Non-Residential building construction services" → {"unspscCode":"7210","unspscDescription":"Building construction and support","confidence":"high"}
+- "Maintenance and repair" → {"unspscCode":"7219","unspscDescription":"Maintenance repair and operations","confidence":"medium"}
+
+Lines to classify:
+${itemList}
+
+Return ONLY the JSON array. No explanation, no markdown fences.`;
+
+      const orchBody = {
+        orchestration_config: {
+          module_configurations: {
+            templating_module_config: { template: [{ role: 'user', content: '{{?input}}' }] },
+            llm_module_config: { model_name: modelName, model_params: { max_tokens: 1024, temperature: 0 } }
+          }
+        },
+        input_params: { input: prompt }
+      };
+
+      const response = await fetch(deploymentUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+          'Content-Type': 'application/json',
+          'AI-Resource-Group': resourceGroup
+        },
+        body: JSON.stringify(orchBody)
+      });
+      if (!response.ok) throw new Error(`AI Core call failed: ${response.status}`);
+
+      const data = await response.json();
+      const content = data.orchestration_result?.choices?.[0]?.message?.content || '';
+      const cleaned = content.replace(/```json|```/g, '').trim();
+      const classifications = JSON.parse(cleaned);
+
+      if (!Array.isArray(classifications) || classifications.length !== billable.length) {
+        throw new Error(`Expected ${billable.length} classifications, got ${Array.isArray(classifications) ? classifications.length : 'non-array'}`);
+      }
+
+      let billableIdx = 0;
+      return lineItems.map(li => {
+        if (li.isFreight || li.lineVerdict === 'SUPPRESSED') return li;
+        const cls = classifications[billableIdx++] || {};
+        return Object.assign({}, li, {
+          unspsc: cls.unspscCode || '',
+          unspscDescription: cls.unspscDescription || '',
+          unspscConfidence: cls.confidence || 'low'
+        });
+      });
+    } catch (err) {
+      LOG.warn('_classifyLineItemsUNSPSC failed — skipping UNSPSC classification: ' + err.message);
+      return lineItems;
+    }
   }
 
   _mockJurisdictionTax(netBase, freightBase, invoiceCombinedRate) {

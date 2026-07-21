@@ -7,6 +7,8 @@ const assetData = require('./data/asset-report.json');
 const INVOICE_FOLDER = process.env.INVOICE_FOLDER || 'C:/Users/abhishek.hs.kumar/Accenture/Agentic AI US Use Tax - Internal team - Merged';
 let scnMapping = {};
 try { scnMapping = require('./data/scn-mapping.json'); } catch (e) { console.log('scn-mapping.json not present'); }
+let taxRates = {};
+try { taxRates = require('./data/tax-rates.json'); } catch (e) { console.log('tax-rates.json not present'); }
 
 const TAX_CRITICAL_FIELDS = new Set([
   'shipToAddress','shipToCity','shipToState','shipToPostalCode',
@@ -180,6 +182,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
     lineItems = await this._classifyLineItemsUNSPSC(lineItems);
+    // Simplified destination-based tax calc — additive, illustrative only
+    const taxCalc = this._computeSimplifiedTax(lineItems, resolved.shipToState, resolved.shipToCity);
+    lineItems = taxCalc.lineItems;
 
     const consistencyChecks = this._runConsistencyChecks({
       lineItems, rawLineItems: keepLines, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
@@ -200,6 +205,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       vendorTaxAmount: vendorTaxAmount ?? null,
       invoiceGrossTotal, invoiceTotalAmount: invoiceGrossTotal,
       taxHandledBy: 'tax-layer',
+      simplifiedTax: taxCalc,
       pageTypeUsed, grossAmount,
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
@@ -461,6 +467,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
     claudeLineItems = await this._classifyLineItemsUNSPSC(claudeLineItems);
+    // Simplified destination-based tax calc — additive, illustrative only
+    const taxCalc = this._computeSimplifiedTax(claudeLineItems, resolved.shipToState, resolved.shipToCity);
+    claudeLineItems = taxCalc.lineItems;
 
     const consistencyChecks = this._runConsistencyChecks({
       lineItems: claudeLineItems, rawLineItems: claudeLineItems, invoiceNetTotal, vendorTaxAmount: vendorTaxAmount ?? null,
@@ -496,6 +505,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceTotalAmount: invoiceGrossTotal,
       invoiceFreightTotal,
       taxHandledBy: 'tax-layer',
+      simplifiedTax: taxCalc,
       pageTypeUsed, grossAmount,
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
@@ -733,6 +743,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     }
     // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
     lineItems = await this._classifyLineItemsUNSPSC(lineItems);
+    // Simplified destination-based tax calc — additive, illustrative only
+    const _getVF = name => { const f = fields.find(x => x.fieldName === name); return (f && (f.correctValue || f.docAIValue) || '').trim(); };
+    const taxCalc = this._computeSimplifiedTax(lineItems, _getVF('shipToState'), _getVF('shipToCity'));
+    lineItems = taxCalc.lineItems;
 
     const invoiceNetTotal = mode === 'construction'
       ? (lineItems[0] ? lineItems[0].itemAmount : 0)
@@ -767,6 +781,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceFreightTotal: 0,
       apcReconciliation: null,
       generalInfo: [],
+      simplifiedTax: taxCalc,
       reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex', chargeabilityStatus: 'Pending Vertex' },
       stats: { total: fields.length, verified, corrected, flagged },
       _provenance: {
@@ -1587,6 +1602,72 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
       LOG.warn('_classifyLineItemsUNSPSC failed — skipping UNSPSC classification: ' + err.message);
       return lineItems;
     }
+  }
+
+  _computeSimplifiedTax(lineItems, shipToState, shipToCity) {
+    const state = (shipToState || '').trim().toUpperCase();
+    const city  = (shipToCity  || '').trim().toLowerCase();
+    const key   = `${state}|${city}`;
+    // Strip metadata keys (underscore-prefixed) when looking up
+    const rates = (state && city && taxRates[key] && !key.startsWith('_')) ? taxRates[key] : null;
+
+    if (!rates) {
+      return { available: false, key, lineItems };
+    }
+
+    const components = [
+      { jurisdiction: 'STATE',    rate: rates.state    || 0 },
+      { jurisdiction: 'COUNTY',   rate: rates.county   || 0 },
+      { jurisdiction: 'CITY',     rate: rates.city     || 0 },
+      { jurisdiction: 'DISTRICT', rate: rates.district || 0 }
+    ];
+    const totalRate = +components.reduce((s, c) => s + c.rate, 0).toFixed(3);
+
+    let invoiceTotalLine = 0, invoiceTotalFreight = 0;
+
+    const enriched = lineItems.map(li => {
+      if (li.isFreight || li.lineVerdict === 'SUPPRESSED') return li;
+      const netBase     = parseFloat(li.netAmount || li.amount) || 0;
+      const freightBase = parseFloat(li.freightAmount) || 0;
+
+      const rows = components.map(c => {
+        const lineTax    = +(netBase     * c.rate / 100).toFixed(2);
+        const freightTax = +(freightBase * c.rate / 100).toFixed(2);
+        return {
+          jurisdiction: c.jurisdiction, taxability: 'TAXABLE',
+          taxRate: c.rate,
+          taxableAmountLine: +netBase.toFixed(2), taxAmountLine: lineTax,
+          taxableAmountFreight: +freightBase.toFixed(2), taxAmountFreight: freightTax,
+          totalTaxAmount: +(lineTax + freightTax).toFixed(2)
+        };
+      });
+
+      const t = rows.reduce((a, r) => {
+        a.rate += r.taxRate; a.line += r.taxAmountLine;
+        a.freight += r.taxAmountFreight; a.total += r.totalTaxAmount;
+        return a;
+      }, { rate: 0, line: 0, freight: 0, total: 0 });
+
+      invoiceTotalLine    += t.line;
+      invoiceTotalFreight += t.freight;
+
+      return Object.assign({}, li, {
+        jurisdictions: rows,
+        jurisdictionTotals: {
+          rate: +t.rate.toFixed(3), line: +t.line.toFixed(2),
+          freight: +t.freight.toFixed(2), total: +t.total.toFixed(2)
+        }
+      });
+    });
+
+    const invoiceTotal = +(invoiceTotalLine + invoiceTotalFreight).toFixed(2);
+    return {
+      available: true, key, rates, totalRate,
+      invoiceTotalLine: +invoiceTotalLine.toFixed(2),
+      invoiceTotalFreight: +invoiceTotalFreight.toFixed(2),
+      invoiceTotal,
+      lineItems: enriched
+    };
   }
 
   _mockJurisdictionTax(netBase, freightBase, invoiceCombinedRate) {

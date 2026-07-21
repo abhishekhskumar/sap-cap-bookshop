@@ -996,6 +996,78 @@ function renderRecon(data){
     html+='</tr>';
   });
   html+='</tbody></table>';
+
+  // ── Simplified Tax Calculation (illustrative) ──────────────────────────────
+  var stx=(claudeResult&&claudeResult.simplifiedTax)||(docaiResult&&docaiResult.simplifiedTax)||(visionResult&&visionResult.simplifiedTax)||null;
+  html+='<div style="margin-top:16px;border:1.5px solid #e0e7ff;border-radius:8px;overflow:hidden;">';
+  html+='<div style="padding:10px 14px;background:#eef2ff;border-bottom:1px solid #c7d2fe;display:flex;justify-content:space-between;align-items:center;">';
+  html+='<span style="font-weight:700;font-size:13px;color:#3730a3;">&#9678; Simplified Rate Calculation</span>';
+  html+='<span style="font-size:11px;font-weight:600;background:#fef3c7;color:#92400e;padding:3px 10px;border-radius:10px;border:1px solid #fde68a;">Illustrative only — production uses Vertex</span>';
+  html+='</div>';
+  if(!stx){
+    html+='<div style="padding:14px 16px;font-size:12px;color:#999;">No simplified tax data — process an invoice first.</div>';
+  } else if(!stx.available){
+    html+='<div style="padding:14px 16px;font-size:13px;color:#6b7280;">'
+      +'<strong>Jurisdiction not in rate table:</strong> <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">'+escHtml(stx.key||'(unknown)')+'</code>'
+      +'<div style="margin-top:6px;color:#9ca3af;font-size:12px;">Rate not available — requires Vertex for this jurisdiction.</div>'
+      +'</div>';
+  } else {
+    var stxVendor=(claudeResult&&claudeResult.vendorTaxAmount!=null)?claudeResult.vendorTaxAmount
+      :(docaiResult&&docaiResult.vendorTaxAmount!=null)?docaiResult.vendorTaxAmount
+      :(visionResult&&visionResult.vendorTaxAmount!=null)?visionResult.vendorTaxAmount:null;
+    var stxCalc=stx.invoiceTotal;
+    var stxDiff=stxVendor!=null?+(stxVendor-stxCalc).toFixed(2):null;
+    var stxMatch=stxDiff!=null&&Math.abs(stxDiff)<=0.50;
+    html+='<div style="padding:10px 14px 4px;font-size:12px;color:#6b7280;">Jurisdiction: <strong style="color:#1e1b4b;">'+escHtml(stx.key)+'</strong>'
+      +' &nbsp;·&nbsp; Combined rate: <strong>'+money(stx.totalRate)+'%</strong>'
+      +' &nbsp;·&nbsp; Lookup: <span style="font-family:monospace;background:#f3f4f6;padding:1px 5px;border-radius:3px;">srv/data/tax-rates.json</span></div>';
+    html+='<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
+    html+='<th style="'+TH.replace('text-align:right','text-align:left')+'color:#444;width:120px;">Component</th>';
+    html+='<th style="'+TH+'">Rate</th><th style="'+TH+'">Tax on Line</th><th style="'+TH+'">Tax on Freight</th><th style="'+TH+'">Component Total</th>';
+    html+='</tr></thead><tbody>';
+    var comps=[
+      {label:'State',rateKey:'state'},
+      {label:'County',rateKey:'county'},
+      {label:'City',rateKey:'city'},
+      {label:'District',rateKey:'district'}
+    ];
+    comps.forEach(function(c,idx){
+      var rate=stx.rates[c.rateKey]||0;
+      var lineTax=+(stx.invoiceTotalLine*rate/(stx.totalRate||1)).toFixed(2);
+      var freightTax=+(stx.invoiceTotalFreight*rate/(stx.totalRate||1)).toFixed(2);
+      var rowBg=idx%2===1?'background:#fafafa;':'';
+      html+='<tr style="'+rowBg+'"><td style="'+TDL+'">'+c.label+'</td>';
+      html+='<td style="'+TD+'">'+money(rate)+'%</td>';
+      html+='<td style="'+TD+'">$'+money(lineTax)+'</td>';
+      html+='<td style="'+TD+'">$'+money(freightTax)+'</td>';
+      html+='<td style="'+TD+'">$'+money(lineTax+freightTax)+'</td>';
+      html+='</tr>';
+    });
+    html+='<tr style="border-top:2px solid #c7d2fe;font-weight:700;">';
+    html+='<td style="'+TDL+'font-weight:700;">Total</td>';
+    html+='<td style="'+TD+'font-weight:700;">'+money(stx.totalRate)+'%</td>';
+    html+='<td style="'+TD+'font-weight:700;">$'+money(stx.invoiceTotalLine)+'</td>';
+    html+='<td style="'+TD+'font-weight:700;">$'+money(stx.invoiceTotalFreight)+'</td>';
+    html+='<td style="'+TD+'font-weight:700;">$'+money(stxCalc)+'</td>';
+    html+='</tr>';
+    html+='</tbody></table>';
+    html+='<div style="padding:10px 14px;border-top:1px solid #e0e7ff;display:flex;align-items:center;gap:16px;font-size:13px;">';
+    html+='<span><strong>Calculated:</strong> $'+money(stxCalc)+'</span>';
+    if(stxVendor!=null){
+      html+='<span><strong>Vendor-stated:</strong> $'+money(stxVendor)+'</span>';
+      if(stxMatch){
+        html+='<span style="background:#dcfce7;color:#166534;font-weight:700;padding:3px 10px;border-radius:10px;">&#10003; Within $0.50</span>';
+      } else {
+        html+='<span style="background:#fee2e2;color:#991b1b;font-weight:700;padding:3px 10px;border-radius:10px;">&#9651; Variance: $'+money(Math.abs(stxDiff))+'</span>';
+      }
+    } else {
+      html+='<span style="color:#9ca3af;font-style:italic;">Vendor tax not on invoice — no comparison available.</span>';
+    }
+    html+='</div>';
+    html+='<div style="padding:6px 14px 10px;font-size:11px;color:#9ca3af;">Rates are placeholders (0.000%) — fill <code>srv/data/tax-rates.json</code> with verified values before use. This comparison is illustrative only.</div>';
+  }
+  html+='</div>';
+
   el.innerHTML=html;
 }
 
@@ -1473,10 +1545,13 @@ function openItemDetails(i){
       +'</div>';
   }
   if(!li.jurisdictions){
-    html+='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">NOT WIRED</span><p style="margin-top:12px;">Jurisdiction tax breakdown (State / County / City / District) requires the Vertex integration, which is not connected in this POC.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';
+    html+='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">RATE NOT AVAILABLE</span><p style="margin-top:12px;">Jurisdiction not in rate table — requires Vertex, or add rates to <code>srv/data/tax-rates.json</code> for this destination.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';
   } else {
     var t=li.jurisdictionTotals||{};
-    html+='<div style="padding:6px 0 10px;"><span class="pill mock">MOCK</span> <span style="font-size:12px;color:#8a5a00;">Simulated Vertex jurisdiction split (State/County/City/District) — rates sum correctly for illustration.</span></div>';
+    html+='<div style="padding:8px 14px;background:#eef2ff;border-bottom:1px solid #c7d2fe;display:flex;align-items:center;gap:8px;">'
+      +'<span style="font-weight:700;font-size:12px;color:#3730a3;">Simplified Rate Calculation — per line</span>'
+      +'<span style="font-size:11px;font-weight:600;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:8px;border:1px solid #fde68a;">Illustrative only — production uses Vertex</span>'
+      +'</div>';
     html+='<table><tr><th>Jurisdiction</th><th>Taxability</th><th class="num">Tax Rate</th><th class="num">Taxable Amount (Line)</th><th class="num">Tax Amount (Line)</th><th class="num">Taxable Amount (Freight)</th><th class="num">Tax Amount (Freight)</th><th class="num">Total Tax</th></tr>';
     li.jurisdictions.forEach(function(j){
       html+='<tr><td>'+j.jurisdiction+'</td><td>'+j.taxability+'</td><td class="num">'+money(j.taxRate)+'</td>';

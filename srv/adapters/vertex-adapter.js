@@ -16,7 +16,7 @@
  *     invoiceMode, totals:{net,freight,gross} }
  */
 
-const ENGINE_NAME = 'Vertex (Production)';
+const ENGINE_NAME = 'Vertex';
 
 module.exports = {
   engineName: ENGINE_NAME,
@@ -24,11 +24,12 @@ module.exports = {
   calculateTax(payload) {
     return {
       engineName: ENGINE_NAME,
+      status: 'production',
       available: false,
       jurisdictionBreakdown: null,
       totalTax: null,
-      note: 'Production Vertex O Series API — not connected in this POC. '
-          + 'In production this identical payload would be submitted to Vertex, '
+      note: 'Production engine — connected in deployed Phase 1. '
+          + 'In production this identical payload is submitted to Vertex O Series, '
           + 'returning authoritative jurisdiction rates, taxability determinations, '
           + 'sourcing rules, and exemption certificate handling.'
     };

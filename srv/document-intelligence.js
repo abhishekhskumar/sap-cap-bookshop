@@ -10,7 +10,9 @@ try { scnMapping = require('./data/scn-mapping.json'); } catch (e) { console.log
 let taxRates = {};
 try { taxRates = require('./data/tax-rates.json'); } catch (e) { console.log('tax-rates.json not present'); }
 const vertexAdapter      = require('./adapters/vertex-adapter');
-const alternativeAdapter = require('./adapters/alternative-adapter');
+const avalaraAdapter     = require('./adapters/avalara-adapter');
+const oneSourceAdapter   = require('./adapters/onesource-adapter');
+const salesTaxZipAdapter = require('./adapters/alternative-adapter');
 
 const TAX_CRITICAL_FIELDS = new Set([
   'shipToAddress','shipToCity','shipToState','shipToPostalCode',
@@ -195,7 +197,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
-      alternative: await alternativeAdapter.calculateTax(taxPayload)
+      avalara:     avalaraAdapter.calculateTax(taxPayload),
+      onesource:   oneSourceAdapter.calculateTax(taxPayload),
+      salestaxzip: await salesTaxZipAdapter.calculateTax(taxPayload)
     };
 
     const consistencyChecks = this._runConsistencyChecks({
@@ -491,7 +495,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
-      alternative: await alternativeAdapter.calculateTax(taxPayload)
+      avalara:     avalaraAdapter.calculateTax(taxPayload),
+      onesource:   oneSourceAdapter.calculateTax(taxPayload),
+      salestaxzip: await salesTaxZipAdapter.calculateTax(taxPayload)
     };
 
     const consistencyChecks = this._runConsistencyChecks({
@@ -786,7 +792,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
-      alternative: await alternativeAdapter.calculateTax(taxPayload)
+      avalara:     avalaraAdapter.calculateTax(taxPayload),
+      onesource:   oneSourceAdapter.calculateTax(taxPayload),
+      salestaxzip: await salesTaxZipAdapter.calculateTax(taxPayload)
     };
 
     const lineItemTally = (docaiLines && docaiLines.length)

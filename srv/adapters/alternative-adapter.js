@@ -3,7 +3,7 @@
 let taxRates = {};
 try { taxRates = require('../data/tax-rates.json'); } catch (e) { /* rate table absent */ }
 
-const ENGINE_NAME = 'Alternative Engine — live rates via SalesTaxZip (estimation only; production uses Vertex; verify with DOR/CPA for compliance)';
+const ENGINE_NAME = 'SalesTaxZip';
 
 const COMPONENTS = ['state', 'county', 'city', 'district'];
 const LABELS = { state: 'STATE', county: 'COUNTY', city: 'CITY', district: 'DISTRICT' };

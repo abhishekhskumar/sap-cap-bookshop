@@ -322,7 +322,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       .map(function(li){ return Object.assign({}, li, { suppressedBy: 'claude' }); });
     const sumKeepNet = claudeKeepItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
     let freightAlloc = 0, lgIdx = 0, lgAmt = -Infinity;
-    const claudeLineItems = claudeKeepItems.map(function(li, idx) {
+    let claudeLineItems = claudeKeepItems.map(function(li, idx) {
       const net = parseFloat(li.amount) || 0;
       if (net > lgAmt) { lgAmt = net; lgIdx = idx; }
       const rawF = sumKeepNet > 0 ? docAIFreightTotal * (net / sumKeepNet) : 0;

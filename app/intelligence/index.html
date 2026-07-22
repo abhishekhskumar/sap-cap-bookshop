@@ -150,6 +150,37 @@
 <div class="container">
   <div class="left" id="detailsPanel">
     <div class="tab-content">
+      <!-- ── Context / Challenge header ─────────────────────────────────────── -->
+      <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 65%,#1d4ed8 100%);border-radius:10px;margin-bottom:14px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.22);">
+        <div style="padding:13px 20px 9px;border-bottom:1px solid rgba(255,255,255,.12);display:flex;align-items:baseline;gap:12px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#93c5fd;font-weight:700;white-space:nowrap;">Context &amp; Capability</span>
+          <span style="font-size:15px;font-weight:700;color:#fff;">US Use Tax — The Problem We're Solving</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;">
+          <div style="padding:15px 18px 14px;border-right:1px solid rgba(255,255,255,.1);">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#fbbf24;font-weight:700;margin-bottom:7px;">&#9312; The Challenge</div>
+            <div style="font-size:12px;color:#e2e8f0;line-height:1.65;">
+              US sales &amp; use tax spans <strong style="color:#fff;">12,000+ jurisdictions</strong> with constantly-changing rules. Per Vertex&#8217;s 2025 report, 2025 saw rate/rule changes across <strong style="color:#fbbf24;">12,414 jurisdictions</strong> and <strong style="color:#fbbf24;">335 new taxing jurisdictions</strong> — a 10-year high. Rules vary by product, service, and location; software alone doesn&#8217;t guarantee accuracy — <strong style="color:#fff;">clean, correct input is the hard part.</strong>
+            </div>
+          </div>
+          <div style="padding:15px 18px 14px;border-right:1px solid rgba(255,255,255,.1);">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#86efac;font-weight:700;margin-bottom:7px;">&#9313; Deployed Today</div>
+            <div style="font-size:12px;color:#e2e8f0;line-height:1.65;">
+              <strong style="color:#fff;">Doc AI</strong> extracts invoices &#8594; <strong style="color:#fff;">Vertex</strong> applies jurisdiction rules. Proven and in production — but extraction errors flow through to the tax engine uncaught.
+            </div>
+          </div>
+          <div style="padding:15px 18px 14px;">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#93c5fd;font-weight:700;margin-bottom:7px;">&#9314; This Version Adds</div>
+            <div style="font-size:12px;color:#e2e8f0;line-height:1.65;">
+              A <strong style="color:#fff;">reasoning layer</strong> (Doc AI + Claude, cross-checked) that validates, corrects, and verifies extraction <strong style="color:#fff;">before it reaches Vertex</strong> — the <strong style="color:#60a5fa;">same proven engine</strong>, augmenting rather than replacing it. Plus <strong style="color:#fff;">engine-agnostic output</strong> so any tax engine can consume it.
+            </div>
+          </div>
+        </div>
+        <div style="padding:5px 18px 7px;border-top:1px solid rgba(255,255,255,.1);text-align:right;">
+          <span style="font-size:10px;color:#94a3b8;font-style:italic;">Jurisdiction figures: Vertex Inc., 2025 Sales Tax Rates and Rules Report.</span>
+        </div>
+      </div>
+      <!-- ── End context header ──────────────────────────────────────────────── -->
       <div class="ai-banner">&#9889; Three-layer extraction intelligence &mdash; SAP Document AI extracts (fast OCR baseline); Claude via SAP AI Core audits each field, corrects the risky ones, and validates against SAP asset master data; Claude Vision (beta) reads the invoice image directly for scanned documents. Per-field routing shows exactly which layer resolved each value.</div>
       <div style="background:#fff4e5;border:1px solid #f0c674;color:#8a5a00;padding:8px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;line-height:1.5;">
   &#9888;&#65039; <strong>POC data notice:</strong> Document AI extraction and the Claude intelligence audit are <strong style="color:#107e3e;">LIVE</strong>. Vertex jurisdiction tax, reconciliation amounts, and SAP asset/PO data are <strong style="color:#b25000;">MOCKED</strong> for demonstration &mdash; marked <span style="background:#ffe0b2;color:#8a5a00;padding:1px 6px;border-radius:3px;font-weight:700;">MOCK</span> where they appear.

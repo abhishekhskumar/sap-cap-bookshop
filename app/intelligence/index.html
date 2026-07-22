@@ -247,7 +247,7 @@
 </div>
 
 <script>
-var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, _renderedLineItems=[];
+var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[];
 var _lineViewMode='compare';
 var _statusDocAI=null, _statusClaude=null, _statusVision=null;
 var allInvoices=[], filterAssetOnly=true;
@@ -1805,12 +1805,15 @@ function renderTaxEngine(data){
   var el=document.getElementById('taxEngineContent');
   if(!el)return;
 
-  // Collect the best available result that has taxPayload
-  var src=(claudeResult&&claudeResult.taxPayload)?claudeResult
-    :(docaiResult&&docaiResult.taxPayload)?docaiResult
-    :(visionResult&&visionResult.taxPayload)?visionResult:null;
+  // Best-available default (Claude → DocAI → Vision)
+  var _bestAvail=(claudeResult&&claudeResult.taxPayload)?'claude':(docaiResult&&docaiResult.taxPayload)?'docai':(visionResult&&visionResult.taxPayload)?'vision':null;
+  if(!_bestAvail){el.innerHTML='<div class="placeholder">Process an invoice to see the tax engine demo</div>';return;}
 
-  if(!src){el.innerHTML='<div class="placeholder">Process an invoice to see the tax engine demo</div>';return;}
+  // Resolve selected layer; reset to best-available if selection is stale (layer cleared or has no payload)
+  var _teLayerMap={docai:docaiResult,claude:claudeResult,vision:visionResult};
+  var _teCandidate=teLayerView?_teLayerMap[teLayerView]:null;
+  if(!_teCandidate||!_teCandidate.taxPayload) teLayerView=_bestAvail;
+  var src=_teLayerMap[teLayerView];
 
   var tp=src.taxPayload;
   var vendorTax=src.vendorTaxAmount;
@@ -1827,7 +1830,28 @@ function renderTaxEngine(data){
   var hasVendorTax=vendorTax!=null;
   var jurStr=[jur.city,jur.state,jur.postalCode].filter(Boolean).join(', ');
 
-  var html='';
+  // ── Layer toggle ──────────────────────────────────────────────────────────
+  var _teLayerDefs=[
+    {key:'docai', label:'Doc AI', color:'#107e3e', ran:docaiRan, hasPayload:!!(docaiResult&&docaiResult.taxPayload)},
+    {key:'claude',label:'Claude', color:'#3452d1', ran:claudeRan, hasPayload:!!(claudeResult&&claudeResult.taxPayload)},
+    {key:'vision',label:'Vision', color:'#9d174d', ran:visionRan, hasPayload:!!(visionResult&&visionResult.taxPayload)}
+  ];
+  var _teActiveLabel={'docai':'Doc AI','claude':'Claude','vision':'Vision'}[teLayerView]||teLayerView;
+  var html='<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px 6px;flex-wrap:wrap;gap:8px;border-bottom:1px solid #f0f0f0;margin-bottom:2px;">';
+  html+='<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+  _teLayerDefs.forEach(function(L){
+    if(!L.ran)return; // omit layers that have not run
+    var active=L.key===teLayerView;
+    var avail=L.hasPayload;
+    html+='<button onclick="teLayerSelect(\''+L.key+'\')" '
+      +'style="font-size:11px;font-weight:700;padding:4px 12px;border-radius:14px;border:1.5px solid '+(avail?L.color:'#d1d5db')+';'
+      +'background:'+(active?L.color:(avail?'#fff':'#f3f4f6'))+';color:'+(active?'#fff':(avail?L.color:'#9ca3af'))+';'
+      +'cursor:'+(avail?'pointer':'default')+';transition:background 0.15s,color 0.15s;">'
+      +escHtml(L.label)+'</button>';
+  });
+  html+='</div>';
+  html+='<span style="font-size:11px;color:#6b7280;">Tax engine input &mdash; showing: <strong style="color:#111827;font-weight:600;">'+escHtml(_teActiveLabel)+'</strong></span>';
+  html+='</div>';
 
   // ── Block 1: EXTRACTION (certain) ────────────────────────────────────────
   html+='<div style="margin:14px 16px 0;border:2px solid #059669;border-radius:8px;overflow:hidden;">';
@@ -2192,6 +2216,11 @@ async function teSelect(engine){
   }catch(e){
     card.innerHTML='<div style="padding:20px;color:#991b1b;font-size:12px;"><strong>Error:</strong> '+escHtml(e.message)+'</div>';
   }
+}
+
+function teLayerSelect(layer){
+  teLayerView=layer;
+  renderTaxEngine(lastResult);
 }
 
 function _summaryRow(icon, iconColor, bg, borderColor, innerHtml) {

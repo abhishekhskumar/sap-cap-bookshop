@@ -191,10 +191,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const taxCalc = this._computeSimplifiedTax(lineItems, resolved.shipToState, resolved.shipToCity);
     lineItems = taxCalc.lineItems;
     // Pluggable tax-engine adapter pattern — builds engine-agnostic payload, runs both adapters
+    const fobTerms = this._extractFobTerms(fullText);
     const taxPayload = this._buildTaxPayload(lineItems,
       { state: resolved.shipToState, city: resolved.shipToCity, postalCode: resolved.shipToPostalCode },
       routedTo,
-      { net: invoiceNetTotal, freight: docAIFreightTotal, gross: invoiceGrossTotal }
+      { net: invoiceNetTotal, freight: docAIFreightTotal, gross: invoiceGrossTotal },
+      { fobTerms }
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
@@ -324,18 +326,32 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     // Must filter out isFreight and SUPPRESSED lines BEFORE distributing so the denominator
     // reflects only billable lines and each KEEP line gets its correct proportional share.
     const rawClaudeItems = intelligence.lineItems || [];
-    // Guard: LLM may infer isFreight=true by amount-matching against shippingCostHeader rather than
-    // reading the description. Require the description to contain a freight/shipping keyword before
-    // honouring the flag — this prevents "Travel Expenses" from being silently swallowed as freight.
+    // Two-directional freight normalisation guards:
+    // (1) False-positive guard: if LLM set isFreight=true but the description contains no freight
+    //     keyword (inferred from amount-match against header), un-flag it.
+    // (2) False-negative guard: if LLM left isFreight=false but the description's SUBJECT is freight
+    //     (e.g. "deposit for Estimated Shipping and Travel"), enforce isFreight=true so the line is
+    //     suppressed and its value enters the freight pool rather than being double-counted as billable
+    //     when docAIFreightTotal already includes it.
     const _freightDescRe = /\b(shipping|freight|handling|delivery|courier|air\s+freight)\b/i;
+    const _freightForSubjRe = /\bfor\s+(estimated\s+)?(travel\s+and\s+(shipping|freight)|(shipping|freight)(\s+and\s+travel)?|delivery|handling)\b/i;
     const claudeNormItems = rawClaudeItems.map(function(li) {
-      if (li.isFreight && !_freightDescRe.test(li.description || '')) {
+      const desc = li.description || '';
+      if (li.isFreight && !_freightDescRe.test(desc)) {
         // LLM inferred freight from a header/totals-section amount-match, not from the description.
-        // Freight lines are always tagged SUPPRESSED by convention, so restore both flags together —
-        // otherwise the lineVerdict='SUPPRESSED' alone would still drop the line from keep items.
+        // Freight lines are always tagged SUPPRESSED by convention, so restore both flags together.
         return Object.assign({}, li, {
           isFreight: false,
           lineVerdict: li.lineVerdict === 'SUPPRESSED' ? 'VERIFIED' : li.lineVerdict
+        });
+      }
+      if (!li.isFreight && _freightForSubjRe.test(desc)) {
+        // LLM classified as billable but the description's subject is a freight service.
+        // Enforce freight suppression to match Doc AI's classification and prevent double-counting.
+        return Object.assign({}, li, {
+          isFreight: true,
+          lineVerdict: 'SUPPRESSED',
+          lineReason: li.lineReason || 'Freight/shipping — distributed across line items'
         });
       }
       return li;
@@ -489,10 +505,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const taxCalc = this._computeSimplifiedTax(claudeLineItems, resolved.shipToState, resolved.shipToCity);
     claudeLineItems = taxCalc.lineItems;
     // Pluggable tax-engine adapter pattern
+    const fobTerms = this._extractFobTerms(fullText);
     const taxPayload = this._buildTaxPayload(claudeLineItems,
       { state: resolved.shipToState, city: resolved.shipToCity, postalCode: resolved.shipToPostalCode },
       routedTo,
-      { net: invoiceNetTotal, freight: invoiceFreightTotal, gross: invoiceGrossTotal }
+      { net: invoiceNetTotal, freight: invoiceFreightTotal, gross: invoiceGrossTotal },
+      { fobTerms }
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),
@@ -653,17 +671,22 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       : (prevResult && prevResult.vendorTaxAmount != null ? prevResult.vendorTaxAmount : null);
 
     // Apply the same suppress rules as Doc AI / Claude text: freight, SUPPRESSED verdict, zero amount.
-    // Guard: Vision LLM may flag isFreight=true by matching the line amount to shippingCostHeader rather
-    // than reading the description. Only honour isFreight when the description itself contains a freight
-    // keyword — prevents "Travel Expenses" from being suppressed as shipping.
+    // Two-directional freight guards (matching Claude handler logic):
+    // (1) False-positive: only honour isFreight=true when description contains a freight keyword.
+    // (2) False-negative: enforce isFreight=true when description's SUBJECT is freight even if LLM
+    //     returned isFreight=false (e.g. "deposit for Estimated Shipping and Travel").
     const _visionFreightDescRe = /\b(shipping|freight|handling|delivery|courier|air\s+freight)\b/i;
+    const _visionFreightForSubjRe = /\bfor\s+(estimated\s+)?(travel\s+and\s+(shipping|freight)|(shipping|freight)(\s+and\s+travel)?|delivery|handling)\b/i;
     const visionSuppressedLines = [];
     const visionKeepLines = [];
     (intelligence.lineItems || []).forEach(function(li) {
       const amt = parseFloat(li.amount) || 0;
-      const isFreightVerified = li.isFreight && _visionFreightDescRe.test(li.description || '');
+      const desc = li.description || '';
+      const isFreightVerified = (li.isFreight && _visionFreightDescRe.test(desc))
+        || _visionFreightForSubjRe.test(desc);  // enforce subject-based rule regardless of LLM flag
       if (isFreightVerified || li.lineVerdict === 'SUPPRESSED') {
         visionSuppressedLines.push(Object.assign({}, li, {
+          isFreight: isFreightVerified || li.isFreight,
           suppressReason: isFreightVerified
             ? 'Freight/shipping — distributed across line items'
             : (li.lineReason || 'suppressed by Vision'),
@@ -1085,11 +1108,19 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const headerFreightAmt = rawHdrFreight && rawHdrFreight !== 'None'
       ? (parseFloat(rawHdrFreight.replace(/[^0-9.\-]/g,'')) || 0) : 0;
 
-    // ── Split on lineAction ────────────────────────────────────
-    const keepLinesRaw = allLines.filter(function(li){ return li.lineAction === 'KEEP'; });
-    const suppressedLines = allLines
-      .filter(function(li){ return li.lineAction !== 'KEEP'; })
-      .map(function(li){
+    // ── Split on lineAction + secondary freight check on KEEP lines ────────────
+    // Freight classification follows the line's SUBJECT, not its financial framing.
+    // "Deposit for Estimated Shipping and Travel" → subject is shipping → isFreight=true,
+    // even if Doc AI's model marked the line KEEP because of the "Deposit" primary noun.
+    // Regex matches explicit "for [freight subject]" patterns only — avoids over-suppressing
+    // lines where "shipping" appears as an incidental modifier (e.g. "shipping dock install").
+    const _DOCAI_FREIGHT_FOR_RE = /\bfor\s+(estimated\s+)?(travel\s+and\s+(shipping|freight)|(shipping|freight)(\s+and\s+travel)?|delivery|handling)\b/i;
+
+    const keepLinesRaw = [];
+    const suppressedLines = [];
+
+    allLines.forEach(function(li) {
+      if (li.lineAction !== 'KEEP') {
         const d = li.description || '';
         const lt = li.lineType || '';
         const isShipping = /shipping|freight/i.test(lt) ||
@@ -1104,8 +1135,21 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           : isTax
             ? 'Tax line — excluded (handled in tax layer)'
             : 'PO/PR/reference — not billable';
-        return Object.assign({}, li, { suppressReason, isFreight, isTax });
-      });
+        suppressedLines.push(Object.assign({}, li, { suppressReason, isFreight, isTax }));
+      } else {
+        // Secondary freight check: catch KEEP lines whose PURPOSE is freight/shipping
+        // (e.g. "deposit for Estimated Shipping and Travel") and move them to the freight pool.
+        const d = li.description || '';
+        if (_DOCAI_FREIGHT_FOR_RE.test(d)) {
+          suppressedLines.push(Object.assign({}, li, {
+            suppressReason: 'Freight/shipping — distributed across line items',
+            isFreight: true, isTax: false
+          }));
+        } else {
+          keepLinesRaw.push(li);
+        }
+      }
+    });
 
     // ── Vendor tax: header taxAmount field first, else sum of suppressed tax lines ──
     const rawHdrTax = (headerFields.taxAmount?.value || headerFields.taxAmountHeader?.value || '').trim();
@@ -1341,11 +1385,13 @@ CRITICAL — VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NE
 
 EXPLICIT SHIP-TO BLOCK — READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED. Do NOT override an explicit Ship-To with project or contract addresses — those are fallbacks only.
 
-Use the priority chain below ONLY when no labeled Ship-To block is present:
-- NON-CONSTRUCTION fallback: Project Address > Contract/Delivery Address > Accenture Bill-To (500 W Madison, Chicago — last resort only)
-- CONSTRUCTION fallback: Project Address > Contract/Delivery Address > Accenture Bill-To (last resort only)
+CRITICAL — BILL-TO ADDRESS EXCLUSION: A "Bill To:", "Billing Address", "Accounts Payable", or any block labeled as a billing or payment-routing address (including Accenture's own billing address, e.g. 500 W Madison, Chicago) is NEVER a valid ship-to, even as a last resort. Bill-to addresses route invoice payment, not goods/services delivery. Detection: if a block is labeled "Bill To", "Billing", "Remit Payment To", "Accounts Payable", or "AP", reject it for shipTo.
 
-If NONE of the above blocks are present and only the vendor address exists: set shipToAddress/City/State/PostalCode each to "Manual Action Required — no valid delivery address found" and mark each FLAGGED.
+Use the priority chain below ONLY when no labeled Ship-To block is present:
+- NON-CONSTRUCTION fallback: Project Address > Contract/Delivery Address
+- CONSTRUCTION fallback: Project Address > Contract/Delivery Address
+
+If NONE of the above valid blocks are present (only vendor address and/or bill-to/billing address exists): set shipToAddress/City/State/PostalCode each to "Manual Action Required — no valid delivery address found" and mark each FLAGGED. Do NOT use a bill-to or billing address as a fallback — it is not the delivery location.
 
 Identify ALL address blocks visible on the invoice (Ship-to, Project, Contract, Bill-To/Accenture, Vendor/Sender) and extract each one separately. The tax-jurisdiction fields (shipToAddress/City/State/PostalCode) must come from the winning block per the priority above.
 
@@ -1415,9 +1461,12 @@ ROW-LEVEL SUPPRESSION — within valid invoice pages, set lineVerdict="SUPPRESSE
 - "Reimbursables Breakdown This Period" rows and their associated total row
 - Sub-rows labeled "Included in Total above" or equivalent
 - Subtotal / Total / Total This Phase / Total Reimbursables / Balance rows (any row that aggregates other rows)
-- Shipping / Freight / Handling / Delivery / Courier / Air Freight / "Shipping & Handling" lines — isFreight=true, lineReason="Freight/shipping — distributed across line items". Match these as whole terms, NOT naive substrings. A service description that merely contains the word "deliver" is NOT a freight line unless the description as a whole names a freight/delivery service.
+- FREIGHT LINES (isFreight=true, lineVerdict="SUPPRESSED", lineReason="Freight/shipping — distributed across line items") — set isFreight=true when the line's SUBJECT is transportation or delivery of goods. Classification follows the subject, not financial framing ("deposit", "prepayment", "credit" do not override the subject):
+  · DIRECT FREIGHT: description IS a freight service as its primary subject — "Shipping", "Freight", "Delivery", "Handling", "Cartage", "Courier", "Air Freight", "Shipping & Handling". Match these as primary/core descriptors, NOT naive substrings. "shipping dock installation" is NOT freight (subject is dock installation); "travel case for equipment" is NOT freight (subject is the case).
+  · DEPOSIT/PREPAYMENT FOR FREIGHT: when a line is a deposit or advance whose purpose (subject) is freight/shipping, classify by the subject. Examples: "Deposit for Estimated Travel and Shipping" → subject is Travel-and-Shipping → isFreight=true; "50% deposit for Estimated Shipping and Travel" → isFreight=true; "Deposit for Equipment" → subject is Equipment → isFreight=false.
+  · COMBINED TRAVEL-AND-SHIPPING: a description naming travel and shipping together as a unit ("Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight — isFreight=true. "Travel" or "Travel Expenses" ALONE (no freight keyword) is NOT freight.
+  · AMBIGUOUS: if genuinely uncertain whether the subject is freight or a billable service, set isFreight=false, lineVerdict="FLAGGED".
 - Tax lines (Sales Tax / Tax / VAT / GST or similar) — isFreight=false, lineReason="Tax line — handled in tax layer". This applies even in Credit or reversal rows.
-- A description that combines BOTH a freight keyword AND "Travel" in the same line (e.g. "Estimated Travel and Shipping", "Travel and Freight") is still SUPPRESSED — isFreight=true. A line described as only "Travel", "Travel Expenses", or any travel label WITHOUT a freight/shipping keyword has no freight component and must NOT be suppressed as shipping — regardless of its dollar amount.
 - REIMBURSABLE BACKUP RECEIPTS: An expense invoice may show per-person/vendor reimbursable SUMMARY LINES (a person's name or consulting-firm name paired with a dollar total, e.g. "Sheehan, David $114.00", "THE ROCK BROOK CONSULTING GROUP PA $2,930.00", "Ivanoff $128.80") alongside individual backup-detail receipts for each person (subway fare, bus/transit ticket, taxi, Uber/Lyft, parking, hotel night, meal, mileage, gas, toll — often with a date prefix, e.g. "1/8/2025 Subway to Penn Station NYC $2.90"). KEEP the per-person/vendor SUMMARY LINES — they are real billable lines (lineVerdict="VERIFIED"). SUPPRESS the individual backup receipts only: lineVerdict="SUPPRESSED", lineReason="Backup receipt detail — rolls into reimbursable summary; suppressed to prevent double-counting". Emit a lineItemCorrections entry for each suppressed receipt: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt for [person/vendor name] — individual transaction rolled into summary total", oldValue=[amount as string], newValue="0". CRITICAL DISTINCTIONS — (a) Named person/vendor lines (Rock Brook, Sheehan, Ivanoff) are ALWAYS summary lines — NEVER suppress them as backup receipts. (b) "Total Reimbursables" / "Total Expenses" aggregate lines are already caught by the Subtotal rule above — do NOT use them as the summary-line anchor here. (c) Individual transit/expense receipts are NOT PO/PR references — do not classify them under the PO/PR rule. ONLY suppress when a matching named-person summary line exists for that person's expenses; if no clear summary exists, keep lines as VERIFIED.
 - PO / Ariba reference rows with no real billable amount — lineReason="PO/reference — not billable". NOTE: individual travel/expense receipts (subway fare, taxi, hotel, meal, transit) are NOT PO/PR references — classify them under REIMBURSABLE BACKUP RECEIPTS above.
 - Zero-amount lines (amount=0, blank, or $0.00) — lineReason="zero amount — not billable". Includes document/drawing/title rows and cover-sheet entries.
@@ -1491,11 +1540,12 @@ DOMAIN RULES:
 1. ADDRESS PRIORITY (determines tax jurisdiction — critical):
    CRITICAL — VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NEVER a valid ship-to. The vendor address appears in the letterhead, logo block, "From:", "Remit to:", or sender section at the top of the invoice — it is where the VENDOR is located, not where Accenture received or used the goods/services. If Doc AI placed a vendor/sender address into any ship-to field, that is a FACTUAL ERROR — mark CORRECTED. Detection: if the street/city in a Doc AI ship-to field matches the vendor's letterhead city or appears in the sender block, reject it.
    EXPLICIT SHIP-TO BLOCK — READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED (provenance: extracted). Do NOT override an explicit Ship-To with a project or contract address — those are fallbacks only.
+   CRITICAL — BILL-TO ADDRESS EXCLUSION: A "Bill To:", "Billing Address", "Accounts Payable", or any block labeled as a billing or payment-routing address (including Accenture's own billing address, e.g. 500 W Madison, Chicago) is NEVER a valid ship-to, even as a last resort. Bill-to addresses route invoice payment, not goods/services delivery. If Doc AI placed a bill-to address into any ship-to field, that is a FACTUAL ERROR — mark CORRECTED. Detection: if a block is labeled "Bill To", "Billing", "Remit Payment To", "Accounts Payable", or "AP", reject it for shipTo.
    Use the priority chain below ONLY when no labeled Ship-To block is present:
-   - CONSTRUCTION: Project Address > Contract Address > Accenture Bill-To (last resort only)
-   - NON-CONSTRUCTION: Project Address > Contract Address > Accenture Bill-To (last resort only)
-   Once a fallback block wins, take all ship-to fields from that SAME block — never mix fields from different blocks. In the reason, state which block won and why Ship-To was absent. If Doc AI pulled fields from the vendor address or from the wrong block, CORRECT them.
-   If NONE of the valid blocks are present (only the vendor address exists): set correctValue to "Manual Action Required — no valid delivery address found" and mark FLAGGED for all ship-to fields.
+   - CONSTRUCTION: Project Address > Contract Address
+   - NON-CONSTRUCTION: Project Address > Contract Address
+   Once a fallback block wins, take all ship-to fields from that SAME block — never mix fields from different blocks. In the reason, state which block won and why Ship-To was absent. If Doc AI pulled fields from the vendor address, bill-to address, or from the wrong block, CORRECT them.
+   If NONE of the above valid blocks are present (only vendor address and/or bill-to/billing address exists, with no Project or Contract address): set correctValue to "Manual Action Required — no valid delivery address found" and mark FLAGGED for all ship-to fields. Do NOT use a bill-to or billing address as a fallback.
    ADDRESS COMPLETENESS: If Doc AI extracted the correct block but included the recipient name, Attn line, or full multi-line address text, that is NOT an error — mark VERIFIED. Only CORRECT if the data came from the wrong block, the vendor address, or if city/state/zip are factually wrong.
    PROJECT ADDRESS DERIVATION DISCIPLINE: projectAddress is valid ONLY if a dedicated block with BOTH street AND city is present on the invoice (ZIP is optional). A project/contract/job NAME line that contains a location (e.g. "Accenture: Denver 999 18th Street Ste. 900S") is a PROJECT NAME — it is NOT a project address block. Do NOT extract projectAddress* fields from a name line.
    projectAddressCity, projectAddressState, projectAddressCounty, and projectAddressPostalCode derive ONLY from a valid projectAddress block. If projectAddress is null or blank (no valid street+city block exists), ALL of these MUST be null — never populate them independently from any other source.
@@ -1517,7 +1567,12 @@ LINE ITEMS - audit every line; classify freight; code does the math:
 - CORRECT page-2+ column drift using page-1 headers.
 - ${schemaType === 'construction' ? 'CONSTRUCTION: current-period column (Work Completed This Period > Current Bill > This Period); prefer Sworn Statement totals.' : 'NON-CONSTRUCTION: keep lines where amount != 0; use current-period/invoice column.'}
 - For EACH line output: unspsc, description, amount (raw, exactly as extracted), isFreight, lineVerdict, lineReason, lineConfidence.
-- isFreight=true ONLY when the line description itself names a freight/shipping service — it must contain one of these as a core term (case-insensitive): "shipping", "freight", "delivery", "estimated travel and shipping", "travel and shipping", "handling", "shipping & handling". NEVER set isFreight=true based on the dollar amount — a line described as "Travel Expenses" or "Travel" is NOT freight even if its amount equals the invoice's shipping total. Match the description, not the amount.
+- isFreight classification follows the line's SUBJECT — what the line ultimately charges for — not its financial framing ("deposit", "prepayment", "credit" do not change the subject). Apply these rules in order:
+  (a) DIRECT FREIGHT LINE → isFreight=true: description IS a freight/shipping service as its primary subject: "Shipping", "Freight", "Delivery", "Handling", "Cartage", "Courier", "Air Freight", "Shipping & Handling". Match these as core/primary descriptors, NOT naive substrings — "shipping dock installation" is NOT freight (the subject is the dock installation).
+  (b) DEPOSIT/PREPAYMENT FOR FREIGHT → isFreight=true: when a line is a deposit or prepayment and its purpose is a freight/shipping subject, the subject determines classification. Examples: "Deposit for Estimated Travel and Shipping" → subject is Travel-and-Shipping → isFreight=true; "50% deposit for Estimated Shipping and Travel" → isFreight=true; "Deposit for Equipment" → subject is Equipment → isFreight=false.
+  (c) COMBINED TRAVEL-AND-SHIPPING → isFreight=true: a description naming both travel and shipping as a unit (e.g. "Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight. "Travel" or "Travel Expenses" ALONE (no freight/shipping keyword) is NOT freight.
+  (d) AMBIGUOUS → isFreight=false: if genuinely uncertain whether the subject is freight or a billable service, keep as billable and set lineVerdict="FLAGGED".
+  NEVER set isFreight=true based solely on the dollar amount matching a shipping total.
 - SOURCE CONSTRAINT: Only emit line items from the INVOICE LINE-ITEM TABLE (the structured grid of description/amount rows). Do NOT emit freight/shipping/tax amounts visible in the invoice TOTALS SECTION or SUMMARY AREA (e.g. a row "Shipping: $3,632.99" or "Tax: $700" in the totals block at the bottom of the invoice) as lineItems — those are header-level summary values already captured as fields (shippingCostHeader, taxAmount, grossAmount). Emitting totals-section rows as line items causes them to be suppressed and permanently lost from the gross.
 - SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE. Never suppress a line item because its amount matches shippingCostHeader, a subtotal row, or a totals-section value — those are header/aggregate figures and must not drive individual line-item suppression.
 - Credit, discount, or adjustment lines (e.g. "Credit", "Service Credit", "Rate Adjustment") are real billable line items — NEVER suppress them as freight or tax, even if their dollar amount equals a freight or tax figure shown elsewhere on the invoice.
@@ -1681,15 +1736,39 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     }
   }
 
-  _buildTaxPayload(lineItems, jurisdiction, invoiceMode, totals) {
+  // Extracts FOB / shipping terms from invoice full text via regex.
+  // Returns the matched string (e.g. "F.O.B. Ship Point") or null if not found.
+  _extractFobTerms(text) {
+    if (!text) return null;
+    let m;
+    // F.O.B. (with or without dots) + recognized term
+    m = text.match(/\bF\.?O\.?B\.?\s+(?:SHIP(?:PING)?\s+POINT|ORIGIN|DESTINATION|SELLER|BUYER)\b/i);
+    if (m) return m[0].trim().replace(/\s+/g, ' ');
+    // FOB + recognized term (no dots)
+    m = text.match(/\bFOB\s+(?:SHIP(?:PING)?\s+POINT|ORIGIN|DESTINATION)\b/i);
+    if (m) return m[0].trim().replace(/\s+/g, ' ');
+    // Labelled "Shipping Terms:" or "Freight Terms:" field
+    m = text.match(/\b(?:SHIPPING|FREIGHT)\s+TERMS?\s*[:\-]?\s*([A-Za-z][^\n\r,;]{2,50})/i);
+    if (m) return m[1].trim().replace(/\s+/g, ' ');
+    return null;
+  }
+
+  // extras: optional { fobTerms: string|null }
+  _buildTaxPayload(lineItems, jurisdiction, invoiceMode, totals, extras) {
     const billable = lineItems.filter(li => !li.isFreight && li.lineVerdict !== 'SUPPRESSED');
+    // Five-factor freight taxability inputs — passed to the tax engine; app makes no taxability decision.
+    const freightSeparatelyStated = (totals && (totals.freight || 0) > 0) ? true : false;
+    const fobTerms = (extras && extras.fobTerms) || null;
     return {
+      freightHandling: 'distinct-per-line',
+      freightSeparatelyStated,
+      fobTerms,
       lineItems: billable.map(li => ({
         description:    li.description || '',
         unspscCode:     li.unspsc || '',
-        amount:         parseFloat(li.netAmount || li.amount) || 0,
+        netAmount:      parseFloat(li.netAmount || li.amount) || 0,
         freightShare:   parseFloat(li.freightAmount) || 0,
-        taxableAmount:  parseFloat(li.itemAmount) || 0
+        taxableTotal:   parseFloat(li.itemAmount) || 0
       })),
       jurisdiction: {
         state:      jurisdiction.state      || null,
@@ -2209,10 +2288,10 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
 
     const isConstruction = invoiceMode === 'construction';
     const order = isConstruction
-      ? ['project', 'contract', 'shipto', 'accenture']
-      : ['shipto', 'project', 'contract', 'accenture'];
+      ? ['project', 'contract', 'shipto']
+      : ['shipto', 'project', 'contract'];
     const LABELS = { shipto: 'ShipTo Address', project: 'Project Address', contract: 'Contract Details', accenture: 'Accenture Address' };
-    const priorityStr = isConstruction ? 'Project > Contract > ShipTo > Accenture' : 'ShipTo > Project > Contract > Accenture';
+    const priorityStr = isConstruction ? 'Project > Contract > ShipTo' : 'ShipTo > Project > Contract';
     const modeLabel = isConstruction ? 'construction' : 'non-construction';
 
     for (const name of order) {

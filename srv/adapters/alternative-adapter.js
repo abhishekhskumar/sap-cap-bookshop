@@ -6,7 +6,7 @@ try { taxRates = require('../data/tax-rates.json'); } catch (e) { /* rate table 
 const ENGINE_NAME = 'SalesTaxZip';
 
 const COMPONENTS = ['state', 'county', 'city', 'district'];
-const LABELS = { state: 'STATE', county: 'COUNTY', city: 'CITY', district: 'DISTRICT' };
+const JURISDICTION_TYPES = { state: 'STATE', county: 'COUNTY', city: 'CITY', district: 'DISTRICT' };
 
 // In-memory rate cache keyed by ZIP — respects the 100/hr free-tier limit
 const _zipCache = new Map();
@@ -47,26 +47,49 @@ async function fetchRateByZip(zip) {
   return rates;
 }
 
-function computeBreakdown(rates, lineItems) {
-  let lineTotals = {}, freightTotals = {};
-  COMPONENTS.forEach(c => { lineTotals[c] = 0; freightTotals[c] = 0; });
+function _jurisdictionValue(component, jInfo) {
+  switch (component) {
+    case 'state':    return (jInfo.state  || 'STATE').toUpperCase();
+    case 'county':   return (jInfo.county || 'COUNTY').toUpperCase();
+    case 'city':     return (jInfo.city   || 'CITY').toUpperCase();
+    case 'district': return 'LOCAL DISTRICT';
+    default:         return component.toUpperCase();
+  }
+}
 
-  lineItems.forEach(li => {
-    COMPONENTS.forEach(c => {
-      lineTotals[c]    += +(li.amount      * (rates[c] || 0) / 100).toFixed(2);
-      freightTotals[c] += +(li.freightShare * (rates[c] || 0) / 100).toFixed(2);
+// Returns Vertex O-Series shaped result: per-line taxes[], document subTotal/total/totalTax
+function computeBreakdown(rates, lineItems, jInfo) {
+  const resultLines = lineItems.map(li => {
+    const net     = +(parseFloat(li.netAmount != null ? li.netAmount : (li.amount || 0)) || 0).toFixed(2);
+    const freight = +(parseFloat(li.freightShare || 0) || 0).toFixed(2);
+    const taxable = +(+net + +freight).toFixed(2);
+
+    const taxes = COMPONENTS.map(c => {
+      const ratePct   = rates[c] || 0;
+      const effRate   = +(ratePct / 100).toFixed(6);
+      const calcTax   = +(taxable * effRate).toFixed(2);
+      return {
+        jurisdiction:   { jurisdictionType: JURISDICTION_TYPES[c], value: _jurisdictionValue(c, jInfo) },
+        effectiveRate:  effRate,
+        nominalRate:    effRate,
+        taxable,
+        calculatedTax:  Math.abs(calcTax) < 1e-6 ? 0 : calcTax,
+        taxResult:      'TAXABLE',
+        taxType:        'CONSUMERS_USE',
+        situs:          'DESTINATION',
+        impositionType: { value: 'General Sales and Use Tax' }
+      };
     });
+
+    const totalTax = +taxes.reduce((s, t) => s + t.calculatedTax, 0).toFixed(2);
+    return { description: li.description || '', netAmount: +net, freightShare: +freight, taxes, totalTax };
   });
 
-  const rows = COMPONENTS.map(c => {
-    const taxOnLine    = +lineTotals[c].toFixed(2);
-    const taxOnFreight = +freightTotals[c].toFixed(2);
-    return { jurisdiction: LABELS[c], rate: rates[c] || 0, taxOnLine, taxOnFreight, total: +(taxOnLine + taxOnFreight).toFixed(2) };
-  });
+  const docTotalTax = +resultLines.reduce((s, li) => s + li.totalTax, 0).toFixed(2);
+  const subTotal    = +resultLines.reduce((s, li) => s + li.netAmount, 0).toFixed(2);
+  const total       = +(subTotal + docTotalTax).toFixed(2);
 
-  const totalRate = +COMPONENTS.reduce((s, c) => s + (rates[c] || 0), 0).toFixed(3);
-  const totalTax  = +rows.reduce((s, r) => s + r.total, 0).toFixed(2);
-  return { rows, totalRate, totalTax };
+  return { lineItems: resultLines, subTotal, total, totalTax: docTotalTax };
 }
 
 module.exports = {
@@ -83,16 +106,17 @@ module.exports = {
       try {
         const apiRates = await fetchRateByZip(zip);
         if (apiRates) {
-          const bd = computeBreakdown(apiRates, lineItems);
+          const bd = computeBreakdown(apiRates, lineItems, jurisdiction);
           return {
             engineName: ENGINE_NAME,
-            available: true,
+            available:  true,
             rateSource: 'api',
-            rateKey: zip,
-            rates: apiRates,
-            jurisdictionBreakdown: bd,
-            totalTax: bd.totalTax,
-            note: 'Rates fetched live from SalesTaxZip (salestaxzip.com). Estimation only — not compliance-grade. Verify with your state DOR or a licensed CPA before use. Data © SalesTaxZip.'
+            rateKey:    zip,
+            subTotal:   bd.subTotal,
+            total:      bd.total,
+            totalTax:   bd.totalTax,
+            lineItems:  bd.lineItems,
+            note: 'Illustrative (SalesTaxZip) — formatted to match Vertex O-Series output; production uses Vertex. Rates fetched live from SalesTaxZip (salestaxzip.com). Not compliance-grade — verify with your state DOR or a licensed CPA before use. Data © SalesTaxZip.'
           };
         }
         // API returned 404/429 or empty — fall through to local table
@@ -105,16 +129,17 @@ module.exports = {
     const tableKey = `${state}|${city}`;
     const tableRates = (state && city && taxRates[tableKey] && !tableKey.startsWith('_')) ? taxRates[tableKey] : null;
     if (tableRates) {
-      const bd = computeBreakdown(tableRates, lineItems);
+      const bd = computeBreakdown(tableRates, lineItems, jurisdiction);
       return {
         engineName: ENGINE_NAME,
-        available: true,
+        available:  true,
         rateSource: 'local',
-        rateKey: tableKey,
-        rates: tableRates,
-        jurisdictionBreakdown: bd,
-        totalTax: bd.totalTax,
-        note: 'ZIP lookup unavailable — fell back to srv/data/tax-rates.json. All seeded entries are placeholder (0.000%) until replaced with verified values. Not compliance-grade.'
+        rateKey:    tableKey,
+        subTotal:   bd.subTotal,
+        total:      bd.total,
+        totalTax:   bd.totalTax,
+        lineItems:  bd.lineItems,
+        note: 'Illustrative (SalesTaxZip) — formatted to match Vertex O-Series output; production uses Vertex. ZIP lookup unavailable — fell back to srv/data/tax-rates.json. All seeded entries are placeholder (0.000%) until replaced with verified values. Not compliance-grade.'
       };
     }
 
@@ -122,10 +147,12 @@ module.exports = {
     const keyDesc = zip || tableKey || '(no ZIP or city)';
     return {
       engineName: ENGINE_NAME,
-      available: false,
-      rateKey: keyDesc,
-      jurisdictionBreakdown: null,
-      totalTax: null,
+      available:  false,
+      rateKey:    keyDesc,
+      subTotal:   null,
+      total:      null,
+      totalTax:   null,
+      lineItems:  null,
       note: zip
         ? `ZIP "${zip}" not found via SalesTaxZip and not in local rate table. Add it to srv/data/tax-rates.json or verify the ship-to ZIP.`
         : `No postalCode in payload and jurisdiction "${tableKey}" not in local rate table. Requires Vertex or a verified rate source.`

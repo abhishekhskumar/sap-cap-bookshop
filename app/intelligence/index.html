@@ -1027,8 +1027,8 @@ function renderRecon(data){
   var reconRows=[
     {label:'Invoice Tax Rate',fn:function(r){var rate=_taxRate(r);return rate!=null?rate+'%':'<span style="color:#999;font-style:italic;">not derived</span>';}},
     {label:'Invoice Tax Amount',fn:function(r){return r.vendorTaxAmount!=null?'$'+money(r.vendorTaxAmount):'<span style="color:#999;font-style:italic;">not on invoice</span>';}},
-    {label:'Net (incl. freight)',fn:function(r){return r.invoiceNetTotal!=null?'<strong>$'+money(r.invoiceNetTotal)+'</strong>':'<span style="color:#bbb;">—</span>';}},
     {label:'Freight pool',fn:function(r){return r.invoiceFreightTotal!=null&&r.invoiceFreightTotal>0?'$'+money(r.invoiceFreightTotal):'<span style="color:#bbb;">—</span>';}},
+    {label:'Taxable base (net + freight)',fn:function(r){return r.invoiceNetTotal!=null?'<strong>$'+money(r.invoiceNetTotal)+'</strong>':'<span style="color:#bbb;">—</span>';}},
     {label:'Invoice total',fn:function(r){var v=r.invoiceGrossTotal!=null?r.invoiceGrossTotal:r.invoiceTotalAmount;return v!=null?'<strong>$'+money(v)+'</strong>':'<span style="color:#bbb;">—</span>';}},
     {label:'Reconciliation',fn:function(r){var rc=r.totalAmountReconciliation;if(!rc||rc.rawTotal==null)return '<span style="color:#999;font-size:11px;">—</span>';return rc.match?'<span style="color:#166534;font-weight:700;">&#10003; MATCH</span><div style="font-size:10px;color:#555;margin-top:1px;">$'+money(rc.rawTotal)+'</div>':'<span style="color:#991b1b;font-weight:700;">&#10007; MISMATCH</span><div style="font-size:10px;color:#999;margin-top:1px;">diff $'+money(Math.abs(rc.difference))+'</div>';}},
     {label:'Vertex Tax Rate',fn:function(r){return naV;}},
@@ -1352,11 +1352,15 @@ function renderLineItems(data){
     var _slNet=_slRes.invoiceNetTotal,_slTax=_slRes.vendorTaxAmount;
     var _slTot=_slRes.invoiceGrossTotal!=null?_slRes.invoiceGrossTotal:_slRes.invoiceTotalAmount;
     var _slReco=_slRes.totalAmountReconciliation;
+    var _slFreight=_slRes.invoiceFreightTotal||0;
+    var _slNetEx=_slNet!=null?+(_slNet-_slFreight).toFixed(2):null;
     var _slTd='padding:5px 10px;border-top:1px solid #f0f0f0;';
     slHtml+='<div style="border-top:2px solid #e8ecf0;padding:10px 14px 6px;">';
     slHtml+='<table style="width:260px;border-collapse:collapse;font-size:12px;">';
-    slHtml+='<tr><td style="'+_slTd+'color:#555;">Net (incl. freight)</td><td style="'+_slTd+'text-align:right;font-family:Consolas,monospace;">'+(_slNet!=null?'<strong>$'+money(_slNet)+'</strong>':'—')+'</td></tr>';
-    slHtml+='<tr><td style="'+_slTd+'color:#555;">Vendor tax</td><td style="'+_slTd+'text-align:right;font-family:Consolas,monospace;">'+(_slTax!=null?'$'+money(_slTax):'<span style="color:#999;font-style:italic;">not on invoice</span>')+'</td></tr>';
+    slHtml+='<tr><td style="'+_slTd+'color:#555;">Net (ex-freight)</td><td style="'+_slTd+'text-align:right;font-family:Consolas,monospace;">'+(_slNetEx!=null?'$'+money(_slNetEx):'—')+'</td></tr>';
+    slHtml+='<tr style="background:#fafafa;"><td style="'+_slTd+'color:#6b7280;font-size:11px;">+ Allocated freight</td><td style="'+_slTd+'text-align:right;font-family:Consolas,monospace;color:#0891b2;">'+(_slFreight>0?'$'+money(_slFreight):'<span style="color:#bbb;">—</span>')+'</td></tr>';
+    slHtml+='<tr><td style="'+_slTd+'color:#374151;font-weight:600;font-size:11px;">= Taxable base</td><td style="'+_slTd+'text-align:right;font-family:Consolas,monospace;">'+(_slNet!=null?'<strong>$'+money(_slNet)+'</strong>':'—')+'</td></tr>';
+    slHtml+='<tr style="background:#fafafa;"><td style="'+_slTd+'color:#555;">Vendor tax</td><td style="'+_slTd+'text-align:right;font-family:Consolas,monospace;">'+(_slTax!=null?'$'+money(_slTax):'<span style="color:#999;font-style:italic;">not on invoice</span>')+'</td></tr>';
     slHtml+='<tr><td style="'+_slTd+'color:#444;font-weight:600;">Invoice total</td><td style="'+_slTd+'text-align:right;font-family:Consolas,monospace;">'+(_slTot!=null?'<strong>$'+money(_slTot)+'</strong>':'—')+'</td></tr>';
     if(_slReco&&_slReco.rawTotal!=null){
       var _slRecoHtml=_slReco.match?'<span style="color:#166534;font-weight:700;">&#10003; MATCH</span>':'<span style="color:#991b1b;font-weight:700;">&#10007; MISMATCH</span><span style="font-size:10px;color:#999;margin-left:5px;">diff $'+money(Math.abs(_slReco.difference))+'</span>';
@@ -1514,6 +1518,8 @@ function renderLineItems(data){
     return '<td style="padding:7px 12px;text-align:right;border-left:1px solid #eaecef;">'+valFn(result)+'</td>';
   };
   var _fNet=function(r){ return r.invoiceNetTotal!=null?'<strong>$'+money(r.invoiceNetTotal)+'</strong>':'<span style="color:#bbb;">—</span>'; };
+  var _fNetEx=function(r){ var f=r.invoiceFreightTotal||0; var n=r.invoiceNetTotal; return n!=null?'$'+money(+(n-f).toFixed(2)):'<span style="color:#bbb;">—</span>'; };
+  var _fFreight=function(r){ var f=r.invoiceFreightTotal||0; return f>0?'<span style="color:#0891b2;">$'+money(f)+'</span>':'<span style="color:#bbb;">—</span>'; };
   var _fTax=function(r){ return r.vendorTaxAmount==null?'<span style="color:#999;">not on invoice</span>':'$'+money(r.vendorTaxAmount); };
   var _fTot=function(r){ var v=r.invoiceGrossTotal!=null?r.invoiceGrossTotal:r.invoiceTotalAmount; return v!=null?'<strong>$'+money(v)+'</strong>':'<span style="color:#bbb;">—</span>'; };
   var _fReco=function(r){
@@ -1534,7 +1540,17 @@ function renderLineItems(data){
     +_th('Claude','#3452d1',claudeRan)
     +_th('Vision','#9d174d',visionRan)
     +'</tr></thead><tbody>';
-  html+='<tr><td style="padding:7px 10px;color:#555;">Net (incl. freight)</td>'
+  html+='<tr><td style="padding:7px 10px;color:#555;">Net (ex-freight)</td>'
+    +_td(docaiRan,docaiResult,_fNetEx)
+    +_td(claudeRan,claudeResult,_fNetEx)
+    +_td(visionRan,visionResult,_fNetEx)
+    +'</tr>';
+  html+='<tr style="background:#fafafa;"><td style="padding:7px 10px;color:#6b7280;font-size:11px;">+ Allocated freight</td>'
+    +_td(docaiRan,docaiResult,_fFreight)
+    +_td(claudeRan,claudeResult,_fFreight)
+    +_td(visionRan,visionResult,_fFreight)
+    +'</tr>';
+  html+='<tr><td style="padding:7px 10px;color:#374151;font-weight:600;font-size:11px;">= Taxable base</td>'
     +_td(docaiRan,docaiResult,_fNet)
     +_td(claudeRan,claudeResult,_fNet)
     +_td(visionRan,visionResult,_fNet)

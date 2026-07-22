@@ -1718,12 +1718,6 @@ function _teStubCard(result,borderColor,headerBg,headerBorder,badge,badgeBg,vend
     +'<span style="color:#6b7280;">Calculated Tax</span>'
     +'<span style="color:#aaa;font-style:italic;">— requires enterprise engine</span>'
     +'</div>';
-  if(vendorTax!=null){
-    c+='<div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;">'
-      +'<span style="color:#6b7280;">Vendor-stated Tax</span>'
-      +'<span>$'+money(vendorTax)+'</span>'
-      +'</div>';
-  }
   c+='</div></div>';
   return c;
 }
@@ -1816,15 +1810,10 @@ function _teSalestaxzipCard(alt,vendorTax){
     c+='<span style="font-weight:700;">Estimate vs Vendor-Charged</span>';
     c+='<span style="font-size:10px;font-weight:700;background:#fde68a;color:#78350f;padding:2px 8px;border-radius:8px;">ILLUSTRATIVE &mdash; NOT A VERDICT</span>';
     c+='</div>';
-    c+='<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:6px;font-size:12px;">';
+    c+='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;">';
     c+='<span>SalesTaxZip estimate: <strong>$'+money(alt.totalTax)+'</strong></span>';
-    c+='<span>Vendor charged: <strong>$'+money(vendorTax)+'</strong></span>';
     c+='<span>Difference: <strong>'+(diff>=0?'+':'−')+'$'+money(Math.abs(diff))+'</strong></span>';
     c+='</div>';
-    c+='<div style="color:#92400e;font-size:11px;line-height:1.5;">'
-      +'ZIP-based estimates diverge from enterprise engines &mdash; this is why compliance-grade determination uses Vertex. '
-      +'The same extraction payload feeds any engine.'
-      +'</div>';
     c+='</div>';
     c+='</div>';
   }
@@ -1915,18 +1904,37 @@ function renderTaxEngine(data){
     +'</div>';
   html+='</div>'; // block 1
 
+  // ── Flow-through values — computed here so verdict can fold into Block 2 ──
+  // Never derives vendor tax from gross − base.
+  var taxIsExplicit=src._provenance&&src._provenance.vendorTaxAmount&&src._provenance.vendorTaxAmount.provenance==='extracted';
+  var srcGross=src.invoiceGrossTotal!=null?parseFloat(src.invoiceGrossTotal)
+    :src.invoiceTotalAmount!=null?parseFloat(src.invoiceTotalAmount):null;
+  var _fss=tp.freightSeparatelyStated;
+  var _fobT=tp.fobTerms;
+  var _ftBase=parseFloat(tot.net)||0;
+  var _ftV=parseFloat(vendorTax)||0;
+  var _ftE=stxAvail?parseFloat(stxRes.totalTax)||0:null;
+  var _ftD=_ftE!=null?+(_ftE-_ftV).toFixed(2):null;
+  var _ftAbsD=_ftD!=null?Math.abs(_ftD):null;
+  var _ftZero=taxIsExplicit&&_ftE!=null&&(_ftV===0||_ftE===0);
+  var _ftTol=taxIsExplicit&&!_ftZero&&_ftAbsD!=null&&_ftAbsD<=TAX_TOLERANCE;
+  var _ftUnder=taxIsExplicit&&!_ftZero&&_ftD!=null&&_ftD>TAX_TOLERANCE;
+  var _ftSign=(_ftD!=null&&_ftD>=0)?'+':'&#8722;';
+  var _ftColor=_ftTol?'#166534':_ftUnder?'#92400e':'#991b1b';
+  var _ftTrue=(_ftBase!=null&&_ftE!=null)?+(_ftBase+_ftE).toFixed(2):null;
+
   // ── Block 2: TAX DETERMINATION (engine-dependent) ─────────────────────────
   html+='<div style="margin:10px 16px 0;border:2px solid #2563eb;border-radius:8px;overflow:hidden;">';
   html+='<div style="padding:8px 14px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:flex;justify-content:space-between;align-items:center;">';
   html+='<span style="font-weight:700;font-size:13px;color:#1e3a8a;">Tax Determination &mdash; Engine-Dependent</span>';
   html+='<span style="font-size:10px;font-weight:700;background:#2563eb;color:#fff;padding:2px 10px;border-radius:8px;letter-spacing:.3px;">SWAP ADAPTER TO CHANGE ENGINE</span>';
   html+='</div>';
-  // Comparison table
+  // Engine roster table
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
   html+='<thead><tr style="background:#eff6ff;">'
     +'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#374151;">Engine</th>'
     +'<th style="padding:8px 12px;text-align:right;font-weight:600;color:#374151;">Calculated Tax</th>'
-    +(hasVendorTax?'<th style="padding:8px 12px;text-align:right;font-weight:600;color:#374151;">vs Vendor ($'+money(vendorTax)+')</th>':'')
+    +(hasVendorTax?'<th style="padding:8px 12px;text-align:right;font-weight:600;color:#374151;">vs Vendor</th>':'')
     +'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#374151;">Status</th>'
     +'</tr></thead><tbody>';
   // Vertex
@@ -1968,130 +1976,59 @@ function renderTaxEngine(data){
   }
   html+='</tr>';
   html+='</tbody></table>';
-  // Verdict note
-  html+='<div style="padding:9px 14px;background:#fef9c3;border-top:1px solid #fde68a;font-size:12px;color:#78350f;">'
-    +'<strong>Verdict (Under/Over/Accurately Charged):</strong> Requires Vertex &mdash; not available in this POC.'
-    +'</div>';
-  // Honest note
-  html+='<div style="padding:8px 14px;background:#f0f9ff;border-top:1px solid #bae6fd;font-size:11px;color:#0369a1;line-height:1.5;">'
-    +'ZIP-based estimates diverge from enterprise engines &mdash; this is why compliance-grade determination uses Vertex. The same extraction payload feeds any engine.'
-    +'</div>';
-  html+='</div>'; // block 2
 
-  // ── Flow-Through Inference ────────────────────────────────────────────────
-  // Only rendered when vendor tax is an explicit extracted field.
-  // Never derives vendor tax from gross − base.
-  var taxIsExplicit=src._provenance&&src._provenance.vendorTaxAmount&&src._provenance.vendorTaxAmount.provenance==='extracted';
-  var srcGross=src.invoiceGrossTotal!=null?parseFloat(src.invoiceGrossTotal)
-    :src.invoiceTotalAmount!=null?parseFloat(src.invoiceTotalAmount):null;
-
-  html+='<div style="margin:10px 16px 0;border:2px dashed #f59e0b;border-radius:8px;overflow:hidden;">';
-  html+='<div style="padding:8px 14px;background:#fffbeb;border-bottom:1px solid #fde68a;display:flex;justify-content:space-between;align-items:center;">';
-  html+='<span style="font-weight:700;font-size:13px;color:#78350f;">Flow-Through Inference</span>';
-  html+='<span style="font-size:10px;font-weight:700;background:'+(taxIsExplicit&&stxAvail?'#f59e0b':'#9ca3af')+';color:#fff;padding:2px 10px;border-radius:8px;">'
-    +(taxIsExplicit&&stxAvail?'ILLUSTRATIVE &mdash; SALESTAXZIP ESTIMATE':'INFERENCE UNAVAILABLE')
-    +'</span>';
-  html+='</div>';
-
+  // ── Folded flow-through verdict (unique: directional verdict + gross math) ─
+  var _ftBg=_ftZero?'#f9fafb':_ftTol?'#f0fdf4':_ftUnder?'#fffbeb':'#fef2f2';
+  html+='<div style="padding:10px 14px;background:'+_ftBg+';border-top:1px solid #bfdbfe;">';
   if(!taxIsExplicit){
-    html+='<div style="padding:12px 14px;font-size:12px;color:#6b7280;background:#f9fafb;">'
-      +'&#9888; Vendor tax not separately stated on this invoice &mdash; cannot compute tax difference or flow-through. '
-      +'Inference skipped. (Vendor tax is never derived from gross &#8722; base.)'
-      +'</div>';
+    html+='<div style="font-size:12px;color:#6b7280;">&#9888; Vendor tax not separately stated &mdash; charge verdict unavailable. (Vendor tax is never derived from gross &#8722; base.)</div>';
   }else if(!stxAvail){
-    html+='<div style="padding:12px 14px;font-size:12px;color:#6b7280;background:#f9fafb;">'
-      +'&#9888; No engine rate data for this jurisdiction &mdash; tax difference cannot be computed.'
-      +'</div>';
+    html+='<div style="font-size:12px;color:#6b7280;">&#9888; No engine rate data for this jurisdiction &mdash; charge verdict unavailable.</div>';
+  }else if(_ftZero){
+    html+='<div style="font-size:12px;color:#6b7280;">&#8212; Charge-status not evaluated &mdash; a tax value is zero (spec §14: threshold skipped when either tax = $0). Verdict requires Vertex.</div>';
+  }else if(_ftTol){
+    html+='<div style="font-size:13px;font-weight:600;color:#166534;">&#10003; Tax accurately charged &mdash; within $'+money(TAX_TOLERANCE)+' tolerance.</div>';
+  }else if(_ftUnder){
+    html+='<div style="font-size:13px;font-weight:600;color:#92400e;">&#9650; If this estimate were correct: vendor undercharged tax by $'+money(_ftAbsD)+'';
+    html+=' &rarr; potential additional <strong>USE TAX you may owe: $'+money(_ftAbsD)+'</strong>.</div>';
   }else{
-    var _base=parseFloat(tot.net)||0;
-    var _V=parseFloat(vendorTax)||0;
-    var _E=parseFloat(stxRes.totalTax)||0;
-    var _D=+(_E-_V).toFixed(2);
-    var _absD=Math.abs(_D);
-    var _zeroTax=_V===0||_E===0;
-    var _tolerance=!_zeroTax&&_absD<=TAX_TOLERANCE;
-    var _under=!_zeroTax&&_D>TAX_TOLERANCE;
-    var _trueTotal=+(_base+_E).toFixed(2);
-    var _dSign=_D>=0?'+':'&#8722;';
-    var _dColor=_tolerance?'#166534':_under?'#92400e':'#991b1b';
-
-    // Row 1: base is constant
-    html+='<div style="padding:10px 14px;background:#f9fafb;border-bottom:1px solid #fde68a;font-size:12px;">';
-    html+='<span style="font-weight:600;color:#374151;">Taxable base: <strong style="color:#059669;">$'+money(_base)+'</strong></span>';
-    html+='<span style="color:#6b7280;margin-left:10px;font-size:11px;">(unchanged &mdash; constant regardless of engine; only tax differs)</span>';
-    html+='</div>';
-
-    // Row 2: V · E · D
-    html+='<div style="padding:10px 14px;border-bottom:1px solid #fde68a;">';
-    html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;margin-bottom:6px;">';
-    html+='<span style="color:#374151;">Vendor charged tax: <strong>$'+money(_V)+'</strong></span>';
-    html+='<span style="color:#d1d5db;">&middot;</span>';
-    html+='<span style="color:#374151;">Engine calculated tax: <strong style="color:#059669;">$'+money(_E)+'</strong></span>';
-    html+='<span style="color:#d1d5db;">&middot;</span>';
-    html+='<span style="color:#374151;">Tax difference = $'+money(_E)+' &#8722; $'+money(_V)+' = <strong style="color:'+_dColor+';">'+_dSign+'$'+money(_absD)+'</strong></span>';
-    html+='</div>';
-
-    // Row 3: gross flow-through (base + V → base + E = G + D)
-    if(srcGross!=null){
-      html+='<div style="font-size:12px;color:#374151;margin-bottom:4px;">';
-      html+='Invoice gross <strong>$'+money(srcGross)+'</strong> (base $'+money(_base)+' + vendor tax $'+money(_V)+')';
-      html+=' &rarr; if engine tax is correct, true total = base + engine tax = $'+money(_base)+' + $'+money(_E)+' = <strong>$'+money(_trueTotal)+'</strong>';
-      if(!_tolerance)html+=' (<strong style="color:'+_dColor+';">'+_dSign+'$'+money(_absD)+'</strong> vs invoice gross)';
-      html+='.';
-      html+='</div>';
-      html+='<div style="font-size:11px;color:#6b7280;">Gross difference = tax difference: same <strong>'+_dSign+'$'+money(_absD)+'</strong> &mdash; one number, not two, because the base is constant.</div>';
-    }
-    html+='</div>';
-
-    // Row 4: directional inference — spec §14: skip verdict when either tax is zero
-    html+='<div style="padding:10px 14px;background:'+(_zeroTax?'#f9fafb':_tolerance?'#f0fdf4':_under?'#fffbeb':'#fef2f2')+';border-top:1px solid #fde68a;">';
-    if(_zeroTax){
-      html+='<div style="font-size:12px;color:#6b7280;">&#8212; Charge-status not evaluated &mdash; a tax value is zero (spec §14: threshold skipped when either tax = $0). Verdict requires Vertex.</div>';
-    }else if(_tolerance){
-      html+='<div style="font-size:13px;font-weight:600;color:#166534;">&#10003; Tax accurately charged &mdash; within $'+money(TAX_TOLERANCE)+' tolerance.</div>';
-    }else if(_under){
-      html+='<div style="font-size:13px;font-weight:600;color:#92400e;">&#9650; If this estimate were correct: vendor undercharged tax by $'+money(_absD)+'';
-      html+=' &rarr; potential additional <strong>USE TAX you may owe: $'+money(_absD)+'</strong>.</div>';
-    }else{
-      html+='<div style="font-size:13px;font-weight:600;color:#991b1b;">&#9651; If this estimate were correct: vendor overcharged tax by $'+money(_absD)+'';
-      html+=' &rarr; potential <strong>overpayment: $'+money(_absD)+'</strong>.</div>';
-    }
-    html+='<div style="font-size:11px;color:#9ca3af;margin-top:5px;">Illustrative only &mdash; based on SalesTaxZip ZIP-based estimate. Authoritative verdict requires Vertex in production.</div>';
+    html+='<div style="font-size:13px;font-weight:600;color:#991b1b;">&#9651; If this estimate were correct: vendor overcharged tax by $'+money(_ftAbsD)+'';
+    html+=' &rarr; potential <strong>overpayment: $'+money(_ftAbsD)+'</strong>.</div>';
+  }
+  if(taxIsExplicit&&stxAvail&&!_ftZero&&srcGross!=null){
+    html+='<div style="font-size:11px;color:#6b7280;margin-top:4px;">';
+    html+='Invoice gross <strong>$'+money(srcGross)+'</strong> &rarr; if engine tax is correct, true total = $'+money(_ftBase)+' + $'+money(_ftE)+' = <strong>$'+money(_ftTrue)+'</strong>';
+    if(!_ftTol)html+=' (<strong style="color:'+_ftColor+';">'+_ftSign+'$'+money(_ftAbsD)+'</strong> vs invoice gross)';
+    html+='.';
     html+='</div>';
   }
+  html+='</div>';
 
-  html+='</div>'; // inference block
+  // ONE consolidated disclaimer
+  html+='<div style="padding:8px 14px;background:#fef9c3;border-top:1px solid #fde68a;font-size:11px;color:#78350f;line-height:1.5;">';
+  html+='<strong>Note:</strong> Vertex, Avalara, and ONESOURCE are not connected in this POC (production/pluggable stubs). SalesTaxZip provides live illustrative rate estimates; ZIP-based rates diverge from enterprise engines. Authoritative charge verdict requires Vertex. The same extraction payload feeds any connected engine.';
+  html+='</div>';
+  html+='</div>'; // block 2
 
-  // ── Demo note ────────────────────────────────────────────────────────────
-  html+='<div style="margin:10px 16px 0;padding:8px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:11.5px;color:#78350f;">'
-    +'<strong>Demo only.</strong> Vertex, Avalara, and ONESOURCE are stubs — not connected in this POC. SalesTaxZip provides live illustrative estimates. This panel demonstrates the pluggable adapter pattern.'
-    +'</div>';
-
-  // ── Payload Detail ────────────────────────────────────────────────────────
-  html+='<div style="margin:12px 16px 0;border:1.5px solid #bfdbfe;border-radius:8px;overflow:hidden;">';
+  // ── Block 3: PAYLOAD DETAIL + PROVENANCE ──────────────────────────────────
+  html+='<div style="margin:10px 16px 0;border:1.5px solid #bfdbfe;border-radius:8px;overflow:hidden;">';
   html+='<div style="padding:8px 14px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:flex;justify-content:space-between;align-items:center;">';
   html+='<span style="font-weight:700;font-size:12.5px;color:#1e3a8a;">Payload Detail &mdash; engine-agnostic input</span>';
   html+='<span style="font-size:11px;color:#1d4ed8;background:#dbeafe;padding:2px 10px;border-radius:8px;font-weight:700;">Same payload &#8595; feeds every engine</span>';
   html+='</div>';
+  // Chips: invoiceMode only — base/freight/place-of-use live in Block 1
   html+='<div style="display:flex;flex-wrap:wrap;border-bottom:1px solid #bfdbfe;font-size:12px;">';
-  html+=_teChip('State',escHtml(jur.state||''));
-  html+=_teChip('City',escHtml(jur.city||''));
-  html+=_teChip('ZIP',escHtml(jur.postalCode||''));
   html+=_teChip('Mode',escHtml(tp.invoiceMode||''));
-  html+=_teChip('Net',tot.net!=null?'$'+money(tot.net):'—');
-  html+=_teChip('Freight',tot.freight!=null&&tot.freight>0?'$'+money(tot.freight):'—');
-  html+=_teChip('Gross',tot.gross!=null?'$'+money(tot.gross):'—');
   html+='</div>';
-  // ── Freight taxability inputs (five-factor, for tax engine) ───────────────
-  var _fss=tp.freightSeparatelyStated;
-  var _fobT=tp.fobTerms;
+  // Freight taxability inputs (note H — unique: app does not decide taxability)
   html+='<div style="padding:7px 14px;background:#ecfdf5;border-bottom:1px solid #a7f3d0;font-size:11.5px;color:#374151;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">';
   html+='<span style="font-weight:700;color:#065f46;white-space:nowrap;">Freight taxability inputs</span>';
-  html+='<span style="font-size:10.5px;color:#6b7280;">(inputs for the tax engine — the app does not decide freight taxability)</span>';
+  html+='<span style="font-size:10.5px;color:#6b7280;">(inputs for the tax engine &mdash; the app does not decide freight taxability)</span>';
   html+='<span>Freight separately stated: <strong style="color:'+(_fss?'#059669':'#374151')+';">'+(_fss?'Yes':'No')+'</strong></span>';
   html+='<span style="color:#d1d5db;">&middot;</span>';
   html+='<span>FOB terms: <strong>'+(_fobT?escHtml(_fobT):'<span style="color:#9ca3af;font-weight:400;">not stated</span>')+'</strong></span>';
   html+='</div>';
+  // Per-line table (description / UNSPSC / net / freightShare / taxableTotal)
   if(li_items.length){
     html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
     html+='<thead><tr style="background:#eff6ff;">'
@@ -2112,13 +2049,12 @@ function renderTaxEngine(data){
         +'</tr>';
     });
     html+='</tbody></table>';
+    // Note G — unique: freight as distinct component
     html+='<div style="padding:6px 14px;font-size:11px;color:#1d4ed8;background:#eff6ff;border-top:1px solid #bfdbfe;">'
       +'&#9432; Freight passed as a distinct component (freightShare per line) &mdash; taxability determined per-jurisdiction by the tax engine.'
       +'</div>';
   }
-  html+='</div>'; // payload detail
-
-  // ── Source Provenance Summary — Spec §21 ──────────────────────────────────
+  // Source Provenance §21 — folded into Block 3
   var _provObj=src._provenance||{};
   var _provRows=[
     {label:'Invoice Net Total',    key:'invoiceNetTotal'},
@@ -2129,9 +2065,9 @@ function renderTaxEngine(data){
     {label:'Ship-To Resolution',   key:'shipToResolution'}
   ].filter(function(r){return _provObj[r.key]&&_provObj[r.key].provenance;});
   if(_provRows.length){
-    html+='<div style="margin:12px 16px 0;border:1.5px solid #c4b5fd;border-radius:8px;overflow:hidden;">';
-    html+='<div style="padding:8px 14px;background:#f5f3ff;border-bottom:1px solid #c4b5fd;display:flex;justify-content:space-between;align-items:center;">';
-    html+='<span style="font-weight:700;font-size:12.5px;color:#4c1d95;">Source Provenance &mdash; Spec §21</span>';
+    html+='<div style="border-top:1.5px solid #c4b5fd;">';
+    html+='<div style="padding:7px 14px;background:#f5f3ff;border-bottom:1px solid #c4b5fd;display:flex;justify-content:space-between;align-items:center;">';
+    html+='<span style="font-weight:700;font-size:12px;color:#4c1d95;">Source Provenance &mdash; Spec §21</span>';
     html+='<span style="font-size:10.5px;color:#5b21b6;background:#ede9fe;padding:2px 9px;border-radius:8px;font-weight:700;">Where did each value come from?</span>';
     html+='</div>';
     html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
@@ -2150,13 +2086,15 @@ function renderTaxEngine(data){
         +'</tr>';
     });
     html+='</tbody></table>';
+    // Note I — unique: provenance legend
     html+='<div style="padding:7px 14px;background:#faf5ff;border-top:1px solid #ede9fe;font-size:11px;color:#6b7280;">'
       +'&#9432; EXTRACTED = read directly from the document &nbsp;&middot;&nbsp; INFERRED = calculated by the app (freight distribution, derived totals)'
       +'</div>';
     html+='</div>';
   }
+  html+='</div>'; // block 3
 
-  // ── Engine Detail ─────────────────────────────────────────────────────────
+  // ── Block 4: ENGINE DETAIL (selected adapter breakdown) ───────────────────
   html+='<div style="margin:12px 16px 8px;">';
   html+='<div style="font-weight:700;font-size:13px;color:#111827;margin-bottom:10px;">Engine Detail &mdash; same payload, four adapters</div>';
   var engines=[
@@ -2176,12 +2114,12 @@ function renderTaxEngine(data){
   });
   html+='</div>';
 
-  // Empty output containers — teSelect fills them on demand via calculateTaxWithEngine
+  // Empty output containers — teSelect fills them on demand
   engines.forEach(function(e){
     html+='<div id="teCard-'+e.key+'" style="display:none;"></div>';
   });
 
-  html+='</div>'; // engine detail section
+  html+='</div>'; // block 4
   el.innerHTML=html;
   teSelect('salestaxzip'); // default: load SalesTaxZip immediately
 }

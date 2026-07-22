@@ -334,6 +334,8 @@ function provenancePill(p){
   var s=cfg[k]||{bg:'#f3f4f6',color:'#374151',border:'#d1d5db'};
   return '<span style="display:inline-block;background:'+s.bg+';color:'+s.color+';border:1px solid '+s.border+';border-radius:4px;font-size:9.5px;font-weight:700;padding:1px 5px;margin-left:4px;vertical-align:middle;letter-spacing:0.03em;">'+k+'</span>';
 }
+// Charge-status tolerance (USD). Config-driven per spec §14; would be server/config-injected in production.
+var TAX_TOLERANCE=1.00;
 function money(n){var x=parseFloat(n)||0;return x.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function escHtml(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):''}
 function disagree(values){
@@ -1066,7 +1068,7 @@ function renderRecon(data){
       :(visionResult&&visionResult.vendorTaxAmount!=null)?visionResult.vendorTaxAmount:null;
     var stxCalc=stx.invoiceTotal;
     var stxDiff=stxVendor!=null?+(stxVendor-stxCalc).toFixed(2):null;
-    var stxMatch=stxDiff!=null&&Math.abs(stxDiff)<=0.50;
+    var stxMatch=stxDiff!=null&&Math.abs(stxDiff)<=TAX_TOLERANCE;
     html+='<div style="padding:10px 14px 4px;font-size:12px;color:#6b7280;">Jurisdiction: <strong style="color:#1e1b4b;">'+escHtml(stx.key)+'</strong>'
       +' &nbsp;·&nbsp; Combined rate: <strong>'+money(stx.totalRate)+'%</strong>'
       +' &nbsp;·&nbsp; Lookup: <span style="font-family:monospace;background:#f3f4f6;padding:1px 5px;border-radius:3px;">srv/data/tax-rates.json</span></div>';
@@ -1105,7 +1107,7 @@ function renderRecon(data){
     if(stxVendor!=null){
       html+='<span><strong>Vendor-stated:</strong> $'+money(stxVendor)+'</span>';
       if(stxMatch){
-        html+='<span style="background:#dcfce7;color:#166534;font-weight:700;padding:3px 10px;border-radius:10px;">&#10003; Within $0.50</span>';
+        html+='<span style="background:#dcfce7;color:#166534;font-weight:700;padding:3px 10px;border-radius:10px;">&#10003; Within $'+money(TAX_TOLERANCE)+'</span>';
       } else {
         html+='<span style="background:#fee2e2;color:#991b1b;font-weight:700;padding:3px 10px;border-radius:10px;">&#9651; Variance: $'+money(Math.abs(stxDiff))+'</span>';
       }
@@ -1951,8 +1953,9 @@ function renderTaxEngine(data){
     var _E=parseFloat(stxRes.totalTax)||0;
     var _D=+(_E-_V).toFixed(2);
     var _absD=Math.abs(_D);
-    var _tolerance=_absD<=1.00;
-    var _under=_D>1.00;
+    var _zeroTax=_V===0||_E===0;
+    var _tolerance=!_zeroTax&&_absD<=TAX_TOLERANCE;
+    var _under=!_zeroTax&&_D>TAX_TOLERANCE;
     var _trueTotal=+(_base+_E).toFixed(2);
     var _dSign=_D>=0?'+':'&#8722;';
     var _dColor=_tolerance?'#166534':_under?'#92400e':'#991b1b';
@@ -1985,10 +1988,12 @@ function renderTaxEngine(data){
     }
     html+='</div>';
 
-    // Row 4: directional inference
-    html+='<div style="padding:10px 14px;background:'+(_tolerance?'#f0fdf4':_under?'#fffbeb':'#fef2f2')+';border-top:1px solid #fde68a;">';
-    if(_tolerance){
-      html+='<div style="font-size:13px;font-weight:600;color:#166534;">&#10003; Tax accurately charged &mdash; within $1.00 tolerance.</div>';
+    // Row 4: directional inference — spec §14: skip verdict when either tax is zero
+    html+='<div style="padding:10px 14px;background:'+(_zeroTax?'#f9fafb':_tolerance?'#f0fdf4':_under?'#fffbeb':'#fef2f2')+';border-top:1px solid #fde68a;">';
+    if(_zeroTax){
+      html+='<div style="font-size:12px;color:#6b7280;">&#8212; Charge-status not evaluated &mdash; a tax value is zero (spec §14: threshold skipped when either tax = $0). Verdict requires Vertex.</div>';
+    }else if(_tolerance){
+      html+='<div style="font-size:13px;font-weight:600;color:#166534;">&#10003; Tax accurately charged &mdash; within $'+money(TAX_TOLERANCE)+' tolerance.</div>';
     }else if(_under){
       html+='<div style="font-size:13px;font-weight:600;color:#92400e;">&#9650; If this estimate were correct: vendor undercharged tax by $'+money(_absD)+'';
       html+=' &rarr; potential additional <strong>USE TAX you may owe: $'+money(_absD)+'</strong>.</div>';

@@ -31,12 +31,12 @@
   #ocrTooltip { position:fixed; background:#32363a; color:#fff; font-size:11px; line-height:1.5; padding:7px 10px; border-radius:5px; pointer-events:none; z-index:1000; display:none; max-width:240px; box-shadow:0 3px 10px rgba(0,0,0,.35); }
   .right iframe { width:100%; height:100%; border:none; } .right img { width:100%; }
   .pdf-empty { color:#999; display:flex; align-items:center; justify-content:center; height:100%; font-size:13px; }
-  .tabs { background:#fff; display:flex; padding:0 20px; border-bottom:1px solid #e0e0e0; gap:2px; overflow-x:auto; }
+  .tabs { background:#fff; display:flex; padding:0 20px; border-bottom:1px solid #e0e0e0; gap:2px; overflow-x:auto; position:sticky; top:0; z-index:20; }
   .tab { padding:12px 16px; font-size:12px; color:#6a6d70; cursor:pointer; border-bottom:3px solid transparent; white-space:nowrap; }
   .tab.active { color:#0a6ed1; font-weight:600; border-bottom-color:#0a6ed1; }
   .tab.ai-tab.active { color:#0070f2; border-bottom-color:#0070f2; }
   .tab .badge-new { background:#0070f2; color:#fff; font-size:9px; padding:1px 5px; border-radius:8px; margin-left:5px; }
-  .tab-content { padding:18px; } .panel { display:none; } .panel.active { display:block; }
+  .tab-content { padding:18px; } .panel { scroll-margin-top:45px; }
   .upload-zone { border:2px dashed #aab; border-radius:8px; padding:20px; text-align:center; cursor:pointer; background:#fff; margin-bottom:14px; }
   .upload-zone:hover { border-color:#0a6ed1; background:#f0f7ff; } .upload-zone.active { border-color:#107e3e; background:#f0fdf5; }
   .controls { display:flex; gap:12px; align-items:center; margin-bottom:14px; }
@@ -182,13 +182,12 @@
         <p style="font-size:15px;font-weight:500;">&#128196; Drop invoice PDF to run the intelligence audit</p>
         <p style="font-size:12px;color:#888;margin-top:4px;">or click to browse</p>
       </div>
-      <div class="tabs" style="margin:0 -18px 14px;">
-        <div class="tab active" onclick="showTab('general',this)">GENERAL INFORMATION</div>
-        <div class="tab" onclick="showTab('reconciliation',this)">TAX RECONCILIATION</div>
-        <div class="tab" onclick="showTab('lineitems',this)">INVOICE LINE ITEMS</div>
-        <div class="tab" onclick="showTab('changelog',this)">CHANGE LOG</div>
-        <div class="tab ai-tab" onclick="showTab('intel',this)">&#9889; INTELLIGENCE REPORT<span class="badge-new">NEW</span></div>
-        <div class="tab" onclick="showTab('taxengine',this)">&#9636; TAX ENGINE</div>
+      <div class="tabs" style="margin:0 -18px 0;">
+        <div class="tab active" data-section="general" onclick="showTab('general',this)">GENERAL INFORMATION</div>
+        <div class="tab" data-section="lineitems" onclick="showTab('lineitems',this)">INVOICE LINE ITEMS</div>
+        <div class="tab" data-section="reconciliation" onclick="showTab('reconciliation',this)">TAX RECONCILIATION + TAX ENGINE</div>
+        <div class="tab ai-tab" data-section="intel" onclick="showTab('intel',this)">&#9889; INTELLIGENCE REPORT<span class="badge-new">NEW</span></div>
+        <div class="tab" data-section="changelog" onclick="showTab('changelog',this)">CHANGE LOG</div>
       </div>
       <div class="controls">
         <button class="primary" id="docaiBtn" disabled onclick="runDocAI()">1. Run Doc AI Extraction</button>
@@ -204,7 +203,7 @@
         <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
       </div>
 
-      <div class="panel active" id="panel-general">
+      <div class="panel" id="panel-general">
         <div class="sec-title">GENERAL INFORMATION</div>
         <div class="card" id="generalInfoCard" style="display:none;">
           <div class="card-title">General Information <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
@@ -212,19 +211,16 @@
         </div>
       </div>
 
-      <div class="panel" id="panel-reconciliation">
-        <div class="sec-title">TAX RECONCILIATION</div>
-        <div class="card"><div id="reconContent"><div class="placeholder">Upload an invoice to reconcile vendor tax vs Vertex tax</div></div></div>
-      </div>
-
       <div class="panel" id="panel-lineitems">
         <div class="sec-title">INVOICE LINE ITEMS</div>
         <div class="card"><div id="lineItemsContent"><div class="placeholder">Upload an invoice to see line items with freight and Vertex tax</div></div></div>
       </div>
 
-      <div class="panel" id="panel-changelog">
-        <div class="sec-title">CHANGE LOG <span class="pill live">LIVE</span></div>
-        <div class="card"><div id="changelogContent"><div class="placeholder">Field-level corrections made by the intelligence layer appear here</div></div></div>
+      <div class="panel" id="panel-reconciliation">
+        <div class="sec-title">TAX RECONCILIATION</div>
+        <div class="card"><div id="reconContent"><div class="placeholder">Upload an invoice to reconcile vendor tax vs Vertex tax</div></div></div>
+        <div class="sec-title" style="margin-top:18px;">TAX ENGINE</div>
+        <div id="taxEngineContent"><div class="placeholder">Process an invoice to see the tax engine demo</div></div>
       </div>
 
       <div class="panel" id="panel-intel">
@@ -234,8 +230,9 @@
         </div>
       </div>
 
-      <div class="panel" id="panel-taxengine">
-        <div id="taxEngineContent"><div class="placeholder">Process an invoice to see the tax engine demo</div></div>
+      <div class="panel" id="panel-changelog">
+        <div class="sec-title">CHANGE LOG <span class="pill live">LIVE</span></div>
+        <div class="card"><div id="changelogContent"><div class="placeholder">Field-level corrections made by the intelligence layer appear here</div></div></div>
       </div>
     </div>
   </div>
@@ -311,10 +308,15 @@ function _showPdfFallback(b64){
   if(nav)nav.style.display='none';
   if(wrap)wrap.innerHTML='<embed src="data:application/pdf;base64,'+b64+'" type="application/pdf" style="width:100%;height:100%;min-height:600px;border:none;" />';
 }
+var _scrollSpyPaused=false;
 function showTab(name,el){
   document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
-  document.querySelectorAll('.panel').forEach(function(p){p.classList.remove('active');});
-  el.classList.add('active'); document.getElementById('panel-'+name).classList.add('active');
+  el.classList.add('active');
+  var target=document.getElementById('panel-'+name);
+  if(!target)return;
+  _scrollSpyPaused=true;
+  target.scrollIntoView({behavior:'smooth',block:'start'});
+  setTimeout(function(){_scrollSpyPaused=false;},800);
 }
 function confDot(c){var cls=c>=90?'conf-high':c>=70?'conf-med':'conf-low';return '<span class="conf-dot '+cls+'" title="'+c+'%"></span>';}
 function verdictPill(v){var m={VERIFIED:'verified',CORRECTED:'corrected',FLAGGED:'flagged'};return '<span class="pill '+(m[v]||'verified')+'">'+v+'</span>';}
@@ -2131,6 +2133,45 @@ async function pickInvoice(fileName){
 }
 
 loadInvoiceList();
+
+// ── Scroll-spy: highlight active tab as user scrolls ──────────────────────
+(function(){
+  var container=document.querySelector('.left');
+  if(!container)return;
+  var sectionOrder=['general','lineitems','reconciliation','intel','changelog'];
+  var intersecting=new Set();
+
+  function _applySpy(){
+    if(_scrollSpyPaused)return;
+    for(var i=0;i<sectionOrder.length;i++){
+      if(intersecting.has('panel-'+sectionOrder[i])){
+        document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+        var btn=document.querySelector('.tab[data-section="'+sectionOrder[i]+'"]');
+        if(btn)btn.classList.add('active');
+        return;
+      }
+    }
+  }
+
+  var observer=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting)intersecting.add(e.target.id);
+      else intersecting.delete(e.target.id);
+    });
+    _applySpy();
+  },{
+    root:container,
+    // Top margin accounts for sticky tab-bar height (~41px); bottom margin
+    // means only sections in the top half of the viewport can be "active".
+    rootMargin:'-45px 0px -50% 0px',
+    threshold:0
+  });
+
+  sectionOrder.forEach(function(id){
+    var el=document.getElementById('panel-'+id);
+    if(el)observer.observe(el);
+  });
+})();
 </script>
 </body>
 </html>

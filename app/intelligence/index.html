@@ -1198,10 +1198,20 @@ function renderRecon(data){
   if(!stx){
     html+='<div style="padding:14px 16px;font-size:12px;color:#999;">No simplified tax data — process an invoice first.</div>';
   } else if(!stx.available){
-    html+='<div style="padding:14px 16px;font-size:13px;color:#6b7280;">'
-      +'<strong>Jurisdiction not in rate table:</strong> <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">'+escHtml(stx.key||'(unknown)')+'</code>'
-      +'<div style="margin-top:6px;color:#9ca3af;font-size:12px;">Rate not available — requires Vertex for this jurisdiction.</div>'
-      +'</div>';
+    var _stxStatePart=stx.key?(stx.key.split('|')[0]||''):'?';
+    var _stxNoZip=stx.key&&_stxStatePart==='';
+    var _stxCity=stx.key?(stx.key.split('|')[1]||''):null;
+    if(_stxNoZip){
+      html+='<div style="padding:14px 16px;font-size:13px;color:#92400e;background:#fffbeb;border-left:3px solid #f59e0b;">'
+        +'<strong>&#9888; Manual Action Required &mdash; incomplete delivery address (no ZIP code)</strong>'
+        +'<div style="margin-top:6px;font-size:12px;color:#78350f;">A complete delivery address with ZIP is required to determine tax. Resolved location: <strong>'+escHtml(_stxCity||'(unknown)')+'</strong> (no state or ZIP on record). Supply a full address including ZIP to enable rate lookup.</div>'
+        +'</div>';
+    }else{
+      html+='<div style="padding:14px 16px;font-size:13px;color:#6b7280;">'
+        +'<strong>Jurisdiction not in rate table:</strong> <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">'+escHtml(stx.key||'(unknown)')+'</code>'
+        +'<div style="margin-top:6px;color:#9ca3af;font-size:12px;">Rate not available &mdash; requires Vertex for this jurisdiction.</div>'
+        +'</div>';
+    }
   } else {
     var stxVendor=(claudeResult&&claudeResult.vendorTaxAmount!=null)?claudeResult.vendorTaxAmount
       :(docaiResult&&docaiResult.vendorTaxAmount!=null)?docaiResult.vendorTaxAmount
@@ -1752,7 +1762,17 @@ function openItemDetails(i){
       +'</div>';
   }
   if(!li.jurisdictions){
-    html+='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">RATE NOT AVAILABLE</span><p style="margin-top:12px;">Jurisdiction not in rate table — requires Vertex, or add rates to <code>srv/data/tax-rates.json</code> for this destination.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';
+    var _liStk=(lastResult&&lastResult.simplifiedTax&&lastResult.simplifiedTax.key)||'';
+    var _liNoZip=_liStk&&(_liStk.split('|')[0]==='');
+    if(_liNoZip){
+      html+='<div style="padding:24px;text-align:center;color:#92400e;background:#fffbeb;">'
+        +'<span class="pill mock" style="background:#fef3c7;color:#92400e;">MANUAL ACTION REQUIRED</span>'
+        +'<p style="margin-top:12px;font-weight:600;">Incomplete delivery address &mdash; no ZIP code.</p>'
+        +'<p style="font-size:12px;">A full address with ZIP is needed to determine tax for this line. Resolve the delivery address first, then re-process the invoice.</p>'
+        +'</div>';
+    }else{
+      html+='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">RATE NOT AVAILABLE</span><p style="margin-top:12px;">Jurisdiction not in rate table &mdash; requires Vertex, or add rates to <code>srv/data/tax-rates.json</code> for this destination.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';
+    }
   } else {
     var t=li.jurisdictionTotals||{};
     html+='<div style="padding:8px 14px;background:#eef2ff;border-bottom:1px solid #c7d2fe;display:flex;align-items:center;gap:8px;">'
@@ -1958,6 +1978,7 @@ function renderTaxEngine(data){
   var stxAvail=stxRes&&stxRes.available&&stxRes.totalTax!=null;
   var hasVendorTax=vendorTax!=null;
   var jurStr=[jur.city,jur.state,jur.postalCode].filter(Boolean).join(', ');
+  var _noZip=!jur.postalCode||jur.postalCode.toString().trim()===''; // true = incomplete address (data problem), false = has ZIP but not in table (engine limitation)
 
   // ── Layer toggle ──────────────────────────────────────────────────────────
   var _teLayerDefs=[
@@ -2078,6 +2099,10 @@ function renderTaxEngine(data){
       html+='<td style="padding:8px 12px;text-align:right;font-weight:600;color:#78350f;">'+diffSign+'$'+money(Math.abs(stxCalcDiff))+'</td>';
     }
     html+='<td style="padding:8px 12px;"><span style="font-size:10px;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:8px;">ILLUSTRATIVE &mdash; NOT A VERDICT</span></td>';
+  }else if(_noZip){
+    html+='<td style="padding:8px 12px;text-align:right;color:#b45309;font-style:italic;">no ZIP &mdash; incomplete</td>';
+    if(hasVendorTax)html+='<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>';
+    html+='<td style="padding:8px 12px;"><span style="font-size:10px;font-weight:700;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:8px;">MANUAL ACTION REQUIRED</span></td>';
   }else{
     html+='<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">no rate data</td>';
     if(hasVendorTax)html+='<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>';
@@ -2092,7 +2117,11 @@ function renderTaxEngine(data){
   if(!taxIsExplicit){
     html+='<div style="font-size:12px;color:#6b7280;">&#9888; Vendor tax not separately stated &mdash; charge verdict unavailable. (Vendor tax is never derived from gross &#8722; base.)</div>';
   }else if(!stxAvail){
-    html+='<div style="font-size:12px;color:#6b7280;">&#9888; No engine rate data for this jurisdiction &mdash; charge verdict unavailable.</div>';
+    if(_noZip){
+      html+='<div style="font-size:12px;color:#92400e;">&#9888; <strong>Manual Action Required</strong> &mdash; incomplete delivery address (no ZIP code). A full address with ZIP is needed to determine the tax jurisdiction. Resolved location: <strong>'+escHtml(jurStr||'(unknown)')+'</strong>.</div>';
+    }else{
+      html+='<div style="font-size:12px;color:#6b7280;">&#9888; No engine rate data for this jurisdiction &mdash; charge verdict unavailable. Requires Vertex or add the ZIP to <code>srv/data/tax-rates.json</code>.</div>';
+    }
   }else if(_ftZero){
     html+='<div style="font-size:12px;color:#6b7280;">&#8212; Charge-status not evaluated &mdash; a tax value is zero (spec §14: threshold skipped when either tax = $0). Verdict requires Vertex.</div>';
   }else if(_ftTol){

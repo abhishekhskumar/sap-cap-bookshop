@@ -778,9 +778,50 @@ function _chargeStatusBanner(vendorTax,stx){
   // Shows the extracted vendor-charged tax as a fact — NO verdict derived from SalesTaxZip.
   // Verdict (Under/Over/Accurately Charged) is determined only by the authoritative engine (Vertex).
   if(vendorTax==null){
+    var _ran=[docaiResult,claudeResult,visionResult].filter(Boolean);
+    var _allAgreeNoTax=_ran.length>0&&_ran.every(function(r){return !r.vendorTaxAmount||+r.vendorTaxAmount===0;});
+    var _anyHasTax=_ran.some(function(r){return r.vendorTaxAmount!=null&&+r.vendorTaxAmount!==0;});
+    if(_allAgreeNoTax){
+      var _ntl=[];
+      if(docaiResult&&(!docaiResult.vendorTaxAmount||+docaiResult.vendorTaxAmount===0))_ntl.push('Doc AI');
+      if(claudeResult&&(!claudeResult.vendorTaxAmount||+claudeResult.vendorTaxAmount===0))_ntl.push('Claude');
+      if(visionResult&&(!visionResult.vendorTaxAmount||+visionResult.vendorTaxAmount===0))_ntl.push('Vision');
+      var _corrobLine;
+      if(_ntl.length===1){
+        _corrobLine=_ntl[0]+' found no separately-stated tax on this invoice.';
+      }else if(_ntl.length===2){
+        _corrobLine='&#10003; '+_ntl[0]+' and '+_ntl[1]+' agree &mdash; no separately-stated tax.';
+      }else{
+        _corrobLine='&#10003; All three layers agree &mdash; Doc AI &nbsp;&middot;&nbsp; Claude &nbsp;&middot;&nbsp; Vision';
+      }
+      return '<div style="margin-bottom:14px;padding:12px 16px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;">'
+        +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
+        +'<span style="font-size:13px;font-weight:700;color:#14532d;">&#10003; No separately-stated tax on this invoice</span>'
+        +'<span style="font-size:10px;font-weight:700;background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:8px;text-transform:uppercase;letter-spacing:.4px;">Finding</span>'
+        +'</div>'
+        +'<div style="font-size:12px;color:#166534;margin-bottom:3px;">'+_corrobLine+'</div>'
+        +'<div style="font-size:11px;color:#4b7c60;">The vendor charged no separately-stated tax on this invoice; use tax may apply. Authoritative verdict requires Vertex.</div>'
+        +'</div>';
+    }
+    if(_anyHasTax){
+      var _lv=function(r,label){
+        if(!r)return label+': <em style="color:#9ca3af;">not run</em>';
+        var v=r.vendorTaxAmount;
+        return label+': '+(v!=null&&+v!==0?'<strong>$'+money(+v)+'</strong>':'<em style="color:#9ca3af;">none</em>');
+      };
+      return '<div style="margin-bottom:14px;padding:12px 16px;background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;">'
+        +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
+        +'<span style="font-size:13px;font-weight:700;color:#92400e;">&#9888; Layers disagree on vendor tax &mdash; review recommended</span>'
+        +'</div>'
+        +'<div style="font-size:12px;color:#78350f;margin-bottom:3px;">'
+        +_lv(docaiResult,'Doc AI')+'&nbsp;&middot;&nbsp;'+_lv(claudeResult,'Claude')+'&nbsp;&middot;&nbsp;'+_lv(visionResult,'Vision')
+        +'</div>'
+        +'<div style="font-size:11px;color:#92400e;">Manual review recommended before determining tax charge status. Authoritative verdict requires Vertex.</div>'
+        +'</div>';
+    }
+    // No layers ran yet — neutral placeholder (renderGeneral gates on docaiRan||claudeRan||visionRan)
     return '<div style="margin-bottom:14px;padding:12px 16px;background:#f3f4f6;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;color:#6b7280;">'
-      +'<span style="font-weight:700;">&#9672; Vendor Tax Not Extracted</span> &mdash; Tax amount not found on this invoice.'
-      +'<div style="font-size:11px;margin-top:4px;color:#9ca3af;">Tax verdict (Under/Over/Accurately Charged) requires both the extracted vendor tax and an authoritative engine. See Tax Engine panel.</div>'
+      +'<span style="font-weight:700;">&#9672; No tax data yet</span> &mdash; run at least one extraction layer.'
       +'</div>';
   }
   var html='<div style="margin-bottom:14px;padding:12px 16px;background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:8px;">';

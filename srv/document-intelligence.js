@@ -828,6 +828,34 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     LOG.info(`Vision audit complete in ${Date.now() - startTime}ms — ${fields.length} fields, ${lineItems.length} lines${lineItemTally ? ', tally: '+lineItemTally.agreeCount+'/'+lineItemTally.totalLines+' agree' : ''}`);
     LOG.info('VISION_HANDLER_RETURN stats=%j fields=%d lineItems=%d', { total: fields.length, verified, corrected, flagged }, fields.length, lineItems.length);
 
+    // ── Part A: pass through Vision's own lineItemCorrections (e.g. SUPPRESSED_BREAKUP from backup receipts).
+    // ── Part B: reconstruct CORRECTED_AMOUNT entries by comparing Vision keep-line amounts against the
+    //    original Doc AI amounts. Vision's prompt marks corrected lines VERIFIED (no prior to compare),
+    //    so detection requires amount comparison, not lineVerdict filter.
+    //    Baseline priority: docAILineItems (original Doc AI amounts, carried in Claude's result)
+    //    → keepLines (original amounts, from a DocAI-only prevResult) → lineItems (last resort).
+    const _docaiBaseLines = prevResult
+      ? (prevResult.docAILineItems || prevResult.keepLines || prevResult.lineItems || [])
+      : [];
+    const _visionAmtCorrections = [];
+    if (mode !== 'construction' && _docaiBaseLines.length > 0) {
+      visionKeepLines.forEach(function(vli, idx) {
+        const dli = _docaiBaseLines[idx];
+        if (!dli) return;
+        const vAmt = parseFloat(vli.amount) || 0;
+        const dAmt = parseFloat(dli.amount) || 0;
+        if (Math.abs(vAmt - dAmt) < 0.005) return;
+        // Description guard: first significant word (≥3 chars) must match; skips misaligned pairs.
+        const _vW = (vli.description || '').trim().toLowerCase().split(/\s+/).filter(function(w){ return w.length >= 3; })[0] || '';
+        const _dW = (dli.description || '').trim().toLowerCase().split(/\s+/).filter(function(w){ return w.length >= 3; })[0] || '';
+        if (_vW && _dW && _vW !== _dW) return;
+        const _entry = { action: 'CORRECTED_AMOUNT', description: vli.description || dli.description || '', oldValue: String(dAmt), newValue: String(vAmt) };
+        if (vli.lineReason) _entry.reason = vli.lineReason;
+        _visionAmtCorrections.push(_entry);
+      });
+    }
+    LOG.info('Vision lineItemCorrections: passthrough=%d reconstructed=%d', (intelligence.lineItemCorrections || []).length, _visionAmtCorrections.length);
+
     return JSON.stringify({
       documentId,
       schemaType: mode,
@@ -835,7 +863,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       fields,
       lineItems,
       suppressedLines: mergedSuppressedLines,
-      lineItemCorrections: [],
+      lineItemCorrections: [...(intelligence.lineItemCorrections || []), ..._visionAmtCorrections],
       consistencyChecks: intelligence.consistencyChecks || [],
       lineItemTally,
       fieldComparison: this._buildFieldComparison({ invoiceMode: mode, fields: claudeFields || [], visionFields: fields, docaiLines: docaiLines || [], claudeLines: claudeLines || [], visionLines: lineItems, claudeRan: Array.isArray(claudeFields) && claudeFields.length > 0, visionRan: true }),

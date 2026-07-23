@@ -2262,7 +2262,8 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
   }
 
   _resolveShipTo(getVal, invoiceMode) {
-    const g = k => { const v = getVal(k); return (v == null || v === '') ? null : v; };
+    const _isSentinel = v => typeof v === 'string' && v.trimStart().toLowerCase().startsWith('manual action required');
+    const g = k => { const v = getVal(k); return (v == null || v === '' || _isSentinel(v)) ? null : v; };
     const blocks = {
       project:   { city: g('projectAddressCity'),   postal: g('projectAddressPostalCode'),  state: g('projectAddressState'),   addr: g('projectAddress') },
       contract:  { city: g('contractDetailsCity'),  postal: g('contractDetailsPostalcode'), state: null,                       addr: g('contractDetails') },

@@ -774,6 +774,8 @@ function _buildTriageBanner(triageMap, allNames, d_run, c_run, v_run){
   return rollHtml+recHtml;
 }
 
+function _isNoAddressSentinel(v){ return typeof v==='string'&&v.trimStart().toLowerCase().indexOf('manual action required')===0; }
+
 function _chargeStatusBanner(vendorTax,stx){
   // Shows the extracted vendor-charged tax as a fact — NO verdict derived from SalesTaxZip.
   // Verdict (Under/Over/Accurately Charged) is determined only by the authoritative engine (Vertex).
@@ -1240,12 +1242,20 @@ function renderRecon(data){
     html+='<div style="padding:14px 16px;font-size:12px;color:#999;">No simplified tax data — process an invoice first.</div>';
   } else if(!stx.available){
     var _stxStatePart=stx.key?(stx.key.split('|')[0]||''):'?';
-    var _stxNoZip=stx.key&&_stxStatePart==='';
-    var _stxCity=stx.key?(stx.key.split('|')[1]||''):null;
+    var _stxKeyHasSentinel=_isNoAddressSentinel(stx.key);
+    var _stxNoZip=stx.key&&(_stxStatePart===''||_stxKeyHasSentinel);
+    var _stxCityRaw=stx.key?(stx.key.split('|')[1]||''):null;
+    var _stxCity=_stxKeyHasSentinel?null:(_stxCityRaw||null);
     if(_stxNoZip){
+      var _stxHeadline=_stxKeyHasSentinel
+        ?'&#9888; Manual Action Required &mdash; no valid delivery address found'
+        :'&#9888; Manual Action Required &mdash; incomplete delivery address (no ZIP code)';
+      var _stxDetail=_stxKeyHasSentinel
+        ?'<div style="margin-top:6px;font-size:12px;color:#78350f;">No valid delivery address was found on this invoice (only vendor and/or bill-to address present). Enter the correct ZIP and state to calculate tax.</div>'
+        :'<div style="margin-top:6px;font-size:12px;color:#78350f;">A complete delivery address with ZIP is required to determine tax. Resolved location: <strong>'+escHtml(_stxCity||'(unknown)')+'</strong> (no state or ZIP on record).</div>';
       html+='<div style="padding:14px 16px;font-size:13px;color:#92400e;background:#fffbeb;border-left:3px solid #f59e0b;">'
-        +'<strong>&#9888; Manual Action Required &mdash; incomplete delivery address (no ZIP code)</strong>'
-        +'<div style="margin-top:6px;font-size:12px;color:#78350f;">A complete delivery address with ZIP is required to determine tax. Resolved location: <strong>'+escHtml(_stxCity||'(unknown)')+'</strong> (no state or ZIP on record).</div>'
+        +'<strong>'+_stxHeadline+'</strong>'
+        +_stxDetail
         +'<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
         +'<input id="reconManualZip" type="text" placeholder="ZIP (5 digits)" maxlength="5" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;">'
         +'<input id="reconManualState" type="text" placeholder="State (2 letters)" maxlength="2" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;text-transform:uppercase;">'
@@ -2026,8 +2036,12 @@ function renderTaxEngine(data){
   var stxRes=src.taxEngineResults&&src.taxEngineResults.salestaxzip;
   var stxAvail=stxRes&&stxRes.available&&stxRes.totalTax!=null;
   var hasVendorTax=vendorTax!=null;
-  var jurStr=[jur.city,jur.state,jur.postalCode].filter(Boolean).join(', ');
-  var _noZip=!jur.postalCode||jur.postalCode.toString().trim()===''; // true = incomplete address (data problem), false = has ZIP but not in table (engine limitation)
+  var _jurCityClean=_isNoAddressSentinel(jur.city)?null:(jur.city||null);
+  var _jurStateClean=_isNoAddressSentinel(jur.state)?null:(jur.state||null);
+  var _jurPostalClean=_isNoAddressSentinel(jur.postalCode)?null:(jur.postalCode?jur.postalCode.toString().trim()||null:null);
+  var jurStr=[_jurCityClean,_jurStateClean,_jurPostalClean].filter(Boolean).join(', ');
+  var _noAddrSentinel=_isNoAddressSentinel(jur.city)||_isNoAddressSentinel(jur.postalCode);
+  var _noZip=!_jurPostalClean||_noAddrSentinel; // true = no ZIP or no-address sentinel; false = has ZIP but not in rate table (engine limitation)
 
   // ── Layer toggle ──────────────────────────────────────────────────────────
   var _teLayerDefs=[
@@ -2160,10 +2174,13 @@ function renderTaxEngine(data){
   html+='</tr>';
   html+='</tbody></table>';
 
-  // ── Manual ZIP override — gated only on _noZip, independent of vendor-tax status ─
+  // ── Manual ZIP override — gated on _noZip (no ZIP, or no-address sentinel), independent of vendor-tax status ─
   if(_noZip){
+    var _teFormMsg=_noAddrSentinel
+      ?'&#9888; <strong>Manual Action Required</strong> &mdash; no valid delivery address found on this invoice (only vendor/bill-to address present). Enter the correct ZIP and state to calculate tax.'
+      :'&#9888; <strong>Manual Action Required</strong> &mdash; incomplete delivery address (no ZIP code). Resolved location: <strong>'+escHtml(jurStr||'(unknown)')+'</strong>. Enter the correct ZIP and state to calculate tax.';
     html+='<div style="padding:10px 14px;background:#fffbeb;border-top:1px solid #fcd34d;">'
-      +'<div style="font-size:12px;color:#92400e;margin-bottom:6px;">&#9888; <strong>Manual Action Required</strong> &mdash; incomplete delivery address (no ZIP code). Resolved location: <strong>'+escHtml(jurStr||'(unknown)')+'</strong>. Enter the correct ZIP and state to calculate tax.</div>'
+      +'<div style="font-size:12px;color:#92400e;margin-bottom:6px;">'+_teFormMsg+'</div>'
       +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
       +'<input id="teManualZip" type="text" placeholder="ZIP (5 digits)" maxlength="5" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;">'
       +'<input id="teManualState" type="text" placeholder="State (2 letters)" maxlength="2" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;text-transform:uppercase;">'

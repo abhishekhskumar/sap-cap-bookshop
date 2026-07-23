@@ -237,6 +237,7 @@
       <div class="panel" id="panel-general">
         <div class="sec-title">GENERAL INFORMATION</div>
         <div id="chargeStatusBanner"></div>
+        <div id="manualAddressEntry"></div>
         <div class="card" id="generalInfoCard" style="display:none;">
           <div class="card-title">General Information <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
           <div id="genInfoTable"></div>
@@ -843,6 +844,38 @@ function renderGeneral(data){
     if(!docaiRan&&!claudeRan&&!visionRan){csb.innerHTML='';}
     else{var _vt=data.vendorTaxAmount!=null?parseFloat(data.vendorTaxAmount):null;csb.innerHTML=_chargeStatusBanner(_vt,data.taxEngineResults&&data.taxEngineResults.salestaxzip);}
   }
+  // ── Canonical manual-address entry form ────────────────────────
+  var giMae=document.getElementById('manualAddressEntry');
+  if(giMae){
+    if(!docaiRan&&!claudeRan&&!visionRan){
+      giMae.innerHTML='';
+    }else{
+      var _giJur=(data.taxPayload&&data.taxPayload.jurisdiction)||{};
+      var _giPostalClean=_isNoAddressSentinel(_giJur.postalCode)?null:(_giJur.postalCode?String(_giJur.postalCode).trim()||null:null);
+      var _giSentinel=_isNoAddressSentinel(_giJur.city)||_isNoAddressSentinel(_giJur.postalCode);
+      var _giNoZip=!_giPostalClean||_giSentinel;
+      if(_giNoZip){
+        var _giCityClean=_giSentinel?null:(_giJur.city||null);
+        var _giStateClean=_isNoAddressSentinel(_giJur.state)?null:(_giJur.state||null);
+        var _giLocStr=[_giCityClean,_giStateClean].filter(Boolean).join(', ');
+        var _giDetail=_giSentinel
+          ?'No valid delivery address found on this invoice (only vendor/bill-to address present). Enter the correct ZIP and state to calculate tax.'
+          :'Resolved location: <strong>'+escHtml(_giLocStr||'(unknown)')+'</strong> &mdash; no ZIP code on record. Enter the correct ZIP and state to calculate tax.';
+        giMae.innerHTML='<div style="margin-bottom:14px;padding:12px 16px;background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;">'
+          +'<div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:5px;">&#9888; Manual Action Required &mdash; Delivery Address</div>'
+          +'<div style="font-size:12px;color:#78350f;margin-bottom:8px;">'+_giDetail+'</div>'
+          +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+          +'<input id="giManualZip" type="text" placeholder="ZIP (5 digits)" maxlength="5" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;">'
+          +'<input id="giManualState" type="text" placeholder="State (2 letters)" maxlength="2" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;text-transform:uppercase;">'
+          +'<button id="giManualZipBtn" onclick="giManualZipSubmit()" style="padding:4px 12px;background:#92400e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;">Calculate with this address</button>'
+          +'<span id="giManualZipError" style="color:#991b1b;font-size:11px;"></span>'
+          +'</div>'
+          +'</div>';
+      }else{
+        giMae.innerHTML='';
+      }
+    }
+  }
   // ── General Information (asset comparison) ─────────────────────
   var gi=data.generalInfo||[];
   var giCard=document.getElementById('generalInfoCard');
@@ -1247,20 +1280,11 @@ function renderRecon(data){
     var _stxCityRaw=stx.key?(stx.key.split('|')[1]||''):null;
     var _stxCity=_stxKeyHasSentinel?null:(_stxCityRaw||null);
     if(_stxNoZip){
-      var _stxHeadline=_stxKeyHasSentinel
-        ?'&#9888; Manual Action Required &mdash; no valid delivery address found'
-        :'&#9888; Manual Action Required &mdash; incomplete delivery address (no ZIP code)';
-      var _stxDetail=_stxKeyHasSentinel
-        ?'<div style="margin-top:6px;font-size:12px;color:#78350f;">No valid delivery address was found on this invoice (only vendor and/or bill-to address present). Enter the correct ZIP and state to calculate tax.</div>'
-        :'<div style="margin-top:6px;font-size:12px;color:#78350f;">A complete delivery address with ZIP is required to determine tax. Resolved location: <strong>'+escHtml(_stxCity||'(unknown)')+'</strong> (no state or ZIP on record).</div>';
+      var _stxRefLabel=_stxKeyHasSentinel?'No valid delivery address found':'Incomplete delivery address (no ZIP)';
       html+='<div style="padding:14px 16px;font-size:13px;color:#92400e;background:#fffbeb;border-left:3px solid #f59e0b;">'
-        +'<strong>'+_stxHeadline+'</strong>'
-        +_stxDetail
-        +'<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
-        +'<input id="reconManualZip" type="text" placeholder="ZIP (5 digits)" maxlength="5" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;">'
-        +'<input id="reconManualState" type="text" placeholder="State (2 letters)" maxlength="2" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;text-transform:uppercase;">'
-        +'<button id="reconManualZipBtn" onclick="reconManualZipSubmit()" style="padding:4px 12px;background:#92400e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;">Calculate with this address</button>'
-        +'<span id="reconManualZipError" style="color:#991b1b;font-size:11px;"></span>'
+        +'<strong>&#9888; Manual Action Required &mdash; '+_stxRefLabel+'</strong>'
+        +'<div style="margin-top:6px;font-size:12px;color:#78350f;">'
+        +'<a href="javascript:void(0)" onclick="document.getElementById(\'manualAddressEntry\').scrollIntoView({behavior:\'smooth\'})" style="color:#78350f;font-weight:700;text-decoration:underline;">Complete the address in General Information &#8593;</a> to calculate tax.'
         +'</div>'
         +'</div>';
     }else{
@@ -2174,19 +2198,13 @@ function renderTaxEngine(data){
   html+='</tr>';
   html+='</tbody></table>';
 
-  // ── Manual ZIP override — gated on _noZip (no ZIP, or no-address sentinel), independent of vendor-tax status ─
+  // ── Manual address reference — links to canonical form in General Information ─
   if(_noZip){
-    var _teFormMsg=_noAddrSentinel
-      ?'&#9888; <strong>Manual Action Required</strong> &mdash; no valid delivery address found on this invoice (only vendor/bill-to address present). Enter the correct ZIP and state to calculate tax.'
-      :'&#9888; <strong>Manual Action Required</strong> &mdash; incomplete delivery address (no ZIP code). Resolved location: <strong>'+escHtml(jurStr||'(unknown)')+'</strong>. Enter the correct ZIP and state to calculate tax.';
-    html+='<div style="padding:10px 14px;background:#fffbeb;border-top:1px solid #fcd34d;">'
-      +'<div style="font-size:12px;color:#92400e;margin-bottom:6px;">'+_teFormMsg+'</div>'
-      +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
-      +'<input id="teManualZip" type="text" placeholder="ZIP (5 digits)" maxlength="5" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;">'
-      +'<input id="teManualState" type="text" placeholder="State (2 letters)" maxlength="2" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;text-transform:uppercase;">'
-      +'<button id="teManualZipBtn" onclick="teManualZipSubmit()" style="padding:4px 12px;background:#92400e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;">Calculate with this address</button>'
-      +'<span id="teManualZipError" style="color:#991b1b;font-size:11px;"></span>'
-      +'</div></div>';
+    var _teRefLabel=_noAddrSentinel?'No valid delivery address found':'Incomplete delivery address (no ZIP)';
+    html+='<div style="padding:10px 14px;background:#fffbeb;border-top:1px solid #fcd34d;font-size:12px;color:#92400e;">'
+      +'&#9888; '+_teRefLabel+' &mdash; '
+      +'<a href="javascript:void(0)" onclick="document.getElementById(\'manualAddressEntry\').scrollIntoView({behavior:\'smooth\'})" style="color:#92400e;font-weight:700;text-decoration:underline;">Complete the address in General Information &#8593;</a>'
+      +'</div>';
   }
 
   // ── Folded flow-through verdict (unique: directional verdict + gross math) ─
@@ -2475,7 +2493,8 @@ async function _manualZipSubmit(zipId,stateId,btnId,errId){
         _fromManualOverride:true
       };
     }
-    // Re-render both panels — Tax Engine (calls teSelect at end) and Reconciliation
+    // Re-render all three panels so the canonical GI form clears and references resolve
+    renderGeneral(lastResult);
     renderTaxEngine(lastResult);
     renderRecon(lastResult);
   }catch(e){
@@ -2483,9 +2502,8 @@ async function _manualZipSubmit(zipId,stateId,btnId,errId){
     if(btn){btn.disabled=false;btn.textContent='Calculate with this address';}
   }
 }
-// Thin wrappers — each button passes its own form's element IDs
-function teManualZipSubmit(){ _manualZipSubmit('teManualZip','teManualState','teManualZipBtn','teManualZipError'); }
-function reconManualZipSubmit(){ _manualZipSubmit('reconManualZip','reconManualState','reconManualZipBtn','reconManualZipError'); }
+// Canonical form lives in General Information; Tax Engine + Recon show scroll references only
+function giManualZipSubmit(){ _manualZipSubmit('giManualZip','giManualState','giManualZipBtn','giManualZipError'); }
 
 function _summaryRow(icon, iconColor, bg, borderColor, innerHtml) {
   return '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:5px;padding:7px 10px;background:'+bg+';border:1px solid '+borderColor+';border-radius:6px;">'

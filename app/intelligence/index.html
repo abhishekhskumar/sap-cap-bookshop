@@ -1061,7 +1061,20 @@ function renderRecon(data){
     {label:'Invoice Tax Rate',fn:function(r){var rate=_taxRate(r);return rate!=null?rate+'%':'<span style="color:#999;font-style:italic;">not derived</span>';}},
     {label:'Invoice Tax Amount',fn:function(r){return r.vendorTaxAmount!=null?'$'+money(r.vendorTaxAmount):'<span style="color:#999;font-style:italic;">not on invoice</span>';}},
     {label:'Freight pool',fn:function(r){return r.invoiceFreightTotal!=null&&r.invoiceFreightTotal>0?'$'+money(r.invoiceFreightTotal):'<span style="color:#bbb;">—</span>';}},
-    {label:'Taxable base (net + freight)',fn:function(r){return r.invoiceNetTotal!=null?'<strong>$'+money(r.invoiceNetTotal)+'</strong>':'<span style="color:#bbb;">—</span>';}},
+    {label:'Taxable base (net + freight)',fn:function(r){
+      if(r.invoiceNetTotal==null)return '<span style="color:#bbb;">—</span>';
+      var _v=parseFloat(r.invoiceNetTotal);
+      var _out='<strong>$'+money(_v)+'</strong>';
+      if(r!==docaiResult&&docaiResult&&docaiResult.invoiceNetTotal!=null){
+        var _ref=parseFloat(docaiResult.invoiceNetTotal);
+        var _d=_v-_ref;
+        if(Math.abs(_d)>=0.05){
+          var _dc=_d<0?'#dc2626':'#16a34a';
+          _out+='<div style="font-size:10px;color:'+_dc+';margin-top:2px;">'+(_d<0?'−':'+')+'$'+money(Math.abs(_d))+' vs Doc AI</div>';
+        }
+      }
+      return _out;
+    }},
     {label:'Invoice total',fn:function(r){var v=r.invoiceGrossTotal!=null?r.invoiceGrossTotal:r.invoiceTotalAmount;return v!=null?'<strong>$'+money(v)+'</strong>':'<span style="color:#bbb;">—</span>';}},
     {label:'Reconciliation',fn:function(r){var rc=r.totalAmountReconciliation;if(!rc||rc.rawTotal==null)return '<span style="color:#999;font-size:11px;">—</span>';return rc.match?'<span style="color:#166534;font-weight:700;">&#10003; MATCH</span><div style="font-size:10px;color:#555;margin-top:1px;">$'+money(rc.rawTotal)+'</div>':'<span style="color:#991b1b;font-weight:700;">&#10007; MISMATCH</span><div style="font-size:10px;color:#999;margin-top:1px;">diff $'+money(Math.abs(rc.difference))+'</div>';}},
     {label:'Vertex Tax Rate',fn:function(r){return naV;}},
@@ -1078,6 +1091,102 @@ function renderRecon(data){
     html+='</tr>';
   });
   html+='</tbody></table>';
+
+  // ── Base-Difference Explanation ───────────────────────────────────────────
+  (function(){
+    if(!docaiRan||!docaiResult||docaiResult.invoiceNetTotal==null)return;
+    var _dBase=parseFloat(docaiResult.invoiceNetTotal);
+    var _pairs=[];
+    if(claudeRan&&claudeResult&&claudeResult.invoiceNetTotal!=null){
+      var _cBase=parseFloat(claudeResult.invoiceNetTotal);
+      if(Math.abs(_dBase-_cBase)>=0.05)_pairs.push({label:'Claude',base:_cBase,result:claudeResult,color:'#3452d1'});
+    }
+    if(visionRan&&visionResult&&visionResult.invoiceNetTotal!=null){
+      var _vBase=parseFloat(visionResult.invoiceNetTotal);
+      if(Math.abs(_dBase-_vBase)>=0.05)_pairs.push({label:'Vision',base:_vBase,result:visionResult,color:'#9d174d'});
+    }
+    if(!_pairs.length)return;
+    html+='<div style="margin-top:12px;border:1.5px solid #e2e8f0;border-radius:8px;overflow:hidden;">';
+    html+='<div style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">';
+    html+='<span style="font-weight:700;font-size:13px;color:#334155;">&#9679; Why do the taxable bases differ?</span>';
+    html+='<span style="font-size:11px;color:#64748b;">Suppression records &amp; amount corrections — no fragile line matching</span>';
+    html+='</div>';
+    _pairs.forEach(function(pair){
+      var _delta=_dBase-pair.base;
+      var _suppLines=(pair.result.suppressedLines||[]).filter(function(l){
+        if(l.isFreight||l.isTax)return false;
+        var sb=l.suppressedBy;
+        if(typeof sb==='string')return sb!=='docai';
+        if(Array.isArray(sb))return sb.indexOf('docai')<0;
+        return false;
+      });
+      var _suppContrib=_suppLines.reduce(function(s,l){return s+(parseFloat(l.amount)||0);},0);
+      var _corrections=(pair.result.lineItemCorrections||[]);
+      var _corrNet=_corrections.reduce(function(s,c){return s+((parseFloat(c.newValue)||0)-(parseFloat(c.oldValue)||0));},0);
+      var _explained=_suppContrib-_corrNet;
+      var _residual=_delta-_explained;
+      var _full=Math.abs(_residual)<=0.05;
+      html+='<div style="padding:12px 14px 10px;border-bottom:1px solid #f1f5f9;">';
+      html+='<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;flex-wrap:wrap;">';
+      html+='<span style="font-size:13px;font-weight:700;color:#1e293b;">Doc AI <span style="font-family:Consolas,monospace;color:#107e3e;">$'+money(_dBase)+'</span> vs '+escHtml(pair.label)+' <span style="font-family:Consolas,monospace;color:'+pair.color+';">$'+money(pair.base)+'</span></span>';
+      if(Math.abs(_delta)>=0.005){
+        var _dc2=_delta>0?'#dc2626':'#16a34a';
+        html+='<span style="font-size:12px;font-weight:700;color:'+_dc2+';">('+(Math.abs(_delta)>=0.005?(_delta>0?'−':'+'):'')+'$'+money(Math.abs(_delta))+' in '+escHtml(pair.label)+')</span>';
+      }
+      html+='</div>';
+      if(pair.label==='Vision'&&visionResult&&(visionResult.invoiceFreightTotal==null||visionResult.invoiceFreightTotal===0)){
+        html+='<div style="margin-bottom:8px;padding:5px 9px;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;font-size:11px;color:#78350f;">&#9432; Vision result-level freight total is 0 (known issue) — freight-pool delta unreliable; per-line freight values are correct.</div>';
+      }
+      if(_suppLines.length===0&&_corrections.length===0){
+        html+='<div style="font-size:12px;color:#64748b;font-style:italic;padding:2px 0;">No suppression or correction records found. Delta may be line-level extraction differences (not reliably matchable).</div>';
+      } else {
+        if(_suppLines.length>0){
+          html+='<div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">Suppression</div>';
+          html+='<div style="border:1px solid #e2e8f0;border-radius:4px;overflow:hidden;margin-bottom:8px;">';
+          _suppLines.forEach(function(l,i){
+            var _sb=l.suppressedBy;
+            var _sbStr=Array.isArray(_sb)?_sb[_sb.length-1]:(typeof _sb==='string'?_sb:'?');
+            var _sbLabel=_sbStr==='claude'?'Claude':_sbStr==='vision'?'Vision':escHtml(_sbStr);
+            var _rBg=i%2===1?'background:#fafafa;':'';
+            html+='<div style="display:flex;align-items:baseline;gap:8px;padding:5px 9px;font-size:12px;border-bottom:1px solid #f1f5f9;'+_rBg+'">';
+            html+='<span style="color:#dc2626;font-family:Consolas,monospace;font-weight:700;min-width:72px;">−$'+money(parseFloat(l.amount)||0)+'</span>';
+            html+='<span style="color:#374151;flex:1;">'+escHtml(l.description||'(no description)')+'</span>';
+            html+='<span style="font-size:10px;background:#fee2e2;color:#991b1b;padding:1px 7px;border-radius:8px;white-space:nowrap;">'+_sbLabel+' suppressed</span>';
+            if(l.suppressReason||l.lineReason)html+='<span style="font-size:11px;color:#6b7280;font-style:italic;margin-left:4px;">'+escHtml(l.suppressReason||l.lineReason||'')+'</span>';
+            html+='</div>';
+          });
+          html+='</div>';
+        }
+        if(_corrections.length>0){
+          html+='<div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:3px;">Amount Corrections</div>';
+          html+='<div style="border:1px solid #e2e8f0;border-radius:4px;overflow:hidden;margin-bottom:8px;">';
+          _corrections.forEach(function(c,i){
+            var _oV=parseFloat(c.oldValue)||0,_nV=parseFloat(c.newValue)||0,_diff=_nV-_oV;
+            var _cColor=_diff>0?'#16a34a':'#dc2626';
+            var _cSign=_diff>=0?'+':'';
+            var _rBg=i%2===1?'background:#fafafa;':'';
+            html+='<div style="display:flex;align-items:baseline;gap:8px;padding:5px 9px;font-size:12px;border-bottom:1px solid #f1f5f9;'+_rBg+'">';
+            html+='<span style="color:'+_cColor+';font-family:Consolas,monospace;font-weight:700;min-width:72px;">'+_cSign+'$'+money(Math.abs(_diff))+'</span>';
+            html+='<span style="color:#374151;flex:1;">'+escHtml(c.description||'(no description)')+': <span style="font-family:Consolas,monospace;">$'+money(_oV)+' → $'+money(_nV)+'</span></span>';
+            if(c.reason)html+='<span style="font-size:11px;color:#6b7280;font-style:italic;margin-left:4px;">'+escHtml(c.reason)+'</span>';
+            html+='</div>';
+          });
+          html+='</div>';
+        }
+      }
+      html+='<div style="padding:7px 10px;border-radius:5px;font-size:12px;';
+      if(_full){
+        html+='background:#f0fdf4;border:1px solid #bbf7d0;color:#14532d;">&#10003; <strong>Difference fully explained:</strong> $'+money(Math.abs(_explained))+' of $'+money(Math.abs(_delta))+' accounted for by suppression/corrections.';
+      } else if(_suppLines.length===0&&_corrections.length===0){
+        html+='background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;">&#9650; Residual $'+money(Math.abs(_delta))+'&thinsp;&mdash; no records; may be line-level extraction differences.';
+      } else {
+        html+='background:#fffbeb;border:1px solid #fde68a;color:#78350f;">&#9651; <strong>Partially explained:</strong> $'+money(Math.abs(_explained))+' of $'+money(Math.abs(_delta))+' accounted for; residual $'+money(Math.abs(_residual))+' may be line-level extraction differences (not reliably matchable).';
+      }
+      html+='</div>';
+      html+='</div>';
+    });
+    html+='</div>';
+  })();
 
   // ── Simplified Tax Calculation (illustrative) ──────────────────────────────
   var stx=(claudeResult&&claudeResult.simplifiedTax)||(docaiResult&&docaiResult.simplifiedTax)||(visionResult&&visionResult.simplifiedTax)||null;

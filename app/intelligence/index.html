@@ -827,12 +827,49 @@ function _chargeStatusBanner(vendorTax,stx){
       +'<span style="font-weight:700;">&#9672; No tax data yet</span> &mdash; run at least one extraction layer.'
       +'</div>';
   }
+  // ─── Cross-layer tax agreement (extends R7 source-pick with validation) ───
+  var TAX_TOLERANCE=0.01;
+  var _txRan=[docaiResult,claudeResult,visionResult].filter(Boolean);
+  var _txAllAgree=_txRan.length>0&&_txRan.every(function(r){
+    return r.vendorTaxAmount!=null&&+r.vendorTaxAmount!==0&&Math.abs(+r.vendorTaxAmount-vendorTax)<=TAX_TOLERANCE;
+  });
+  var _taxCorrobLine='';
+  if(_txRan.length>0){
+    if(_txAllAgree){
+      // Name only the layers that ran — same honesty rule as the no-tax finding
+      var _txNames=[];
+      if(docaiResult)_txNames.push('Doc AI');
+      if(claudeResult)_txNames.push('Claude');
+      if(visionResult)_txNames.push('Vision');
+      var _txAgreeMsg;
+      if(_txNames.length===1){
+        _txAgreeMsg=_txNames[0]+' reports vendor tax <strong>$'+money(vendorTax)+'</strong>.';
+      }else if(_txNames.length===2){
+        _txAgreeMsg='&#10003; '+_txNames[0]+' and '+_txNames[1]+' agree &mdash; vendor tax <strong>$'+money(vendorTax)+'</strong>.';
+      }else{
+        _txAgreeMsg='&#10003; All three layers agree &mdash; Doc AI &nbsp;&middot;&nbsp; Claude &nbsp;&middot;&nbsp; Vision &mdash; vendor tax <strong>$'+money(vendorTax)+'</strong>.';
+      }
+      _taxCorrobLine='<div style="font-size:12px;color:#0369a1;margin-bottom:4px;">'+_txAgreeMsg+'</div>';
+    }else{
+      // Layers ran but disagree — show all three (including not-run) so the picture is complete
+      var _txLv=function(r,label){
+        if(!r)return label+': <em style="color:#9ca3af;">not run</em>';
+        var v=r.vendorTaxAmount;
+        return label+': '+(v!=null&&+v!==0?'<strong>$'+money(+v)+'</strong>':'<em style="color:#9ca3af;">none</em>');
+      };
+      _taxCorrobLine='<div style="font-size:12px;color:#92400e;margin-bottom:4px;">'
+        +'&#9888; Layers disagree on vendor tax &mdash; '
+        +_txLv(docaiResult,'Doc AI')+'&nbsp;&middot;&nbsp;'+_txLv(claudeResult,'Claude')+'&nbsp;&middot;&nbsp;'+_txLv(visionResult,'Vision')
+        +' &mdash; review recommended.</div>';
+    }
+  }
   var html='<div style="margin-bottom:14px;padding:12px 16px;background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:8px;">';
   html+='<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:5px;">';
   html+='<span style="font-size:13px;font-weight:700;color:#0c4a6e;">Vendor-Charged Tax</span>';
   html+='<span style="font-size:20px;font-weight:700;color:#0369a1;">$'+money(vendorTax)+'</span>';
   html+='<span style="font-size:10px;font-weight:700;background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:8px;text-transform:uppercase;letter-spacing:.4px;">Extracted &mdash; intelligence layer</span>';
   html+='</div>';
+  html+=_taxCorrobLine;
   html+='<div style="font-size:11px;color:#6b7280;">Tax verdict (Under/Overcharged) is determined by the authoritative engine. Vertex in production &mdash; see Tax Engine panel for engine-by-engine comparison.</div>';
   html+='</div>';
   return html;

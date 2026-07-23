@@ -798,7 +798,7 @@ function _chargeStatusBanner(vendorTax,stx){
       }else{
         _corrobLine='&#10003; All three layers agree &mdash; Doc AI &nbsp;&middot;&nbsp; Claude &nbsp;&middot;&nbsp; Vision';
       }
-      return '<div style="margin-bottom:14px;padding:12px 16px;background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;">'
+      return '<div style="padding:10px 14px 9px;background:#f0fdf4;border-bottom:1px solid #86efac;">'
         +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
         +'<span style="font-size:13px;font-weight:700;color:#14532d;">&#10003; No separately-stated tax on this invoice</span>'
         +'<span style="font-size:10px;font-weight:700;background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:8px;text-transform:uppercase;letter-spacing:.4px;">Finding</span>'
@@ -813,7 +813,7 @@ function _chargeStatusBanner(vendorTax,stx){
         var v=r.vendorTaxAmount;
         return label+': '+(v!=null&&+v!==0?'<strong>$'+money(+v)+'</strong>':'<em style="color:#9ca3af;">none</em>');
       };
-      return '<div style="margin-bottom:14px;padding:12px 16px;background:#fffbeb;border:1.5px solid #fcd34d;border-radius:8px;">'
+      return '<div style="padding:10px 14px 9px;background:#fffbeb;border-bottom:1px solid #fcd34d;">'
         +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
         +'<span style="font-size:13px;font-weight:700;color:#92400e;">&#9888; Layers disagree on vendor tax &mdash; review recommended</span>'
         +'</div>'
@@ -824,7 +824,7 @@ function _chargeStatusBanner(vendorTax,stx){
         +'</div>';
     }
     // No layers ran yet — neutral placeholder (renderGeneral gates on docaiRan||claudeRan||visionRan)
-    return '<div style="margin-bottom:14px;padding:12px 16px;background:#f3f4f6;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;color:#6b7280;">'
+    return '<div style="padding:10px 14px 9px;background:#f3f4f6;border-bottom:1px solid #d1d5db;font-size:13px;color:#6b7280;">'
       +'<span style="font-weight:700;">&#9672; No tax data yet</span> &mdash; run at least one extraction layer.'
       +'</div>';
   }
@@ -864,14 +864,13 @@ function _chargeStatusBanner(vendorTax,stx){
         +' &mdash; review recommended.</div>';
     }
   }
-  var html='<div style="margin-bottom:14px;padding:12px 16px;background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:8px;">';
+  var html='<div style="padding:10px 14px 9px;background:#f0f9ff;border-bottom:1px solid #bae6fd;">';
   html+='<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:5px;">';
   html+='<span style="font-size:13px;font-weight:700;color:#0c4a6e;">Vendor-Charged Tax</span>';
   html+='<span style="font-size:20px;font-weight:700;color:#0369a1;">$'+money(vendorTax)+'</span>';
   html+='<span style="font-size:10px;font-weight:700;background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:8px;text-transform:uppercase;letter-spacing:.4px;">Extracted &mdash; intelligence layer</span>';
   html+='</div>';
   html+=_taxCorrobLine;
-  html+='<div style="font-size:11px;color:#6b7280;">Tax verdict (Under/Overcharged) is determined by the authoritative engine. Vertex in production &mdash; see Tax Engine panel for engine-by-engine comparison.</div>';
   html+='</div>';
   return html;
 }
@@ -883,22 +882,72 @@ function renderGeneral(data){
     if(!docaiRan&&!claudeRan&&!visionRan){
       cvb.innerHTML='';
     }else{
-      // Vertex not connected in POC — slot defers; Vertex totalTax fills this in production
-      cvb.innerHTML='<div style="margin-bottom:10px;padding:12px 16px;background:#f5f3ff;border:1.5px solid #a78bfa;border-radius:8px;">'
-        +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
-        +'<span style="font-size:13px;font-weight:700;color:#4c1d95;">Charge Status</span>'
-        +'<span style="font-size:10px;font-weight:700;background:#6366f1;color:#fff;padding:2px 8px;border-radius:8px;text-transform:uppercase;letter-spacing:.4px;">Awaiting Vertex</span>'
+      var _cvStx=data.taxEngineResults&&data.taxEngineResults.salestaxzip;
+      var _cvStxAvail=_cvStx&&_cvStx.available&&_cvStx.totalTax!=null;
+      var _cvVt=data.vendorTaxAmount!=null?parseFloat(data.vendorTaxAmount):null;
+      var _cvTaxExplicit=data._provenance&&data._provenance.vendorTaxAmount&&data._provenance.vendorTaxAmount.provenance==='extracted';
+
+      // ── Row 1: Illustrative (SalesTaxZip) — conditional ─────────────────
+      var _cvRow1='';
+      if(_cvStxAvail&&_cvTaxExplicit&&_cvVt!=null){
+        var _cvE=parseFloat(_cvStx.totalTax);
+        if(_cvVt!==0&&_cvE!==0){
+          var _cvD=+(_cvE-_cvVt).toFixed(2);
+          var _cvAbsD=Math.abs(_cvD);
+          var _cvTol=_cvAbsD<=TAX_TOLERANCE;
+          var _cvUnder=_cvD>TAX_TOLERANCE;
+          var _cvLabel=_cvTol?'Accurately Charged':_cvUnder?'Undercharged':'Overcharged';
+          var _cvBadgeBg=_cvTol?'#16a34a':_cvUnder?'#92400e':'#991b1b';
+          var _cvGapStr=_cvTol?('within $'+money(TAX_TOLERANCE)+' tolerance'):('gap: '+(_cvD>0?'+':'−')+'$'+money(_cvAbsD));
+          _cvRow1=
+            '<div style="padding:10px 14px 9px;background:#fffbeb;border-bottom:1px solid #fcd34d;">'
+            +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;">'
+            +'<span style="font-size:10px;font-weight:700;color:#78350f;text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;">Illustrative (SalesTaxZip)</span>'
+            +'<span style="font-size:12px;font-weight:700;background:'+_cvBadgeBg+';color:#fff;padding:2px 9px;border-radius:7px;text-transform:uppercase;letter-spacing:.3px;">'+_cvLabel+'</span>'
+            +'<span style="font-size:11px;color:#78350f;">$'+money(_cvE)+' vs vendor $'+money(_cvVt)+'&nbsp;&nbsp;('+_cvGapStr+')</span>'
+            +'</div>'
+            +'<div style="font-size:11px;color:#92400e;font-weight:600;">&#9888; Rate-only estimate, no exemption logic &mdash; likely overstates tax on exempt lines. Illustrative, not authoritative.</div>'
+            +'</div>';
+        }
+      }
+
+      // ── Row 2: Authoritative — always shown when any layer has run ───────
+      var _cvRow2=
+        '<div style="padding:10px 14px 9px;background:#f5f3ff;">'
+        +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">'
+        +'<span style="font-size:10px;font-weight:700;color:#4c1d95;text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;">Authoritative</span>'
+        +'<span style="font-size:10px;font-weight:700;background:#6366f1;color:#fff;padding:2px 8px;border-radius:7px;text-transform:uppercase;letter-spacing:.3px;">Awaiting Vertex</span>'
         +'</div>'
-        +'<div style="font-size:12px;color:#5b21b6;margin-bottom:2px;">Authoritative verdict (Undercharged / Overcharged / Accurately Charged) requires Vertex O-Series &mdash; not connected in this POC.</div>'
-        +'<div style="font-size:11px;color:#7c3aed;">In production, Vertex applies UNSPSC-based per-item taxability and jurisdiction rules to this payload and returns the definitive charge verdict. See Tax Engine panel for illustrative SalesTaxZip rate comparison.</div>'
+        +'<div style="font-size:11px;color:#5b21b6;line-height:1.5;">The definitive Undercharged / Overcharged / Accurately Charged verdict requires Vertex O-Series (not connected in this POC). In production, Vertex applies UNSPSC-based per-item taxability rules and returns the authoritative result.</div>'
+        +'</div>';
+
+      // ── Education: general mechanism, real numbers where available ────────
+      var _cvEduNums='';
+      if(_cvStxAvail&&_cvTaxExplicit&&_cvVt!=null){
+        var _cvEduE=parseFloat(_cvStx.totalTax);
+        var _cvEduBase=_cvStx.subTotal!=null?parseFloat(_cvStx.subTotal):((data.taxPayload&&data.taxPayload.totals)?parseFloat(data.taxPayload.totals.net)||0:0);
+        if(_cvEduE!==0&&_cvVt!==0){
+          _cvEduNums=' On this invoice, SalesTaxZip calculated $'+money(_cvEduE)+' on a full base of $'+money(_cvEduBase)+'; the vendor charged $'+money(_cvVt)+'.';
+        }
+      }
+      var _cvEduText='SalesTaxZip applies the jurisdiction rate to the entire invoice base, treating all lines as taxable.'+_cvEduNums+' Vertex determines taxability per line from each item\'s UNSPSC code &mdash; exempt lines (services, resale, installation) are excluded from the taxable base. Which lines are taxable is what determines the verdict &mdash; a determination Vertex makes and a rate-only estimate cannot.';
+
+      var _cvExtrRow=_chargeStatusBanner(_cvVt,_cvStx);
+      cvb.innerHTML=
+        '<div style="margin-bottom:10px;border:1.5px solid #e5e7eb;border-radius:8px;overflow:hidden;">'
+        +'<div style="padding:5px 14px;background:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.08em;">Charge Status</div>'
+        +_cvExtrRow
+        +_cvRow1
+        +_cvRow2
+        +'<details style="border-top:1px solid #e5e7eb;">'
+        +'<summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">How Vertex determines the verdict</summary>'
+        +'<div style="padding:0 14px 10px;"><div style="padding:8px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:5px;font-size:11px;color:#92400e;line-height:1.65;">'+_cvEduText+'</div></div>'
+        +'</details>'
         +'</div>';
     }
   }
   var csb=document.getElementById('chargeStatusBanner');
-  if(csb){
-    if(!docaiRan&&!claudeRan&&!visionRan){csb.innerHTML='';}
-    else{var _vt=data.vendorTaxAmount!=null?parseFloat(data.vendorTaxAmount):null;csb.innerHTML=_chargeStatusBanner(_vt,data.taxEngineResults&&data.taxEngineResults.salestaxzip);}
-  }
+  if(csb) csb.innerHTML='';
   // ── Canonical manual-address entry form ────────────────────────
   var giMae=document.getElementById('manualAddressEntry');
   if(giMae){

@@ -286,6 +286,28 @@ var _statusDocAI=null, _statusClaude=null, _statusVision=null;
 var allInvoices=[], filterAssetOnly=true;
 var pdfDoc=null, pdfCurrentPage=1, pdfTotalPages=0, pdfViewport=null, ocrBoxes=[];
 var roi={annualVolume:25000,triggerRate:20,minutesSaved:8,hourlyRate:50,docAICost:0.02,claudeCost:0.015};
+// ── Cross-function state: populated by _buildTriageBanner, read by table renderer + renderIntel ──
+var _benignFields=new Set(), _reviewFieldNames=new Set(), _correctedFieldNames=new Set();
+var _lastHeroN=0, _lastHeroImpact=0, _lastHeroLayerSet=[];
+function _humanLayersGlobal(ls){
+  if(!ls||!ls.length)return 'intelligence layer';
+  if(ls.length===1)return ls[0];
+  if(ls.length===2)return ls[0]+' and '+ls[1];
+  return 'all three layers';
+}
+function _toggleFieldRows(btn){
+  var showing=btn.getAttribute('data-showing');
+  var rows=document.querySelectorAll('#genKv .kv-field-row[data-row-type="agree"],#genKv .kv-field-row[data-row-type="benign"]');
+  if(showing==='filtered'){
+    rows.forEach(function(r){r.style.display='';});
+    btn.setAttribute('data-showing','all');
+    btn.innerHTML='Hide matching fields &#9650;';
+  } else {
+    rows.forEach(function(r){r.style.display='none';});
+    btn.setAttribute('data-showing','filtered');
+    btn.innerHTML='Show all '+document.querySelectorAll('#genKv .kv-field-row').length+' fields &#9660;';
+  }
+}
 var dropZone=document.getElementById('dropZone'), fileInput=document.getElementById('fileInput'), docaiBtn=document.getElementById('docaiBtn');
 fileInput.addEventListener('change',function(e){handleFile(e.target.files[0]);});
 dropZone.addEventListener('dragover',function(e){e.preventDefault();});
@@ -877,50 +899,52 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   var nTotal=nN+nCf+nF+nR+nCl+nS;
   if(!nTotal)return '';
 
-  // ── Hero metric — live from deduped _catchList ────────────────────────────
-  // All data already built above: _catchList has {entry,layers[]} per distinct catch.
-  var _heroN=_catchList.length;
-  var _heroImpact=0, _heroLayerSet=[];
+  // ── Update module-level hero values (rendered in Intel Report tab, not here) ──
+  _lastHeroN=_catchList.length;
+  _lastHeroImpact=0; _lastHeroLayerSet=[];
   _catchList.forEach(function(c){
     var o=parseFloat(String(c.entry.oldValue||'').replace(/[$,\s]/g,'')),
         nv=parseFloat(String(c.entry.newValue||'').replace(/[$,\s]/g,''));
-    if(!isNaN(o)&&!isNaN(nv))_heroImpact+=Math.abs(o-nv);
-    (c.layers||[]).forEach(function(l){if(_heroLayerSet.indexOf(l)===-1)_heroLayerSet.push(l);});
+    if(!isNaN(o)&&!isNaN(nv))_lastHeroImpact+=Math.abs(o-nv);
+    (c.layers||[]).forEach(function(l){if(_lastHeroLayerSet.indexOf(l)===-1)_lastHeroLayerSet.push(l);});
   });
-  function _humanLayers(ls){
-    if(!ls||!ls.length)return 'intelligence layer';
-    if(ls.length===1)return ls[0];
-    if(ls.length===2)return ls[0]+' and '+ls[1];
-    return 'all three layers';
-  }
-  var _heroHtml;
-  if(_heroN>0){
-    _heroHtml='<div style="background:linear-gradient(135deg,#4c1d95 0%,#7c3aed 100%);'
-      +'border-radius:8px;padding:14px 18px;margin-bottom:8px;color:#fff;">'
-      +'<div style="font-size:15px;font-weight:700;line-height:1.4;">'
-      +'&#9889; Intelligence layer caught '+_heroN
-      +' extraction error'+(_heroN!==1?'s':'')+' &mdash; '
-      +'<span style="color:#e9d5ff;">$'+escHtml(money(_heroImpact))+'</span>'
-      +' in mis-extractions corrected before tax calculation.</div>'
-      +'<div style="font-size:11px;margin-top:5px;color:#ddd6fe;">'
-      +'Caught by '+escHtml(_humanLayers(_heroLayerSet))+'</div>'
-      +'</div>';
+
+  // ── Update module-level field-type sets (used by table renderer for row styling + toggle) ──
+  _benignFields=new Set(_benignList.map(function(b){return b.name;}));
+  _reviewFieldNames=new Set(_reviewList.map(function(r){return r.name;}));
+  _correctedFieldNames=new Set(_caughtList.map(function(c){return c.name;}));
+
+  // ── Plain-language analyst status line ────────────────────────────────────
+  var _taxCritReview=_reviewList.filter(function(rv){return triageMap[rv.name]&&triageMap[rv.name].taxCritical;}).length;
+  var _firstReviewField=_reviewList.length?_reviewList[0].name:'';
+
+  var bBg,bBord,_statusHtml,_actionHtml;
+  if(nR>0){
+    bBg='#fefce8';bBord='#fde68a';
+    var _nw=nR===1?'field needs':'fields need';
+    var _tcStr=_taxCritReview>0?' &mdash; <strong>'+_taxCritReview+' are tax-critical.</strong>':'';
+    var _corrClause='<span style=”color:#78350f;opacity:.75;”> The AI corrected <strong>'+nC+'</strong> value'
+      +(nC!==1?'s':'')+' automatically; the rest matched.</span>';
+    _statusHtml='<div style=”font-size:13px;line-height:1.6;”>'
+      +'<strong><span style=”font-size:16px;font-weight:800;color:#92400e;”>'+nR+'</span> '+_nw+' your review'
+      +' before this invoice is ready for tax calculation.</strong>'+_tcStr+_corrClause+'</div>';
+    var _sf=_firstReviewField.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    var _scrollJs=_sf
+      ?'var t=document.querySelector(\'.kv-field-row[data-field=”'+_sf+'”]\');if(t){t.scrollIntoView({behavior:\'smooth\',block:\'center\'});}'
+      :'document.getElementById(\'genKv\').scrollIntoView({behavior:\'smooth\'});';
+    _actionHtml='<a href=”#” onclick=”event.preventDefault();'+_scrollJs+'” '
+      +'style=”font-size:12px;font-weight:600;color:#b45309;text-decoration:none;margin-top:5px;display:inline-block;”>'
+      +'Review the '+nR+' field'+(nR!==1?'s':'')+' &#8594;</a>';
   } else {
-    // Calm, honest neutral state — no fabricated win when there are no catches
-    _heroHtml='<div style="background:#f0fdf4;border:1px solid #a7f3d0;border-radius:8px;'
-      +'padding:10px 18px;margin-bottom:8px;color:#065f46;font-size:13px;font-weight:500;">'
-      +'&#10003; No extraction errors caught &mdash; layers agree on all line amounts.</div>';
+    bBg='#f0fdf4';bBord='#a7f3d0';
+    var _corrClause0='<span style=”color:#065f46;opacity:.75;”> The AI corrected <strong>'+nC+'</strong> value'
+      +(nC!==1?'s':'')+' automatically; everything else matched.</span>';
+    _statusHtml='<div style=”font-size:13px;line-height:1.6;”>'
+      +'<strong style=”color:#065f46;”>This invoice is ready &mdash; no fields need review.</strong>'
+      +_corrClause0+'</div>';
+    _actionHtml=nC>0?'<a href=”#” onclick=”event.preventDefault();var d=document.querySelector(\'#genKv details\');if(d){d.open=true;}document.getElementById(\'genKv\').scrollIntoView({behavior:\'smooth\'});” '
+      +'style=”font-size:12px;color:#059669;text-decoration:none;margin-top:5px;display:inline-block;”>See what changed &#8595;</a>':'';
   }
-
-  var _llbls=[];
-  if(d_run)_llbls.push('Doc AI');
-  if(c_run)_llbls.push('Claude');
-  if(v_run)_llbls.push('Vision');
-
-  var bBg,bBord;
-  if(nR>0){bBg='#fefce8';bBord='#fde68a';}
-  else if(nC>0){bBg='#faf5ff';bBord='#d8b4fe';}
-  else{bBg='#f0fdf4';bBord='#a7f3d0';}
 
   function _mkRow(s){return '<div style=”margin-bottom:3px;”>'+s+'</div>';}
   function _mkDet(sumHtml,bodyHtml){
@@ -931,7 +955,6 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
       +'<div style=”padding:8px 16px 10px;font-size:11px;line-height:1.7;”>'+bodyHtml+'</div>'
       +'</details>';
   }
-  // Layer-credit badge: “caught by Claude ✓ Vision ✓”
   function _layerBadge(layers){
     if(!layers||!layers.length)return '';
     return ' <span style=”color:#7c3aed;font-size:10px;font-weight:400;”>caught by '
@@ -939,32 +962,8 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   }
 
   var h='<div style=”border:1px solid '+bBord+';border-radius:8px;overflow:hidden;margin-bottom:10px;font-size:12px;”>';
-
-  // Top summary row
-  var _fldCount=nN+nCf+nF+nR;
-  h+='<div style=”padding:8px 14px;background:'+bBg+';border-bottom:1px solid '+bBord
-    +';display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;”>'
-    +'<span style=”font-weight:600;color:#374151;”>Compared '+nTotal+' items across '
-    +escHtml(_llbls.join(' · '))+'</span>'
-    +'<span style=”font-size:11px;color:#6b7280;”>'+_fldCount+' field'+(_fldCount!==1?'s':'')
-    +' · '+nCl+' catch'+(nCl!==1?'es':'')
-    +(nS?' · '+nS+' suppression'+(nS!==1?'s':''):'')+'</span>'
-    +'</div>';
-
-  // Count chips row
-  h+='<div style=”padding:9px 14px;background:#fff;display:flex;flex-wrap:wrap;gap:16px;align-items:center;border-bottom:1px solid #f3f4f6;”>';
-  if(nN>0)h+='<span style=”color:#059669;font-weight:600;”>&#10003; '+nN+' agree</span>';
-  if(nC>0){
-    h+='<span style=”font-weight:700;font-size:13px;color:#7c3aed;”>&#9889; '+nC+' caught &amp; corrected</span>';
-    var _sp=[];
-    if(nCf>0)_sp.push(nCf+' field'+(nCf!==1?'s':''));
-    if(nCl>0)_sp.push(nCl+' amount'+(nCl!==1?'s':''));
-    if(_sp.length)h+='<span style=”color:#7c3aed;font-size:10px;font-weight:400;”>('+_sp.join(' + ')+')</span>';
-  }
-  if(nF>0)h+='<span style=”color:#0891b2;font-weight:600;”>~ '+nF+' format-only</span>';
-  if(nR>0)h+='<span style=”color:#d97706;font-weight:700;”>&#9888; '+nR+' need review</span>';
-  if(nS>0)h+='<span style=”color:#6b7280;font-weight:600;font-size:11px;”>&#8627; '+nS+' suppression'+(nS!==1?'s':'')+'</span>';
-  h+='</div>';
+  h+='<div style=”padding:12px 14px;background:'+bBg+';border-bottom:1px solid '+bBord+';”>'
+    +_statusHtml+_actionHtml+'</div>';
 
   // Expandable: caught & corrected (mis-extractions only)
   if(nC>0){
@@ -1031,7 +1030,7 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   }
 
   h+='</div>';
-  return _heroHtml+h;  // hero banner prepended above the detail card
+  return h;
 }
 
 function _isNoAddressSentinel(v){ return typeof v==='string'&&v.trimStart().toLowerCase().indexOf('manual action required')===0; }
@@ -1334,7 +1333,14 @@ function renderGeneral(data){
     :'<span style="display:block;color:#bbb;font-size:10px;font-weight:400;margin-top:2px;">&#9675; not run</span>';};
   var TH='padding:8px 10px;background:#f0f2f5;border-bottom:2px solid #d0d0d0;color:#444;font-weight:600;font-size:12px;text-align:left;vertical-align:bottom;';
 
-  var html='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  var _attentionCount=_reviewFieldNames.size+_correctedFieldNames.size;
+  var html=_attentionCount>0
+    ?'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;">'
+      +'<span style="font-size:11px;color:#6b7280;">Showing '+_attentionCount+' field'+(_attentionCount!==1?'s':'')+' that need attention</span>'
+      +'<button onclick="_toggleFieldRows(this)" data-showing="filtered" style="font-size:11px;padding:3px 10px;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;background:#fff;color:#374151;">Show all '+allNames.length+' fields &#9660;</button>'
+      +'</div>'
+    :'';
+  html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
   html+='<thead><tr>'
     +'<th style="'+TH+'width:148px;">Field Name</th>'
     +'<th style="'+TH+'">Doc AI'+dot(d_run)+'</th>'
@@ -1408,16 +1414,19 @@ function renderGeneral(data){
     var bestCell=bestVal?'<strong>'+escHtml(bestVal)+'</strong>'+badge:'<span style="color:#aaa;">—</span>';
 
     var ts=triageMap[name]||{status:'AUTO_APPROVE',taxCritical:false};
-    var rowBg=ts.status==='MANUAL_ACTION'?'background:#fef2f2;':
-              ts.status==='REVIEW'&&ts.taxCritical?'background:#fffbeb;':
-              rowDisagrees?'background:#fffbeb;':'';
+    var _isBenign=_benignFields.has(name);
+    var _rowType=_reviewFieldNames.has(name)?'review':_correctedFieldNames.has(name)?'corrected':_isBenign?'benign':'agree';
+    var _defaultHide=(_rowType==='agree'||_rowType==='benign')&&(_reviewFieldNames.size+_correctedFieldNames.size)>0;
+    var rowBg=_isBenign?'background:#f9fafb;':
+              ts.status==='MANUAL_ACTION'?'background:#fef2f2;':
+              (ts.status==='REVIEW'||rowDisagrees)?'background:#fffbeb;':'';
     var tcBorder=taxCrit?'border-left:3px solid #0a6ed1;':'border-left:3px solid transparent;';
     var triagePill=ts.status==='NOT_APPLICABLE'?'<span style="color:#ccc;font-size:11px;">—</span>'
       :ts.status==='AUTO_APPROVE'?'<span title="Auto-approve" style="display:inline-block;background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#10003;</span>'
       :ts.status==='REVIEW'?'<span title="Needs review" style="display:inline-block;background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#9888;</span>'
       :'<span title="Manual review required" style="display:inline-block;background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">!</span>';
-    html+='<tr class="kv-field-row" data-field="'+name+'" onmouseenter="hoverField(\''+name+'\')" onmouseleave="hoverField(null)"'
-      +' style="border-bottom:1px solid #f0f0f0;'+rowBg+tcBorder+'">';
+    html+='<tr class="kv-field-row" data-field="'+name+'" data-row-type="'+_rowType+'" onmouseenter="hoverField(\''+name+'\')" onmouseleave="hoverField(null)"'
+      +' style="'+(_defaultHide?'display:none;':'')+'border-bottom:1px solid #f0f0f0;'+rowBg+tcBorder+'">';
     var _tcProv=taxCrit?((cf&&cf.provenance)||(df&&df.provenance)||null):null;
     html+='<td style="padding:7px 10px;font-weight:500;color:#333;font-size:12px;">'
       +(taxCrit?'<span title="Tax-critical" style="color:#0a6ed1;font-size:9px;vertical-align:middle;">&#9670; </span>':'')+escHtml(name)
@@ -3152,6 +3161,14 @@ function renderIntel(data){
   html+='<div class="card"><div class="card-title">This Invoice</div><div style="padding:14px;font-size:13px;">';
   html+=triggered?'<span class="pill corrected">CLAUDE TRIGGERED</span> Hit the confidence gate '+(cv.triggerReasons&&cv.triggerReasons.length?'('+cv.triggerReasons.join('; ')+')':'')+' — Claude adjudicated. Cost: Doc AI $'+money(cv.docAICostPerDoc||roi.docAICost)+' + Claude $'+money(cv.claudeCostPerDoc||roi.claudeCost)+'.':'<span class="pill verified">AUTO-VERIFIED</span> Doc AI high-confidence on all tax-critical fields — Claude NOT called. Cost: Doc AI $'+money(cv.docAICostPerDoc||roi.docAICost)+' only. (~80% of invoices.)';
   html+='</div></div>';
+  if(_lastHeroN>0){
+    html+='<div class="card"><div class="card-title">&#9889; AI-Caught Mis-extractions <span style="font-size:11px;font-weight:400;color:#6b7280;">this invoice</span></div>';
+    html+='<div style="padding:14px;">';
+    html+='<div style="font-size:28px;font-weight:800;color:#7c3aed;margin-bottom:2px;">$'+money(_lastHeroImpact)+'</div>';
+    html+='<div style="font-size:13px;color:#374151;margin-bottom:6px;">corrected before tax calculation</div>';
+    html+='<div style="font-size:12px;color:#6b7280;">'+_lastHeroN+' extraction error'+(_lastHeroN!==1?'s':'')+' caught by '+escHtml(_humanLayersGlobal(_lastHeroLayerSet))+'</div>';
+    html+='</div></div>';
+  }
   html+='<div class="card"><div class="card-title">Annual ROI — adjust the levers <span class="pill mock">ILLUSTRATIVE</span></div><div style="padding:14px;">';
   html+='<div class="cv-two" style="grid-template-columns:1fr 1fr 1fr;">';
   html+='<div class="lever"><label>Annual invoice volume</label><input type="number" id="lv-vol" value="'+roi.annualVolume+'" oninput="updateROI()"></div>';

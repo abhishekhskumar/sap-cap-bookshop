@@ -1204,7 +1204,13 @@ function renderRecon(data){
     if(_stxNoZip){
       html+='<div style="padding:14px 16px;font-size:13px;color:#92400e;background:#fffbeb;border-left:3px solid #f59e0b;">'
         +'<strong>&#9888; Manual Action Required &mdash; incomplete delivery address (no ZIP code)</strong>'
-        +'<div style="margin-top:6px;font-size:12px;color:#78350f;">A complete delivery address with ZIP is required to determine tax. Resolved location: <strong>'+escHtml(_stxCity||'(unknown)')+'</strong> (no state or ZIP on record). Supply a full address including ZIP to enable rate lookup.</div>'
+        +'<div style="margin-top:6px;font-size:12px;color:#78350f;">A complete delivery address with ZIP is required to determine tax. Resolved location: <strong>'+escHtml(_stxCity||'(unknown)')+'</strong> (no state or ZIP on record).</div>'
+        +'<div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+        +'<input id="reconManualZip" type="text" placeholder="ZIP (5 digits)" maxlength="5" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;">'
+        +'<input id="reconManualState" type="text" placeholder="State (2 letters)" maxlength="2" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;text-transform:uppercase;">'
+        +'<button id="reconManualZipBtn" onclick="reconManualZipSubmit()" style="padding:4px 12px;background:#92400e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;">Calculate with this address</button>'
+        +'<span id="reconManualZipError" style="color:#991b1b;font-size:11px;"></span>'
+        +'</div>'
         +'</div>';
     }else{
       html+='<div style="padding:14px 16px;font-size:13px;color:#6b7280;">'
@@ -1221,7 +1227,9 @@ function renderRecon(data){
     var stxMatch=stxDiff!=null&&Math.abs(stxDiff)<=TAX_TOLERANCE;
     html+='<div style="padding:10px 14px 4px;font-size:12px;color:#6b7280;">Jurisdiction: <strong style="color:#1e1b4b;">'+escHtml(stx.key)+'</strong>'
       +' &nbsp;·&nbsp; Combined rate: <strong>'+money(stx.totalRate)+'%</strong>'
-      +' &nbsp;·&nbsp; Lookup: <span style="font-family:monospace;background:#f3f4f6;padding:1px 5px;border-radius:3px;">srv/data/tax-rates.json</span></div>';
+      +' &nbsp;·&nbsp; Lookup: <span style="font-family:monospace;background:#f3f4f6;padding:1px 5px;border-radius:3px;">'+(stx._fromManualOverride?'SalesTaxZip API (manual override)':'srv/data/tax-rates.json')+'</span>'
+      +(stx._fromManualOverride?'<span style="margin-left:8px;font-size:10px;font-weight:700;background:#f3e8ff;color:#6b21a8;padding:1px 7px;border-radius:8px;border:1px solid #d8b4fe;">MANUAL</span>':'')
+      +'</div>';
     html+='<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
     html+='<th style="'+TH.replace('text-align:right','text-align:left')+'color:#444;width:120px;">Component</th>';
     html+='<th style="'+TH+'">Rate</th><th style="'+TH+'">Tax on Line</th><th style="'+TH+'">Tax on Freight</th><th style="'+TH+'">Component Total</th>';
@@ -2111,6 +2119,18 @@ function renderTaxEngine(data){
   html+='</tr>';
   html+='</tbody></table>';
 
+  // ── Manual ZIP override — gated only on _noZip, independent of vendor-tax status ─
+  if(_noZip){
+    html+='<div style="padding:10px 14px;background:#fffbeb;border-top:1px solid #fcd34d;">'
+      +'<div style="font-size:12px;color:#92400e;margin-bottom:6px;">&#9888; <strong>Manual Action Required</strong> &mdash; incomplete delivery address (no ZIP code). Resolved location: <strong>'+escHtml(jurStr||'(unknown)')+'</strong>. Enter the correct ZIP and state to calculate tax.</div>'
+      +'<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">'
+      +'<input id="teManualZip" type="text" placeholder="ZIP (5 digits)" maxlength="5" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;">'
+      +'<input id="teManualState" type="text" placeholder="State (2 letters)" maxlength="2" style="width:100px;padding:4px 8px;border:1px solid #fcd34d;border-radius:4px;font-size:12px;background:#fff;color:#111;text-transform:uppercase;">'
+      +'<button id="teManualZipBtn" onclick="teManualZipSubmit()" style="padding:4px 12px;background:#92400e;color:#fff;border:none;border-radius:4px;font-size:12px;cursor:pointer;font-weight:600;">Calculate with this address</button>'
+      +'<span id="teManualZipError" style="color:#991b1b;font-size:11px;"></span>'
+      +'</div></div>';
+  }
+
   // ── Folded flow-through verdict (unique: directional verdict + gross math) ─
   var _ftBg=_ftZero?'#f9fafb':_ftTol?'#f0fdf4':_ftUnder?'#fffbeb':'#fef2f2';
   html+='<div style="padding:10px 14px;background:'+_ftBg+';border-top:1px solid #bfdbfe;">';
@@ -2118,7 +2138,7 @@ function renderTaxEngine(data){
     html+='<div style="font-size:12px;color:#6b7280;">&#9888; Vendor tax not separately stated &mdash; charge verdict unavailable. (Vendor tax is never derived from gross &#8722; base.)</div>';
   }else if(!stxAvail){
     if(_noZip){
-      html+='<div style="font-size:12px;color:#92400e;">&#9888; <strong>Manual Action Required</strong> &mdash; incomplete delivery address (no ZIP code). A full address with ZIP is needed to determine the tax jurisdiction. Resolved location: <strong>'+escHtml(jurStr||'(unknown)')+'</strong>.</div>';
+      html+='<div style="font-size:12px;color:#92400e;">&#9888; <strong>Manual Action Required</strong> &mdash; charge verdict unavailable until a complete delivery address is entered above.</div>';
     }else{
       html+='<div style="font-size:12px;color:#6b7280;">&#9888; No engine rate data for this jurisdiction &mdash; charge verdict unavailable. Requires Vertex or add the ZIP to <code>srv/data/tax-rates.json</code>.</div>';
     }
@@ -2329,6 +2349,85 @@ function teLayerSelect(layer){
   teLayerView=layer;
   renderTaxEngine(lastResult);
 }
+
+// Shared recompute — called by both the Tax Engine form and the Reconciliation form.
+// zipId/stateId/btnId/errId identify which form's elements to read.
+async function _manualZipSubmit(zipId,stateId,btnId,errId){
+  var zipEl=document.getElementById(zipId);
+  var stEl=document.getElementById(stateId);
+  var errEl=document.getElementById(errId);
+  var btn=document.getElementById(btnId);
+  if(!zipEl||!stEl)return;
+  var zip=(zipEl.value||'').trim();
+  var state=(stEl.value||'').trim().toUpperCase();
+  if(errEl)errEl.textContent='';
+  if(!/^\d{5}$/.test(zip)){if(errEl)errEl.textContent='ZIP must be exactly 5 digits.';return;}
+  if(!/^[A-Z]{2}$/.test(state)){if(errEl)errEl.textContent='State must be 2 letters (e.g. NJ).';return;}
+  if(btn){btn.disabled=true;btn.textContent='Calculating…';}
+  var _srcMap={docai:docaiResult,claude:claudeResult,vision:visionResult};
+  var src=_srcMap[teLayerView];
+  if(!src){if(btn){btn.disabled=false;btn.textContent='Calculate with this address';}return;}
+  // Patch jurisdiction in both live references so Tax Engine re-render and Block 4 fetch use the override
+  if(!src.taxPayload)src.taxPayload={};
+  if(!src.taxPayload.jurisdiction)src.taxPayload.jurisdiction={};
+  src.taxPayload.jurisdiction.postalCode=zip;
+  src.taxPayload.jurisdiction.state=state;
+  if(window._teTaxPayload){
+    window._teTaxPayload.jurisdiction=window._teTaxPayload.jurisdiction||{};
+    window._teTaxPayload.jurisdiction.postalCode=zip;
+    window._teTaxPayload.jurisdiction.state=state;
+  }
+  try{
+    var res=await fetch('/api/intelligence/calculateTaxWithEngine',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({taxPayload:JSON.stringify(src.taxPayload),engineName:'salestaxzip'})
+    });
+    var text=await res.text();
+    var result=JSON.parse(text);
+    if(result&&typeof result.value==='string')result=JSON.parse(result.value);
+    // Patch Tax Engine results so Block 2 roster shows the new calculated tax
+    if(!src.taxEngineResults)src.taxEngineResults={};
+    src.taxEngineResults.salestaxzip=result;
+    // Tag provenance MANUAL — Block 3 provenance card reads this on re-render
+    if(!src._provenance)src._provenance={};
+    src._provenance.shipToResolution={provenance:'MANUAL',provenanceDetail:'Analyst-entered: ZIP '+zip+', '+state};
+    // Synthesize simplifiedTax from SalesTaxZip component rates so the Reconciliation
+    // panel's "Simplified Rate Calculation" section also updates and clears the no-ZIP callout
+    if(result&&result.available){
+      var _rates={state:0,county:0,city:0,district:0};
+      var _tr=0;
+      if(result.lineItems&&result.lineItems.length>0){
+        (result.lineItems[0].taxes||[]).forEach(function(t){
+          var jt=(t.jurisdiction&&t.jurisdiction.jurisdictionType||'').toLowerCase();
+          var pct=+(t.effectiveRate*100).toFixed(4);
+          if(_rates.hasOwnProperty(jt)){_rates[jt]=pct;_tr+=pct;}
+        });
+      }
+      var _city=(src.taxPayload.jurisdiction.city||'').toLowerCase();
+      src.simplifiedTax={
+        available:true,
+        key:state+'|'+_city,
+        rates:_rates,
+        totalRate:+_tr.toFixed(3),
+        invoiceTotalLine:+(result.totalTax||0).toFixed(2),
+        invoiceTotalFreight:0,
+        invoiceTotal:+(result.totalTax||0).toFixed(2),
+        lineItems:(src.simplifiedTax&&src.simplifiedTax.lineItems)||[],
+        _fromManualOverride:true
+      };
+    }
+    // Re-render both panels — Tax Engine (calls teSelect at end) and Reconciliation
+    renderTaxEngine(lastResult);
+    renderRecon(lastResult);
+  }catch(e){
+    if(errEl)errEl.textContent='Request failed: '+e.message;
+    if(btn){btn.disabled=false;btn.textContent='Calculate with this address';}
+  }
+}
+// Thin wrappers — each button passes its own form's element IDs
+function teManualZipSubmit(){ _manualZipSubmit('teManualZip','teManualState','teManualZipBtn','teManualZipError'); }
+function reconManualZipSubmit(){ _manualZipSubmit('reconManualZip','reconManualState','reconManualZipBtn','reconManualZipError'); }
 
 function _summaryRow(icon, iconColor, bg, borderColor, innerHtml) {
   return '<div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:5px;padding:7px 10px;background:'+bg+';border:1px solid '+borderColor+';border-radius:6px;">'

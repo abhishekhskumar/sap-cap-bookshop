@@ -360,24 +360,30 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const claudeSuppressedItems = claudeNormItems
       .filter(function(li){ return li.isFreight || li.lineVerdict === 'SUPPRESSED'; })
       .map(function(li){ return Object.assign({}, li, { suppressedBy: 'claude' }); });
+    // Source freight from Claude's correction if it changed shippingCostHeader; fall back to Doc AI.
+    const _claudeFreightField = (intelligence.fields || []).find(function(f){ return f.fieldName === 'shippingCostHeader'; });
+    const _claudeFreightCorrected = (_claudeFreightField && _claudeFreightField.verdict === 'CORRECTED' && _claudeFreightField.correctValue)
+      ? (parseFloat(String(_claudeFreightField.correctValue).replace(/[^0-9.\-]/g,'')) || 0) : null;
+    const _effectiveClaudeFreight = _claudeFreightCorrected != null ? _claudeFreightCorrected : docAIFreightTotal;
+
     const sumKeepNet = claudeKeepItems.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
     let freightAlloc = 0, lgIdx = 0, lgAmt = -Infinity;
     let claudeLineItems = claudeKeepItems.map(function(li, idx) {
       const net = parseFloat(li.amount) || 0;
       if (net > lgAmt) { lgAmt = net; lgIdx = idx; }
-      const rawF = sumKeepNet > 0 ? docAIFreightTotal * (net / sumKeepNet) : 0;
+      const rawF = sumKeepNet > 0 ? _effectiveClaudeFreight * (net / sumKeepNet) : 0;
       const freight = +rawF.toFixed(2);
       freightAlloc += freight;
       return Object.assign({}, li, {
         freightAmount: freight,
         itemAmount: +(net + freight).toFixed(2),
-        freightProvenance: docAIFreightTotal > 0 ? 'inferred' : 'extracted',
-        freightProvenanceDetail: docAIFreightTotal > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined,
+        freightProvenance: _effectiveClaudeFreight > 0 ? 'inferred' : 'extracted',
+        freightProvenanceDetail: _effectiveClaudeFreight > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined,
         itemAmountProvenance: freight > 0 ? 'inferred' : (li.provenance || 'extracted'),
         itemAmountProvenanceDetail: freight > 0 ? 'derived: netAmount + distributedFreight' : undefined
       });
     });
-    const freightRem = +(docAIFreightTotal - freightAlloc).toFixed(2);
+    const freightRem = +(_effectiveClaudeFreight - freightAlloc).toFixed(2);
     if (freightRem !== 0 && claudeLineItems.length > 0) {
       const lg = claudeLineItems[lgIdx];
       lg.freightAmount = +(lg.freightAmount + freightRem).toFixed(2);
@@ -385,13 +391,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     }
     console.log('FREIGHT CALC:', JSON.stringify({
       keepNets: claudeLineItems.map(function(l){ return parseFloat(l.amount)||0; }),
-      freightTotal: docAIFreightTotal,
+      freightTotal: _effectiveClaudeFreight,
+      freightSource: _claudeFreightCorrected != null ? 'claude-corrected' : 'docai-original',
       sumKeepNet,
       perLineFreight: claudeLineItems.map(function(l){ return l.freightAmount; }),
       sumFreight: +(claudeLineItems.reduce(function(s,l){ return s+l.freightAmount; }, 0)).toFixed(2)
     }));
     const invoiceNetTotal = +(claudeLineItems.reduce(function(s, li){ return s + li.itemAmount; }, 0)).toFixed(2);
-    const invoiceFreightTotal = docAIFreightTotal;
+    const invoiceFreightTotal = _effectiveClaudeFreight;
 
     const vendorTaxAmount = intelligence.vendorTaxAmount != null
       ? parseFloat(String(intelligence.vendorTaxAmount).replace(/[^0-9.\-]/g,''))
@@ -734,6 +741,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       ? (parseFloat(_rawVisionHdrFreight.replace(/[^0-9.\-]/g, '')) || 0) : 0;
 
     let lineItems;
+    let _visionPayloadFreight = 0; // hoisted so _buildTaxPayload receives correct freight total
     if (mode === 'construction') {
       // Build a headerFields proxy from Vision's extracted fields (same shape _consolidateConstruction expects)
       const visionHeaderProxy = {};
@@ -749,6 +757,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       const visionFreightTotal = visionSuppressedLines
         .filter(function(li){ return li.isFreight; })
         .reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
+      _visionPayloadFreight = visionFreightTotal;
       // Normalize keep lines for _consolidateConstruction (lineAction defaults to KEEP, pageType defaults to cont)
       const constructionKeepLines = visionKeepLines.map(function(li) {
         return Object.assign({}, li, {
@@ -771,6 +780,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         .filter(function(li){ return li.isFreight; })
         .reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2);
       const visionFreightTotal = +(visionLineFreightTotal + visionHdrFreightAmt).toFixed(2);
+      _visionPayloadFreight = visionFreightTotal; // carry to _buildTaxPayload totals
       const visionSumKeepNet = visionKeepLines.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
       let visionFreightAlloc = 0, visionLgIdx = 0, visionLgAmt = -Infinity;
       lineItems = visionKeepLines.map(function(li, idx) {
@@ -812,7 +822,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const taxPayload = this._buildTaxPayload(lineItems,
       { state: _getVF('shipToState'), city: _getVF('shipToCity'), postalCode: _getVF('shipToPostalCode') },
       mode,
-      { net: invoiceNetTotal, freight: 0, gross: invoiceGrossTotal }
+      { net: invoiceNetTotal, freight: _visionPayloadFreight, gross: invoiceGrossTotal }
     );
     const taxEngineResults = {
       vertex:      vertexAdapter.calculateTax(taxPayload),

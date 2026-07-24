@@ -965,51 +965,71 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   h+='<div style=”padding:12px 14px;background:'+bBg+';border-bottom:1px solid '+bBord+';”>'
     +_statusHtml+_actionHtml+'</div>';
 
-  // Expandable: caught & corrected (mis-extractions only)
+  // Win cards: caught & corrected — always visible, visually dominant centerpiece
   if(nC>0){
-    var cB='';
+    h+='<div style=”border-top:2px solid #059669;padding:12px 14px 10px;background:#f0fdf4;”>';
+    h+='<div style=”font-size:10px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;”>&#9889; Caught &amp; corrected &mdash; '+nC+' mis-extraction'+(nC!==1?'s':'')+' fixed by intelligence layer</div>';
     _caughtList.forEach(function(c){
-      cB+=_mkRow('<span style=”color:#7c3aed;”>&#10033;</span> <strong>'+escHtml(c.name)+'</strong>'
-        +': <span style=”color:#b91c1c;”>”'+escHtml(c.from)+'”</span>'
-        +' &#8594; <span style=”color:#059669;”>”'+escHtml(c.to)+'”</span>'
-        +(c.reason?' <span style=”color:#6b7280;font-style:italic;”>'+escHtml(c.reason)+'</span>':''));
+      h+='<div style=”background:#fff;border:1.5px solid #86efac;border-radius:8px;padding:12px 14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(5,150,105,.09);”>';
+      h+='<div style=”font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px;”>'+escHtml(c.name)+'</div>';
+      h+='<div style=”font-size:17px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap;”>';
+      h+='<span style=”text-decoration:line-through;color:#b91c1c;”>'+escHtml(c.from||'(empty)')+'</span>';
+      h+='<span style=”color:#374151;font-weight:900;font-size:20px;”>&#8594;</span>';
+      h+='<span style=”color:#059669;font-weight:700;”>'+escHtml(c.to)+'</span>';
+      h+='</div>';
+      if(c.reason)h+='<div style=”font-size:11px;color:#6b7280;margin-top:5px;font-style:italic;”>&#128161; '+escHtml(c.reason)+'</div>';
+      h+='</div>';
     });
     _catchList.forEach(function(c){
       var lc=c.entry;
-      var amtPart=(lc.oldValue&&lc.newValue)
-        ?': <span style=”color:#b91c1c;”>$'+_fmtAmt(lc.oldValue)+'</span>'
-          +' &#8594; <span style=”color:#059669;”>$'+_fmtAmt(lc.newValue)+'</span>'
-        :'';
-      cB+=_mkRow('<span style=”color:#7c3aed;”>&#10033;</span> <strong>'+escHtml(lc.description||'')+'</strong>'
-        +amtPart
-        +(lc.reason?' <span style=”color:#6b7280;font-style:italic;”>'+escHtml(lc.reason)+'</span>':'')
-        +_layerBadge(c.layers));
+      h+='<div style=”background:#fff;border:1.5px solid #86efac;border-radius:8px;padding:12px 14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(5,150,105,.09);”>';
+      h+='<div style=”font-size:11px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.04em;margin-bottom:7px;”>'+escHtml(lc.description||'Line item')+'</div>';
+      h+='<div style=”font-size:17px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap;”>';
+      h+='<span style=”text-decoration:line-through;color:#b91c1c;”>'+(lc.oldValue?'$'+_fmtAmt(lc.oldValue):'(empty)')+'</span>';
+      h+='<span style=”color:#374151;font-weight:900;font-size:20px;”>&#8594;</span>';
+      h+='<span style=”color:#059669;font-weight:700;”>'+(lc.newValue?'$'+_fmtAmt(lc.newValue):'(empty)')+'</span>';
+      h+='</div>';
+      if(c.layers&&c.layers.length)h+='<div style=”font-size:11px;color:#7c3aed;margin-top:5px;font-weight:600;”>caught by '+c.layers.map(function(l){return escHtml(l)+' &#10003;';}).join(' ')+'</div>';
+      if(lc.reason)h+='<div style=”font-size:11px;color:#6b7280;margin-top:3px;font-style:italic;”>'+escHtml(lc.reason)+'</div>';
+      h+='</div>';
     });
-    h+=_mkDet('<span style=”color:#7c3aed;”>&#9889; Caught &amp; corrected — mis-extractions fixed</span>'
-      +'<span style=”color:#6b7280;font-weight:400;font-size:10px;”>Doc AI amounts corrected by intelligence layer</span>',cB);
+    h+='</div>';
   }
 
-  // Expandable: format-only
+  // Format-only: quiet, grey, collapsed behind a low-contrast one-liner
   if(nF>0){
-    var fB='';
+    h+='<details style=”border-top:1px solid #f0f0f0;”>';
+    h+='<summary style=”padding:5px 14px;font-size:11px;color:#d1d5db;cursor:pointer;list-style:none;'
+      +'display:flex;align-items:center;gap:4px;user-select:none;font-weight:400;background:#fafafa;”>'
+      +nF+' format-only difference'+(nF!==1?'s':'')+' (safe to ignore) &#9658;</summary>';
+    h+='<div style=”padding:4px 16px 8px;font-size:11px;color:#d1d5db;line-height:1.7;background:#fafafa;”>';
     _benignList.forEach(function(b){
-      fB+=_mkRow('<strong>'+escHtml(b.name)+'</strong>: '
-        +b.vals.map(function(x){return escHtml(x.layer)+' “'+escHtml(x.v)+'”';}).join(' / '));
+      h+='<div style=”margin-bottom:2px;”><span style=”font-weight:600;”>'+escHtml(b.name)+'</span>: '
+        +b.vals.map(function(x){return escHtml(x.layer)+' &ldquo;'+escHtml(x.v)+'&rdquo;';}).join(' / ')+'</div>';
     });
-    h+=_mkDet('<span style=”color:#0891b2;”>~ Format-only differences</span>'
-      +'<span style=”color:#6b7280;font-weight:400;font-size:10px;”>Same value, different representation — safe to ignore</span>',fB);
+    h+='</div></details>';
   }
 
-  // Expandable: needs review
+  // Needs review: amber, visible by default, tax-critical badge per item
   if(nR>0){
-    var rB='';
+    h+='<div style=”border-top:1px solid #fde68a;padding:10px 14px 8px;background:#fffbeb;”>';
+    h+='<div style=”font-size:10px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;”>&#9888; '+nR+' field'+(nR!==1?'s':'')+' need'+(nR===1?'s':'')+' review &mdash; layers disagree</div>';
     _reviewList.forEach(function(rv){
-      rB+=_mkRow('<strong>'+escHtml(rv.name)+'</strong>'
-        +(rv.reason?' <span style=”color:#6b7280;font-style:italic;”>('+escHtml(rv.reason)+')</span>':'')
-        +(rv.vals&&rv.vals.length?': '+rv.vals.map(function(x){return escHtml(x.layer)+' “'+escHtml(x.v)+'”';}).join(' / '):''));
+      var _tc=triageMap[rv.name]&&triageMap[rv.name].taxCritical;
+      h+='<div style=”padding:7px 10px;border-radius:6px;margin-bottom:5px;background:'+(_tc?'#fef9c3':'#fff')+';border:1px solid '+(_tc?'#fbbf24':'#fde68a')+';”>';
+      h+='<div style=”display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;font-weight:600;color:#92400e;margin-bottom:2px;”>';
+      h+=escHtml(rv.name);
+      if(_tc)h+='<span style=”font-size:9px;font-weight:700;background:#f59e0b;color:#fff;padding:1px 6px;border-radius:8px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;”>Tax-Critical</span>';
+      if(rv.reason)h+='<span style=”font-size:11px;font-weight:400;color:#b45309;font-style:italic;”>('+escHtml(rv.reason)+')</span>';
+      h+='</div>';
+      if(rv.vals&&rv.vals.length){
+        h+='<div style=”font-size:11px;color:#78350f;display:flex;gap:6px;flex-wrap:wrap;”>'
+          +rv.vals.map(function(x){return '<span style=”background:#fff8f0;border-radius:3px;padding:1px 5px;border:1px solid #fde68a;”>'+escHtml(x.layer)+': &ldquo;'+escHtml(x.v)+'&rdquo;</span>';}).join(' vs ')
+          +'</div>';
+      }
+      h+='</div>';
     });
-    h+=_mkDet('<span style=”color:#d97706;”>&#9888; Fields needing review</span>'
-      +'<span style=”color:#6b7280;font-weight:400;font-size:10px;”>Layers disagree — verify before submitting</span>',rB);
+    h+='</div>';
   }
 
   // Expandable: suppressions (separate — NOT counted as mis-extraction catches)
@@ -3161,14 +3181,6 @@ function renderIntel(data){
   html+='<div class="card"><div class="card-title">This Invoice</div><div style="padding:14px;font-size:13px;">';
   html+=triggered?'<span class="pill corrected">CLAUDE TRIGGERED</span> Hit the confidence gate '+(cv.triggerReasons&&cv.triggerReasons.length?'('+cv.triggerReasons.join('; ')+')':'')+' — Claude adjudicated. Cost: Doc AI $'+money(cv.docAICostPerDoc||roi.docAICost)+' + Claude $'+money(cv.claudeCostPerDoc||roi.claudeCost)+'.':'<span class="pill verified">AUTO-VERIFIED</span> Doc AI high-confidence on all tax-critical fields — Claude NOT called. Cost: Doc AI $'+money(cv.docAICostPerDoc||roi.docAICost)+' only. (~80% of invoices.)';
   html+='</div></div>';
-  if(_lastHeroN>0){
-    html+='<div class="card"><div class="card-title">&#9889; AI-Caught Mis-extractions <span style="font-size:11px;font-weight:400;color:#6b7280;">this invoice</span></div>';
-    html+='<div style="padding:14px;">';
-    html+='<div style="font-size:28px;font-weight:800;color:#7c3aed;margin-bottom:2px;">$'+money(_lastHeroImpact)+'</div>';
-    html+='<div style="font-size:13px;color:#374151;margin-bottom:6px;">corrected before tax calculation</div>';
-    html+='<div style="font-size:12px;color:#6b7280;">'+_lastHeroN+' extraction error'+(_lastHeroN!==1?'s':'')+' caught by '+escHtml(_humanLayersGlobal(_lastHeroLayerSet))+'</div>';
-    html+='</div></div>';
-  }
   html+='<div class="card"><div class="card-title">Annual ROI — adjust the levers <span class="pill mock">ILLUSTRATIVE</span></div><div style="padding:14px;">';
   html+='<div class="cv-two" style="grid-template-columns:1fr 1fr 1fr;">';
   html+='<div class="lever"><label>Annual invoice volume</label><input type="number" id="lv-vol" value="'+roi.annualVolume+'" oninput="updateROI()"></div>';
@@ -3186,7 +3198,16 @@ function renderIntel(data){
   html+='<div class="card-title">&#128269; Roadmap: Claude Vision <span class="pill planned" style="margin-left:8px;">PLANNED</span></div>';
   html+='<div style="padding:14px;font-size:13px;line-height:1.7;color:#555;">Today the layer audits against extracted text — ideal for digital PDFs. Next phase adds <strong>Claude Vision</strong>: the model reads the invoice image directly, closing the gap on scanned, handwritten, and image-based invoices that OCR text extraction can\'t fully capture. Same architecture, multimodal upgrade — driving accuracy higher on the hardest documents.</div>';
   html+='</div>';
-  document.getElementById('intelContent').innerHTML='<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Extraction Intelligence Report</summary>'+html+'</details>';
+  var _iHero='';
+  if(_lastHeroN>0){
+    _iHero='<div style="background:linear-gradient(135deg,#1e1b4b,#4338ca,#7c3aed);border-radius:10px;margin-bottom:14px;padding:20px 24px;color:#fff;">'
+      +'<div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#c4b5fd;font-weight:700;margin-bottom:8px;">&#9889; Extraction Errors Caught This Invoice</div>'
+      +'<div style="font-size:42px;font-weight:900;line-height:1;letter-spacing:-.5px;margin-bottom:6px;">$'+money(_lastHeroImpact)+'</div>'
+      +'<div style="font-size:15px;font-weight:600;color:#e9d5ff;margin-bottom:10px;">in extraction errors caught before tax calculation</div>'
+      +'<div style="font-size:13px;color:#c4b5fd;line-height:1.5;">'+_lastHeroN+' line price'+(_lastHeroN!==1?'s':'')+' Doc AI misread &mdash; corrected by '+escHtml(_humanLayersGlobal(_lastHeroLayerSet))+'</div>'
+      +'</div>';
+  }
+  document.getElementById('intelContent').innerHTML=_iHero+'<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Extraction Intelligence Report</summary>'+html+'</details>';
   updateROI();
 }
 

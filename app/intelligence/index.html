@@ -274,7 +274,7 @@
               <div style="font-size:12.5px;color:#111827;line-height:1.65;margin-bottom:13px;">
                 In 2025, US sales/use tax saw <strong>681 rate changes</strong> and <strong>335 new taxing jurisdictions</strong> &mdash; a 10-year high. <em style="color:#6b7280;">Accuracy is a moving target.</em>
               </div>
-              <!-- Sparkline trend -->
+              <!-- Sparkline trend — new taxing cities only (consistent single metric) -->
               <div style="margin-bottom:10px;">
                 <div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:6px;">New taxing cities &nbsp;<span style="color:#dc2626;font-size:11px;">10-year high &#x25B2;</span></div>
                 <div style="display:flex;align-items:flex-end;gap:6px;">
@@ -293,14 +293,8 @@
                     <div style="width:22px;background:#f59e0b;border-radius:2px 2px 0 0;height:36px;"></div>
                     <div style="font-size:9px;color:#9ca3af;">&rsquo;24</div>
                   </div>
-                  <div style="width:1px;background:#e5e7eb;margin:0 4px;height:52px;"></div>
-                  <div style="display:flex;flex-direction:column;align-items:center;gap:2px;">
-                    <div style="font-size:9px;color:#dc2626;font-weight:700;line-height:1;">335</div>
-                    <div style="width:26px;background:#dc2626;border-radius:2px 2px 0 0;height:36px;"></div>
-                    <div style="font-size:9px;color:#dc2626;font-weight:700;">&rsquo;25</div>
-                  </div>
                 </div>
-                <div style="font-size:10px;color:#9ca3af;margin-top:4px;font-style:italic;">New taxing jurisdictions &mdash; Vertex data</div>
+                <div style="font-size:10px;color:#9ca3af;margin-top:4px;font-style:italic;">New taxing cities per year &middot; Vertex annual reports</div>
               </div>
               <div style="font-size:10px;color:#b0b7c3;border-top:1px solid #f0f0f0;padding-top:7px;">
                 Source: Vertex 2025 U.S. Sales Tax Rates and Rules Report &middot; Data year: 2025
@@ -3557,8 +3551,7 @@ function renderIntel(data){
   html+='<div class="card-title">&#128269; Roadmap: Claude Vision <span class="pill planned" style="margin-left:8px;">PLANNED</span></div>';
   html+='<div style="padding:14px;font-size:13px;line-height:1.7;color:#555;">Today the layer audits against extracted text — ideal for digital PDFs. Next phase adds <strong>Claude Vision</strong>: the model reads the invoice image directly, closing the gap on scanned, handwritten, and image-based invoices that OCR text extraction can\'t fully capture. Same architecture, multimodal upgrade — driving accuracy higher on the hardest documents.</div>';
   html+='</div>';
-  var _iHero='<div style="background:linear-gradient(135deg,#1e1b4b,#4338ca,#7c3aed);border-radius:10px;margin-bottom:14px;padding:22px 24px;color:#fff;">'
-    +'<div style="font-size:13px;font-weight:700;color:#c4b5fd;letter-spacing:.04em;margin-bottom:12px;">&#9889; Extraction Intelligence &mdash; last-mile reconciliation</div>'
+  var _iHeroBody='<div style="background:linear-gradient(135deg,#1e1b4b,#4338ca,#7c3aed);padding:20px 24px 22px;color:#fff;">'
     +'<div style="font-size:14px;color:#e9d5ff;line-height:1.7;margin-bottom:12px;">'
     +'Document AI extracts every invoice at ~70&ndash;80% first-pass accuracy in seconds. The intelligence layer reconciles each extracted line value against the invoice&rsquo;s own arithmetic (unit price &times; quantity) and cross-checks fields across layers before tax calculation &mdash; surfacing any discrepancy transparently for review.'
     +'</div>'
@@ -3566,6 +3559,13 @@ function renderIntel(data){
     +'Corrections surfaced here can feed Document AI&rsquo;s continuous learning to improve first-pass accuracy over time.'
     +'</div>'
     +'</div>';
+  var _iHero='<details style="margin-bottom:14px;border:1px solid #ddd6fe;border-radius:8px;overflow:hidden;">'
+    +'<summary style="padding:10px 16px;background:#f5f3ff;font-size:12px;font-weight:700;color:#4338ca;cursor:pointer;display:flex;align-items:center;list-style:none;">'
+    +'&#9889; Extraction Intelligence &mdash; last-mile reconciliation'
+    +'<span style="margin-left:auto;font-size:11px;font-weight:400;color:#7c3aed;">Read more &#x25B8;</span>'
+    +'</summary>'
+    +_iHeroBody
+    +'</details>';
   document.getElementById('intelContent').innerHTML=_iHero+'<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Extraction Intelligence Report</summary>'+html+'</details>';
   updateROI();
 }

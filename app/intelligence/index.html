@@ -287,7 +287,8 @@ var allInvoices=[], filterAssetOnly=true;
 var pdfDoc=null, pdfCurrentPage=1, pdfTotalPages=0, pdfViewport=null, ocrBoxes=[];
 var roi={annualVolume:25000,triggerRate:20,minutesSaved:8,hourlyRate:50,docAICost:0.02,claudeCost:0.015};
 // ── Cross-function state: populated by _buildTriageBanner, read by table renderer + renderIntel ──
-var _benignFields=new Set(), _reviewFieldNames=new Set(), _correctedFieldNames=new Set();
+var _benignFields=new Set(), _reviewFieldNames=new Set(), _correctedFieldNames=new Set(), _gapFillFields=new Set();
+var _reviewReasonMap={}; // fieldName → reason string, for inline evidence in table
 var _lastHeroN=0, _lastHeroImpact=0, _lastHeroLayerSet=[];
 function _humanLayersGlobal(ls){
   if(!ls||!ls.length)return 'intelligence layer';
@@ -295,15 +296,27 @@ function _humanLayersGlobal(ls){
   if(ls.length===2)return ls[0]+' and '+ls[1];
   return 'all three layers';
 }
+function _toggleRowGroup(el,group){
+  var willShow=el.getAttribute('data-showing')==='hidden';
+  document.querySelectorAll('#genKv .kv-field-row[data-row-type="'+group+'"]').forEach(function(r){r.style.display=willShow?'':'none';});
+  el.setAttribute('data-showing',willShow?'shown':'hidden');
+  var arr=el.querySelector('.grp-arrow');if(arr)arr.textContent=willShow?'▾':'▸';
+}
 function _toggleFieldRows(btn){
   var showing=btn.getAttribute('data-showing');
-  var rows=document.querySelectorAll('#genKv .kv-field-row[data-row-type="agree"],#genKv .kv-field-row[data-row-type="benign"]');
   if(showing==='filtered'){
-    rows.forEach(function(r){r.style.display='';});
-    btn.setAttribute('data-showing','all');
-    btn.innerHTML='Hide matching fields &#9650;';
+    document.querySelectorAll('#genKv .kv-field-row').forEach(function(r){r.style.display='';});
+    document.querySelectorAll('#genKv .kv-grp-hdr').forEach(function(h){
+      h.setAttribute('data-showing','shown');var arr=h.querySelector('.grp-arrow');if(arr)arr.textContent='▾';
+    });
+    btn.setAttribute('data-showing','all');btn.innerHTML='&#9650; Collapse to attention fields';
   } else {
-    rows.forEach(function(r){r.style.display='none';});
+    ['benign','agree'].forEach(function(g){
+      document.querySelectorAll('#genKv .kv-field-row[data-row-type="'+g+'"]').forEach(function(r){r.style.display='none';});
+      document.querySelectorAll('#genKv .kv-grp-hdr[data-group="'+g+'"]').forEach(function(h){
+        h.setAttribute('data-showing','hidden');var arr=h.querySelector('.grp-arrow');if(arr)arr.textContent='▸';
+      });
+    });
     btn.setAttribute('data-showing','filtered');
     btn.innerHTML='Show all '+document.querySelectorAll('#genKv .kv-field-row').length+' fields &#9660;';
   }
@@ -790,6 +803,7 @@ function _fieldTriageStatus(df, cf, vf, d_run, c_run, v_run, fieldName){
 
 function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   if(!allNames.length)return '';
+  _gapFillFields=new Set(); // reset before each run
 
   // ── Classify each field into agree / caught / benign-format / review ─────
   var _agreeList=[],_caughtList=[],_benignList=[],_reviewList=[];
@@ -807,8 +821,11 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
     // Caught: Claude or Vision explicitly corrected this field (prefer Claude if both)
     var _corrF=(c_run&&cf&&cf.verdict==='CORRECTED')?cf:(v_run&&vf&&vf.verdict==='CORRECTED')?vf:null;
     if(_corrF){
-      _caughtList.push({name:name,from:_corrF.docAIValue||dv,to:_corrF.correctValue||'',reason:_corrF.reason||''});
-      return;
+      var _cFrom=_corrF.docAIValue||dv, _cTo=_corrF.correctValue||'';
+      var _cFromN=_feNormalize(name,_cFrom), _cToN=_feNormalize(name,_cTo);
+      // If normalization shows equal values (e.g. same date in different format), treat as format-only
+      if(_cFromN&&_cToN&&_cFromN===_cToN){/* fall through to _classifyDiff below */}
+      else{_caughtList.push({name:name,from:_cFrom,to:_cTo,reason:_corrF.reason||''});return;}
     }
     // Build populated value list for ran layers
     var vals=[];
@@ -820,7 +837,7 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
       _reviewList.push({name:name,vals:vals,reason:'flagged for uncertainty'});return;
     }
     // Doc AI blank, another layer gap-filled → review (needs confirmation)
-    if(!hasD&&(hasC||hasV)){_reviewList.push({name:name,vals:vals,reason:'Doc AI blank — gap-filled'});return;}
+    if(!hasD&&(hasC||hasV)){_gapFillFields.add(name);_reviewList.push({name:name,vals:vals,reason:'Doc AI blank — gap-filled'});return;}
     // Single source → agree (no conflict possible)
     if(vals.length<=1){_agreeList.push(name);return;}
     // Raw case-insensitive agreement
@@ -913,6 +930,9 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   _benignFields=new Set(_benignList.map(function(b){return b.name;}));
   _reviewFieldNames=new Set(_reviewList.map(function(r){return r.name;}));
   _correctedFieldNames=new Set(_caughtList.map(function(c){return c.name;}));
+  // _gapFillFields is populated inline during the classification loop above
+  _reviewReasonMap={};
+  _reviewList.forEach(function(r){if(r.reason)_reviewReasonMap[r.name]=r.reason;});
 
   // ── Plain-language analyst status line ────────────────────────────────────
   var _taxCritReview=_reviewList.filter(function(rv){return triageMap[rv.name]&&triageMap[rv.name].taxCritical;}).length;
@@ -1010,25 +1030,24 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
     h+='</div></details>';
   }
 
-  // Needs review: amber, visible by default, tax-critical badge per item
+  // Needs review: compact action list — field names + badges only; detail is in the table below
   if(nR>0){
-    h+='<div style=”border-top:1px solid #fde68a;padding:10px 14px 8px;background:#fffbeb;”>';
-    h+='<div style=”font-size:10px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;”>&#9888; '+nR+' field'+(nR!==1?'s':'')+' need'+(nR===1?'s':'')+' review &mdash; layers disagree</div>';
+    h+='<div style=”border-top:1px solid #fde68a;padding:8px 14px 6px;background:#fffbeb;”>';
+    h+='<div style=”font-size:10px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px;”>&#9888; Fields needing review &mdash; see table below</div>';
+    h+='<div style=”display:flex;flex-wrap:wrap;gap:5px;”>';
     _reviewList.forEach(function(rv){
       var _tc=triageMap[rv.name]&&triageMap[rv.name].taxCritical;
-      h+='<div style=”padding:7px 10px;border-radius:6px;margin-bottom:5px;background:'+(_tc?'#fef9c3':'#fff')+';border:1px solid '+(_tc?'#fbbf24':'#fde68a')+';”>';
-      h+='<div style=”display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12.5px;font-weight:600;color:#92400e;margin-bottom:2px;”>';
+      var _gf=_gapFillFields.has(rv.name);
+      h+='<span style=”display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;'
+        +'padding:3px 8px;border-radius:12px;border:1px solid '
+        +(_tc?'#f59e0b;background:#fef9c3;color:#92400e;':_gf?'#93c5fd;background:#eff6ff;color:#1d4ed8;':'#fde68a;background:#fff8f0;color:#92400e;')
+        +'”>';
       h+=escHtml(rv.name);
-      if(_tc)h+='<span style=”font-size:9px;font-weight:700;background:#f59e0b;color:#fff;padding:1px 6px;border-radius:8px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;”>Tax-Critical</span>';
-      if(rv.reason)h+='<span style=”font-size:11px;font-weight:400;color:#b45309;font-style:italic;”>('+escHtml(rv.reason)+')</span>';
-      h+='</div>';
-      if(rv.vals&&rv.vals.length){
-        h+='<div style=”font-size:11px;color:#78350f;display:flex;gap:6px;flex-wrap:wrap;”>'
-          +rv.vals.map(function(x){return '<span style=”background:#fff8f0;border-radius:3px;padding:1px 5px;border:1px solid #fde68a;”>'+escHtml(x.layer)+': &ldquo;'+escHtml(x.v)+'&rdquo;</span>';}).join(' vs ')
-          +'</div>';
-      }
-      h+='</div>';
+      if(_tc)h+='<span style=”font-size:8px;font-weight:800;background:#f59e0b;color:#fff;padding:1px 4px;border-radius:5px;text-transform:uppercase;letter-spacing:.04em;”>TC</span>';
+      if(_gf)h+='<span style=”font-size:8px;font-weight:800;background:#3b82f6;color:#fff;padding:1px 4px;border-radius:5px;text-transform:uppercase;”>gap</span>';
+      h+='</span>';
     });
+    h+='</div>';
     h+='</div>';
   }
 
@@ -1353,7 +1372,25 @@ function renderGeneral(data){
     :'<span style="display:block;color:#bbb;font-size:10px;font-weight:400;margin-top:2px;">&#9675; not run</span>';};
   var TH='padding:8px 10px;background:#f0f2f5;border-bottom:2px solid #d0d0d0;color:#444;font-weight:600;font-size:12px;text-align:left;vertical-align:bottom;';
 
+  // ── Sort allNames by severity: (a) TC review, (b) review, (c) gap-fill, (d) corrected, (e) benign, (f) agree ──
+  allNames.sort(function(a,b){
+    function _pri(n){
+      if(_reviewFieldNames.has(n)){
+        if(_gapFillFields.has(n))return 30;
+        return (triageMap[n]&&triageMap[n].taxCritical)?10:20;
+      }
+      if(_correctedFieldNames.has(n))return 40;
+      if(_benignFields.has(n))return 50;
+      return 60;
+    }
+    return _pri(a)-_pri(b);
+  });
+
+  // Pre-compute section counts for section header labels
+  var _benignCount=allNames.filter(function(n){return _benignFields.has(n);}).length;
+  var _agreeCount=allNames.filter(function(n){return !_reviewFieldNames.has(n)&&!_correctedFieldNames.has(n)&&!_benignFields.has(n);}).length;
   var _attentionCount=_reviewFieldNames.size+_correctedFieldNames.size;
+
   var html=_attentionCount>0
     ?'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;">'
       +'<span style="font-size:11px;color:#6b7280;">Showing '+_attentionCount+' field'+(_attentionCount!==1?'s':'')+' that need attention</span>'
@@ -1370,6 +1407,7 @@ function renderGeneral(data){
     +'<th style="'+TH+'width:72px;text-align:center;">Triage</th>'
     +'</tr></thead><tbody>';
 
+  var _lastSevGroup=''; // track group changes to inject section headers
   allNames.forEach(function(name){
     var df=docaiResult&&docaiResult.fields?docaiResult.fields.find(function(f){return f.fieldName===name;}):null;
     var cf=claudeResult&&claudeResult.fields?claudeResult.fields.find(function(f){return f.fieldName===name;}):null;
@@ -1378,8 +1416,7 @@ function renderGeneral(data){
     var cv=cf?(cf.correctValue||cf.docAIValue||''):null;
     var vv=vf?(vf.correctValue||vf.docAIValue||''):null;
     var taxCrit=!!(df&&df.taxCritical)||(cf&&cf.taxCritical)||(vf&&vf.taxCritical);
-
-    var rowDisagrees=disagree([d_run?dv:null,c_run?cv:null,v_run?vv:null]);
+    var _isGapFill=_gapFillFields.has(name);
 
     // Best value — normalization-aware selection (Rule 4 + Rule 5):
     //   • Reformat-only diffs (date, amount, address tokens) count as AGREEMENT → Doc AI wins.
@@ -1389,23 +1426,67 @@ function renderGeneral(data){
     var bestVal='', bestLayer='';
     var dvN=_feNormalize(name,dv), cvN=_feNormalize(name,cv), vvN=_feNormalize(name,vv);
     if(dvN){
-      // Doc AI has a value: Vision checked first (latest layer), then Claude
       if(v_run&&vvN&&_pickBest(dvN,vvN)==='chall'){bestVal=vv;bestLayer='vision';}
       else if(c_run&&cvN&&_pickBest(dvN,cvN)==='chall'){bestVal=cv;bestLayer='claude';}
       else{bestVal=dv;bestLayer='docai';}
     } else if(cvN){
-      // Doc AI blank — Claude gap-fill; Vision wins only if it genuinely improves on Claude
       if(v_run&&vvN&&_pickBest(cvN,vvN)==='chall'){bestVal=vv;bestLayer='vision';}
       else{bestVal=cv;bestLayer='claude';}
-    } else if(vvN){
-      // Both blank — Vision is the sole source
-      bestVal=vv;bestLayer='vision';
+    } else if(vvN){bestVal=vv;bestLayer='vision';}
+
+    // ── Row type and visual weight ──────────────────────────────────────────
+    var _isBenign=_benignFields.has(name);
+    var _rowType=_reviewFieldNames.has(name)?'review':_correctedFieldNames.has(name)?'corrected':_isBenign?'benign':'agree';
+    // Semantic severity group (for section headers + styling)
+    var _sevGroup=(_rowType==='review'&&taxCrit&&!_isGapFill)?'review-tc'
+      :(_rowType==='review'&&!_isGapFill)?'review'
+      :(_rowType==='review'&&_isGapFill)?'gapfill'
+      :_rowType; // corrected / benign / agree
+
+    // Insert section header row when severity group crosses into benign or agree
+    if(_sevGroup!==_lastSevGroup){
+      _lastSevGroup=_sevGroup;
+      if(_sevGroup==='benign'&&_benignCount>0){
+        var _bGrpStyle='cursor:pointer;background:#f3f4f6;border-top:2px solid #e5e7eb;border-bottom:1px solid #e5e7eb;';
+        html+='<tr class="kv-grp-hdr" data-group="benign" data-showing="hidden" onclick="_toggleRowGroup(this,\'benign\')" style="'+_bGrpStyle+'">'
+          +'<td colspan="6" style="padding:6px 12px;font-size:11px;color:#9ca3af;font-weight:500;user-select:none;">'
+          +'<span class="grp-arrow" style="margin-right:6px;font-size:10px;">▸</span>'
+          +_benignCount+' format-only difference'+(_benignCount!==1?'s':'')+' &mdash; same value, different representation (safe to ignore)'
+          +'</td></tr>';
+      }
+      if(_sevGroup==='agree'&&_agreeCount>0){
+        var _aGrpStyle='cursor:pointer;background:#f0fdf4;border-top:2px solid #e5e7eb;border-bottom:1px solid #e5e7eb;';
+        html+='<tr class="kv-grp-hdr" data-group="agree" data-showing="hidden" onclick="_toggleRowGroup(this,\'agree\')" style="'+_aGrpStyle+'">'
+          +'<td colspan="6" style="padding:6px 12px;font-size:11px;color:#6b7280;font-weight:500;user-select:none;">'
+          +'<span class="grp-arrow" style="margin-right:6px;font-size:10px;">▸</span>'
+          +_agreeCount+' field'+(_agreeCount!==1?'s':'')+' matched across all layers'
+          +'</td></tr>';
+      }
     }
 
-    // Doc AI cell: value + confidence colouring
+    var _defaultHide=(_rowType==='agree'||_rowType==='benign')&&_attentionCount>0;
+
+    // Visual weight by severity
+    var rowBg,tcBorder;
+    if(_rowType==='review'&&taxCrit&&!_isGapFill){
+      rowBg='background:#fef2f2;';tcBorder='border-left:3px solid #dc2626;';
+    } else if(_rowType==='review'&&_isGapFill){
+      rowBg='background:#eff6ff;';tcBorder='border-left:3px solid #3b82f6;';
+    } else if(_rowType==='review'){
+      rowBg='background:#fffbeb;';tcBorder='border-left:3px solid #f59e0b;';
+    } else if(_rowType==='corrected'){
+      rowBg='background:#f0fdf4;';tcBorder='border-left:2px solid #22c55e;';
+    } else if(_isBenign){
+      rowBg='background:#f9fafb;';tcBorder='border-left:2px solid transparent;';
+    } else {
+      rowBg='';tcBorder='border-left:2px solid transparent;';
+    }
+
+    // Doc AI cell: value + confidence colouring; show (blank) for gap-fills
     var conf=df?(df.confidence||0):0;
     var confSpan=conf>0?(' <span style="font-size:10px;color:'+(conf>=85?'#107e3e':'#df6e0c')+';margin-left:3px;">'+(conf<85?'⚠ ':'')+conf+'%</span>'):'';
     var dCell=!d_run?'<span style="color:#ddd;font-size:11px;">—</span>'
+      :_isGapFill?'<span style="color:#93c5fd;font-size:11px;font-style:italic;">(blank — gap-filled by another layer)</span>'
       :dv?escHtml(dv)+confSpan:'<span style="color:#aaa;">—</span>';
 
     // Claude cell: ✓ same / ✎ corrected
@@ -1433,24 +1514,39 @@ function renderGeneral(data){
     else if(bestLayer==='vision')badge='<span style="display:inline-block;background:#fce7f3;color:#9d174d;padding:1px 5px;border-radius:6px;font-size:10px;font-weight:700;margin-left:4px;vertical-align:middle;">Vision</span>';
     var bestCell=bestVal?'<strong>'+escHtml(bestVal)+'</strong>'+badge:'<span style="color:#aaa;">—</span>';
 
+    // Triage pill — match severity colour
     var ts=triageMap[name]||{status:'AUTO_APPROVE',taxCritical:false};
-    var _isBenign=_benignFields.has(name);
-    var _rowType=_reviewFieldNames.has(name)?'review':_correctedFieldNames.has(name)?'corrected':_isBenign?'benign':'agree';
-    var _defaultHide=(_rowType==='agree'||_rowType==='benign')&&(_reviewFieldNames.size+_correctedFieldNames.size)>0;
-    var rowBg=_isBenign?'background:#f9fafb;':
-              ts.status==='MANUAL_ACTION'?'background:#fef2f2;':
-              (ts.status==='REVIEW'||rowDisagrees)?'background:#fffbeb;':'';
-    var tcBorder=taxCrit?'border-left:3px solid #0a6ed1;':'border-left:3px solid transparent;';
     var triagePill=ts.status==='NOT_APPLICABLE'?'<span style="color:#ccc;font-size:11px;">—</span>'
       :ts.status==='AUTO_APPROVE'?'<span title="Auto-approve" style="display:inline-block;background:#d1fae5;color:#065f46;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#10003;</span>'
+      :(_rowType==='review'&&taxCrit&&!_isGapFill)?'<span title="Tax-critical — needs review" style="display:inline-block;background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#9888; TC</span>'
+      :(_rowType==='review'&&_isGapFill)?'<span title="Gap-fill — confirm value" style="display:inline-block;background:#dbeafe;color:#1d4ed8;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#8853;</span>'
       :ts.status==='REVIEW'?'<span title="Needs review" style="display:inline-block;background:#fef3c7;color:#92400e;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">&#9888;</span>'
       :'<span title="Manual review required" style="display:inline-block;background:#fee2e2;color:#991b1b;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700;">!</span>';
+
     html+='<tr class="kv-field-row" data-field="'+name+'" data-row-type="'+_rowType+'" onmouseenter="hoverField(\''+name+'\')" onmouseleave="hoverField(null)"'
       +' style="'+(_defaultHide?'display:none;':'')+'border-bottom:1px solid #f0f0f0;'+rowBg+tcBorder+'">';
+
+    // Field name cell — severity-weighted, with inline reason for review rows
     var _tcProv=taxCrit?((cf&&cf.provenance)||(df&&df.provenance)||null):null;
-    html+='<td style="padding:7px 10px;font-weight:500;color:#333;font-size:12px;">'
-      +(taxCrit?'<span title="Tax-critical" style="color:#0a6ed1;font-size:9px;vertical-align:middle;">&#9670; </span>':'')+escHtml(name)
+    var _nameWeight=(_rowType==='review'&&taxCrit&&!_isGapFill)?'font-weight:700;':(_rowType==='review')?'font-weight:600;':'font-weight:500;';
+    var _nameColor=(_rowType==='review'&&taxCrit&&!_isGapFill)?'color:#991b1b;':(_rowType==='review'&&_isGapFill)?'color:#1d4ed8;':(_rowType==='review')?'color:#92400e;':'color:#333;';
+    var _inlineReason='';
+    if(_rowType==='review'){
+      if(_isGapFill){
+        var _gfLayer=bestLayer==='vision'?'Vision':bestLayer==='claude'?'Claude':'another layer';
+        _inlineReason='<div style="font-size:10px;margin-top:2px;color:#3b82f6;font-weight:600;">added by '+escHtml(_gfLayer)+'</div>';
+      } else {
+        var _rvReason=_reviewReasonMap[name]||'';
+        if(_rvReason)_inlineReason='<div style="font-size:10px;font-style:italic;margin-top:2px;color:'+(taxCrit?'#dc2626':'#b45309')+';">'+escHtml(_rvReason)+'</div>';
+      }
+    }
+    var _tcBadge=taxCrit&&_rowType==='review'&&!_isGapFill
+      ?'<span style="font-size:8px;font-weight:800;background:#dc2626;color:#fff;padding:1px 5px;border-radius:5px;text-transform:uppercase;letter-spacing:.04em;margin-left:5px;vertical-align:middle;">TAX-CRITICAL</span>':''
+      ;
+    html+='<td style="padding:7px 10px;font-size:12px;'+_nameWeight+_nameColor+'">'
+      +escHtml(name)+_tcBadge
       +(_tcProv?'<div style="margin-top:3px;">'+provenancePill(_tcProv)+'</div>':'')
+      +_inlineReason
       +'</td>';
     html+='<td style="padding:7px 10px;color:#444;line-height:1.4;">'+dCell+'</td>';
     html+='<td style="padding:7px 10px;line-height:1.4;">'+cCell+'</td>';

@@ -183,68 +183,13 @@
         </div>
       </div>
       <!-- ── End context header ──────────────────────────────────────────────── -->
-      <div class="ai-banner">&#9889; Three-layer extraction intelligence &mdash; SAP Document AI extracts (fast OCR baseline); Claude via SAP AI Core audits each field, corrects the risky ones, and validates against SAP asset master data; Claude Vision (beta) reads the invoice image directly for scanned documents. Per-field routing shows exactly which layer resolved each value.</div>
-      <div style="background:#fff4e5;border:1px solid #f0c674;color:#8a5a00;padding:8px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;line-height:1.5;">
-  &#9888;&#65039; <strong>POC data notice:</strong> Document AI extraction and the Claude intelligence audit are <strong style="color:#107e3e;">LIVE</strong>. Vertex jurisdiction tax, reconciliation amounts, and SAP asset/PO data are <strong style="color:#b25000;">MOCKED</strong> for demonstration &mdash; marked <span style="background:#ffe0b2;color:#8a5a00;padding:1px 6px;border-radius:3px;font-weight:700;">MOCK</span> where they appear.
-</div>
-      <div class="picker-box">
-        <div class="picker-header">
-          <strong>&#128194; Demo Invoices</strong>
-          <span id="pickerCount" class="picker-count">Loading…</span>
-        </div>
-        <div class="quick-picks">
-          <span style="font-size:11px;color:#888;margin-right:2px;">Jump to:</span>
-          <button class="qp-btn qp-ok" onclick="quickPickByScnid('8505960503')">&#10003; Clean match</button>
-          <button class="qp-btn qp-warn" onclick="quickPickByScnid('8505845443')">&#9888; Mismatch</button>
-          <button class="qp-btn qp-alt" onclick="quickPickByType('construction')">&#127959; Construction</button>
-          <button class="qp-btn qp-alt" onclick="quickPickByType('freight')">&#128666; Freight</button>
-        </div>
-        <label class="filter-toggle">
-          <input type="checkbox" id="assetFilter" checked onchange="applyAssetFilter()" />
-          Show only invoices with asset data
-          <span id="assetFilterNote" style="font-size:11px;color:#888;"></span>
-        </label>
-        <input type="text" id="pickerSearch" class="picker-search" placeholder="&#128269; Search by SCN ID or supplier name…" oninput="filterPicker()" />
-        <select id="pickerSelect" class="picker-select" size="6" onchange="pickInvoice(this.value)">
-          <option value="">Loading invoice list…</option>
-        </select>
-        <div class="picker-divider">&#9135;&#9135;&#9135; or upload your own below &#9135;&#9135;&#9135;</div>
-      </div>
-      <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
-        <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg" style="display:none" />
-        <p style="font-size:15px;font-weight:500;">&#128196; Drop invoice PDF to run the intelligence audit</p>
-        <p style="font-size:12px;color:#888;margin-top:4px;">or click to browse</p>
-      </div>
-      <div class="tabs" style="margin:0 -18px 0;">
-        <div class="tab active" data-section="general" onclick="showTab('general',this)">GENERAL INFORMATION</div>
-        <div class="tab" data-section="lineitems" onclick="showTab('lineitems',this)">INVOICE LINE ITEMS</div>
-        <div class="tab" data-section="reconciliation" onclick="showTab('reconciliation',this)">TAX RECONCILIATION + TAX ENGINE</div>
-        <div class="tab ai-tab" data-section="intel" onclick="showTab('intel',this)">&#9889; INTELLIGENCE REPORT<span class="badge-new">NEW</span></div>
-        <div class="tab" data-section="changelog" onclick="showTab('changelog',this)">CHANGE LOG</div>
-      </div>
-      <div class="controls">
-        <button class="primary" id="docaiBtn" disabled onclick="runDocAI()">1. Run Doc AI Extraction</button>
-        <button class="primary" id="claudeBtn" disabled onclick="runClaude()" style="background:#3452d1;">2. Send to Claude for Audit</button>
-        <button class="primary" id="visionBtn" disabled onclick="runVision()" style="background:#9d174d;">3. Audit with Claude Vision <span style="font-size:11px;font-weight:400;">(beta)</span></button>
-        <span id="fileName" style="font-size:12px;color:#555;"></span>
-        <span id="modeBadge"></span>
-      </div>
-      <div id="statusBox"></div>
-      <div id="gateBlockBanner"></div>
-      <div class="card" id="fieldVerifCard" style="display:none;">
-        <div class="card-title">Three-Layer Field Comparison <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
-        <div id="triageBanner" style="margin-bottom:8px;"></div>
-        <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
-      </div>
-
-      <div class="panel" id="panel-intel">
-        <div class="sec-title">INTELLIGENCE REPORT</div>
-        <!-- ── Tax Environment panel ──────────────────────────────────────── -->
-        <div style="background:#fff;border-radius:8px;margin-bottom:14px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.08);">
-          <div style="padding:10px 16px;font-size:13px;font-weight:700;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">
-            US Tax Jurisdiction Environment
-            <span style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:4px;font-size:10px;font-weight:700;padding:2px 9px;letter-spacing:.02em;">2025 DATA</span>
-          </div>
+      <!-- ── US Tax Jurisdiction Environment — collapsed context panel ──────── -->
+      <details style="margin-bottom:14px;border:1px solid #bfdbfe;border-radius:8px;overflow:hidden;">
+        <summary style="padding:10px 16px;background:#eff6ff;font-size:12px;font-weight:700;color:#1e40af;cursor:pointer;display:flex;align-items:center;list-style:none;">
+          US Tax Jurisdiction Environment &mdash; 2025 tax changes at a 10-year high &middot; every invoice validated before tax rules apply
+          <span style="margin-left:auto;font-size:11px;font-weight:400;color:#3b82f6;white-space:nowrap;">Read more &#x25B8;</span>
+        </summary>
+        <div style="background:#fff;border-radius:0 0 8px 8px;overflow:hidden;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;">
             <!-- LEFT: The environment -->
             <div style="padding:15px 18px;border-right:1px solid #f0f0f0;">
@@ -311,6 +256,64 @@
             </div>
           </div>
         </div>
+      </details>
+      <!-- ── End US Tax Jurisdiction Environment ────────────────────────────── -->
+      <div class="ai-banner">&#9889; Three-layer extraction intelligence &mdash; SAP Document AI extracts (fast OCR baseline); Claude via SAP AI Core audits each field, corrects the risky ones, and validates against SAP asset master data; Claude Vision (beta) reads the invoice image directly for scanned documents. Per-field routing shows exactly which layer resolved each value.</div>
+      <div style="background:#fff4e5;border:1px solid #f0c674;color:#8a5a00;padding:8px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;line-height:1.5;">
+  &#9888;&#65039; <strong>POC data notice:</strong> Document AI extraction and the Claude intelligence audit are <strong style="color:#107e3e;">LIVE</strong>. Vertex jurisdiction tax, reconciliation amounts, and SAP asset/PO data are <strong style="color:#b25000;">MOCKED</strong> for demonstration &mdash; marked <span style="background:#ffe0b2;color:#8a5a00;padding:1px 6px;border-radius:3px;font-weight:700;">MOCK</span> where they appear.
+</div>
+      <div class="picker-box">
+        <div class="picker-header">
+          <strong>&#128194; Demo Invoices</strong>
+          <span id="pickerCount" class="picker-count">Loading…</span>
+        </div>
+        <div class="quick-picks">
+          <span style="font-size:11px;color:#888;margin-right:2px;">Jump to:</span>
+          <button class="qp-btn qp-ok" onclick="quickPickByScnid('8505960503')">&#10003; Clean match</button>
+          <button class="qp-btn qp-warn" onclick="quickPickByScnid('8505845443')">&#9888; Mismatch</button>
+          <button class="qp-btn qp-alt" onclick="quickPickByType('construction')">&#127959; Construction</button>
+          <button class="qp-btn qp-alt" onclick="quickPickByType('freight')">&#128666; Freight</button>
+        </div>
+        <label class="filter-toggle">
+          <input type="checkbox" id="assetFilter" checked onchange="applyAssetFilter()" />
+          Show only invoices with asset data
+          <span id="assetFilterNote" style="font-size:11px;color:#888;"></span>
+        </label>
+        <input type="text" id="pickerSearch" class="picker-search" placeholder="&#128269; Search by SCN ID or supplier name…" oninput="filterPicker()" />
+        <select id="pickerSelect" class="picker-select" size="6" onchange="pickInvoice(this.value)">
+          <option value="">Loading invoice list…</option>
+        </select>
+        <div class="picker-divider">&#9135;&#9135;&#9135; or upload your own below &#9135;&#9135;&#9135;</div>
+      </div>
+      <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg" style="display:none" />
+        <p style="font-size:15px;font-weight:500;">&#128196; Drop invoice PDF to run the intelligence audit</p>
+        <p style="font-size:12px;color:#888;margin-top:4px;">or click to browse</p>
+      </div>
+      <div class="tabs" style="margin:0 -18px 0;">
+        <div class="tab active" data-section="general" onclick="showTab('general',this)">GENERAL INFORMATION</div>
+        <div class="tab" data-section="lineitems" onclick="showTab('lineitems',this)">INVOICE LINE ITEMS</div>
+        <div class="tab" data-section="reconciliation" onclick="showTab('reconciliation',this)">TAX RECONCILIATION + TAX ENGINE</div>
+        <div class="tab ai-tab" data-section="intel" onclick="showTab('intel',this)">&#9889; INTELLIGENCE REPORT<span class="badge-new">NEW</span></div>
+        <div class="tab" data-section="changelog" onclick="showTab('changelog',this)">CHANGE LOG</div>
+      </div>
+      <div class="controls">
+        <button class="primary" id="docaiBtn" disabled onclick="runDocAI()">1. Run Doc AI Extraction</button>
+        <button class="primary" id="claudeBtn" disabled onclick="runClaude()" style="background:#3452d1;">2. Send to Claude for Audit</button>
+        <button class="primary" id="visionBtn" disabled onclick="runVision()" style="background:#9d174d;">3. Audit with Claude Vision <span style="font-size:11px;font-weight:400;">(beta)</span></button>
+        <span id="fileName" style="font-size:12px;color:#555;"></span>
+        <span id="modeBadge"></span>
+      </div>
+      <div id="statusBox"></div>
+      <div id="gateBlockBanner"></div>
+      <div class="card" id="fieldVerifCard" style="display:none;">
+        <div class="card-title">Three-Layer Field Comparison <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
+        <div id="triageBanner" style="margin-bottom:8px;"></div>
+        <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
+      </div>
+
+      <div class="panel" id="panel-intel">
+        <div class="sec-title">INTELLIGENCE REPORT</div>
         <div id="intelContent">
           <div class="hero-banner"><h2>&#9889; Extraction Intelligence Report</h2><p>An engine-agnostic AI layer that verifies, corrects, and explains every extracted field &mdash; turning ~80% raw OCR into audit-ready data.</p></div>
           <div class="placeholder">Upload an invoice to generate the intelligence report</div>

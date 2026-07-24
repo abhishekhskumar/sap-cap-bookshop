@@ -142,6 +142,8 @@
   .sbs-reason{font-size:10px;color:#bbb;margin-top:1px;}
   .sbs-empty{padding:16px 12px;font-size:12px;color:#bbb;font-style:italic;text-align:center;}
   .sbs-new{display:inline-block;background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-bottom:2px;}
+  /* ── Page-level self-balance gate banner ─────────────────────────────── */
+  #gateBlockBanner{position:sticky;top:38px;z-index:19;margin:0 -18px;display:none;}
 </style>
 </head>
 <body>
@@ -228,6 +230,7 @@
         <span id="modeBadge"></span>
       </div>
       <div id="statusBox"></div>
+      <div id="gateBlockBanner"></div>
       <div class="card" id="fieldVerifCard" style="display:none;">
         <div class="card-title">Three-Layer Field Comparison <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
         <div id="triageBanner" style="margin-bottom:8px;"></div>
@@ -2591,10 +2594,11 @@ function _teSalestaxzipCard(alt,vendorTax){
 function renderTaxEngine(data){
   var el=document.getElementById('taxEngineContent');
   if(!el)return;
+  var _gbb=document.getElementById('gateBlockBanner');
 
   // Best-available default: reconciled payload when present, else highest-priority single layer
   var _bestAvail=_reconciledTaxPayload?'reconciled':(claudeResult&&claudeResult.taxPayload)?'claude':(docaiResult&&docaiResult.taxPayload)?'docai':(visionResult&&visionResult.taxPayload)?'vision':null;
-  if(!_bestAvail){el.innerHTML='<div class="placeholder">Process an invoice to see the tax engine demo</div>';return;}
+  if(!_bestAvail){el.innerHTML='<div class="placeholder">Process an invoice to see the tax engine demo</div>';if(_gbb){_gbb.style.display='none';_gbb.innerHTML='';}return;}
 
   // Resolve selected layer; reset to best-available if selection is stale (layer cleared or has no payload)
   var _teLayerMap={docai:docaiResult,claude:claudeResult,vision:visionResult};
@@ -2619,6 +2623,45 @@ function renderTaxEngine(data){
   var _gateSrc=visionResult||claudeResult||docaiResult;
   var _selfBalance=_computeSelfBalance(_gateSrc);
   var _gateBlocked=_selfBalance!=null&&!_selfBalance.passes;
+
+  // ── Page-level gate banner (visible regardless of active tab) ────────────
+  if(_gbb){
+    if(_gateBlocked&&_selfBalance){
+      var _gb2=_selfBalance;
+      var _gbbBtn,_gbbIsManual2=false;
+      if(visionRan){
+        _gbbIsManual2=true;
+        _gbbBtn='<div style="background:rgba(0,0,0,.25);color:#fca5a5;font-weight:700;font-size:12px;padding:10px 18px;border-radius:8px;white-space:nowrap;flex-shrink:0;text-align:center;border:1.5px solid rgba(252,165,165,.35);letter-spacing:.2px;">Manual Action Required</div>';
+      } else if(claudeRan){
+        _gbbBtn='<button onclick="runVision()" style="background:#fff;color:#991b1b;border:none;font-weight:700;font-size:13px;padding:10px 20px;border-radius:8px;cursor:pointer;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.22);flex-shrink:0;">Run Claude Vision to reconcile &rarr;</button>';
+      } else {
+        _gbbBtn='<button onclick="runClaude()" style="background:#fff;color:#991b1b;border:none;font-weight:700;font-size:13px;padding:10px 20px;border-radius:8px;cursor:pointer;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.22);flex-shrink:0;">Run Claude to reconcile &rarr;</button>';
+      }
+      var _gbbHtml='<div style="background:linear-gradient(135deg,#7f1d1d 0%,#991b1b 45%,#b91c1c 100%);'
+        +'padding:11px 20px;display:flex;align-items:center;gap:16px;box-shadow:0 3px 10px rgba(127,29,29,.45);">'
+        +'<span style="font-size:20px;flex-shrink:0;">&#128274;</span>'
+        +'<div style="flex:1;min-width:0;">'
+        +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">'
+        +'<span style="font-size:13px;font-weight:700;color:#fff;">Validation caught a discrepancy &mdash; tax calculation paused</span>'
+        +'<span style="font-size:10px;font-weight:700;background:rgba(0,0,0,.3);color:#fca5a5;padding:2px 9px;border-radius:6px;letter-spacing:.4px;white-space:nowrap;">'
+        +(_gbbIsManual2?'MANUAL ACTION REQUIRED':'BLOCKED')+'</span>'
+        +'</div>'
+        +'<div style="font-size:12px;color:#fecaca;line-height:1.5;">'
+        +'The extracted line items total <strong style="color:#fff;">$'+money(_gb2.lhs)+'</strong> '
+        +'but the invoice\'s gross is <strong style="color:#fff;">$'+money(_gb2.gross)+'</strong> '
+        +'(<strong style="color:#fef08a;">$'+money(_gb2.delta)+' gap</strong>). '
+        +'This must be reconciled before tax can be calculated.'
+        +'</div>'
+        +'</div>'
+        +_gbbBtn
+        +'</div>';
+      _gbb.innerHTML=_gbbHtml;
+      _gbb.style.display='block';
+    } else {
+      _gbb.style.display='none';
+      _gbb.innerHTML='';
+    }
+  }
 
   var jur=tp.jurisdiction||{};
   var tot=tp.totals||{};

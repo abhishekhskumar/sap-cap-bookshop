@@ -326,7 +326,7 @@
         <div id="chargeStatusBanner"></div>
         <div id="manualAddressEntry"></div>
         <div class="card" id="generalInfoCard" style="display:none;">
-          <div class="card-title">General Information <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
+          <div class="card-title">Invoice vs. Asset Record (ZA02) <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
           <div id="genInfoTable"></div>
         </div>
       </div>
@@ -367,6 +367,7 @@ var pdfDoc=null, pdfCurrentPage=1, pdfTotalPages=0, pdfViewport=null, ocrBoxes=[
 var roi={annualVolume:25000,triggerRate:20,minutesSaved:8,hourlyRate:50,docAICost:0.02,claudeCost:0.015};
 // ── Cross-function state: populated by _buildTriageBanner, read by table renderer + renderIntel ──
 var _benignFields=new Set(), _reviewFieldNames=new Set(), _correctedFieldNames=new Set(), _gapFillFields=new Set();
+var _catchCount=0; // line-item CORRECTED_AMOUNT count; set by _buildTriageBanner, read by table renderer
 var _reviewReasonMap={}; // fieldName → reason string, for inline evidence in table
 var _lastHeroN=0, _lastHeroImpact=0, _lastHeroLayerSet=[];
 function _humanLayersGlobal(ls){
@@ -1085,6 +1086,7 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   _benignFields=new Set(_benignList.map(function(b){return b.name;}));
   _reviewFieldNames=new Set(_reviewList.map(function(r){return r.name;}));
   _correctedFieldNames=new Set(_caughtList.map(function(c){return c.name;}));
+  _catchCount=_catchList.length; // expose line-item corrections to the table renderer
   // _gapFillFields is populated inline during the classification loop above
   _reviewReasonMap={};
   _reviewList.forEach(function(r){if(r.reason)_reviewReasonMap[r.name]=r.reason;});
@@ -1543,14 +1545,26 @@ function renderGeneral(data){
   // Pre-compute section counts for section header labels
   var _benignCount=allNames.filter(function(n){return _benignFields.has(n);}).length;
   var _agreeCount=allNames.filter(function(n){return !_reviewFieldNames.has(n)&&!_correctedFieldNames.has(n)&&!_benignFields.has(n);}).length;
-  var _attentionCount=_reviewFieldNames.size+_correctedFieldNames.size;
+  // INTENDED: _attentionCount drives discrepancies-only default + "Show all fields" toggle.
+  // Counts header-field disagreements, header-field corrections, AND line-item amount corrections.
+  // All three sources mean the analyst has something to review — do not narrow this formula.
+  var _attentionCount=_reviewFieldNames.size+_correctedFieldNames.size+_catchCount;
 
-  var html=_attentionCount>0
-    ?'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;">'
+  // INTENDED: discrepancies-only default + show-all on demand. Do not remove this conditional.
+  // all-agree → entire table collapsed; discrepancies → matching rows hidden, toggle available.
+  var html;
+  if(_attentionCount===0){
+    // All layers agree — collapse table so analyst sees "OK" at a glance; can expand if curious
+    html='<details><summary style="cursor:pointer;padding:6px 2px;font-size:12px;color:#374151;user-select:none;">'
+      +'Three-layer comparison &mdash; layers agree &#10003; <span style="color:#6b7280;font-weight:400;">(click to view all '+allNames.length+' fields)</span>'
+      +'</summary><div>';
+  } else {
+    // Discrepancies present — show only rows needing attention; "Show all fields" reveals matching rows on demand
+    html='<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;">'
       +'<span style="font-size:11px;color:#6b7280;">Showing '+_attentionCount+' field'+(_attentionCount!==1?'s':'')+' that need attention</span>'
       +'<button onclick="_toggleFieldRows(this)" data-showing="filtered" style="font-size:11px;padding:3px 10px;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;background:#fff;color:#374151;">Show all fields &#9660;</button>'
-      +'</div>'
-    :'';
+      +'</div>';
+  }
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
   html+='<thead><tr>'
     +'<th style="'+TH+'width:148px;">Field Name</th>'
@@ -1706,6 +1720,7 @@ function renderGeneral(data){
     html+='</tr>';
   });
   html+='</tbody></table>';
+  if(_attentionCount===0){html+='</div></details>';}
 
   // Summary stat — narrative detail is in triageBanner; show only field count here
   if(genStat){

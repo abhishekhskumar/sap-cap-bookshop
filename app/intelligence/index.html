@@ -36,7 +36,7 @@
   .tab.active { color:#0a6ed1; font-weight:600; border-bottom-color:#0a6ed1; }
   .tab.ai-tab.active { color:#0070f2; border-bottom-color:#0070f2; }
   .tab .badge-new { background:#0070f2; color:#fff; font-size:9px; padding:1px 5px; border-radius:8px; margin-left:5px; }
-  .tab-content { padding:18px; } .panel { scroll-margin-top:45px; }
+  .tab-content { padding:18px; } .panel { scroll-margin-top:45px; } .panel+.panel { margin-top:24px; border-top:2px solid #d5dde3; padding-top:20px; }
   .upload-zone { border:2px dashed #aab; border-radius:8px; padding:20px; text-align:center; cursor:pointer; background:#fff; margin-bottom:14px; }
   .upload-zone:hover { border-color:#0a6ed1; background:#f0f7ff; } .upload-zone.active { border-color:#107e3e; background:#f0fdf5; }
   .controls { display:flex; gap:12px; align-items:center; margin-bottom:14px; }
@@ -237,31 +237,9 @@
         <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
       </div>
 
-      <div class="panel" id="panel-general">
-        <div class="sec-title">GENERAL INFORMATION</div>
-        <div id="chargeVerdictBanner"></div>
-        <div id="chargeStatusBanner"></div>
-        <div id="manualAddressEntry"></div>
-        <div class="card" id="generalInfoCard" style="display:none;">
-          <div class="card-title">General Information <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
-          <div id="genInfoTable"></div>
-        </div>
-      </div>
-
-      <div class="panel" id="panel-lineitems">
-        <div class="sec-title">INVOICE LINE ITEMS</div>
-        <div class="card"><div id="lineItemsContent"><div class="placeholder">Upload an invoice to see line items with freight and Vertex tax</div></div></div>
-      </div>
-
-      <div class="panel" id="panel-reconciliation">
-        <div class="sec-title">TAX RECONCILIATION</div>
-        <div class="card"><div id="reconContent"><div class="placeholder">Upload an invoice to reconcile vendor tax vs Vertex tax</div></div></div>
-        <div class="sec-title" style="margin-top:18px;">TAX ENGINE</div>
-        <div id="taxEngineContent"><div class="placeholder">Process an invoice to see the tax engine demo</div></div>
-      </div>
-
       <div class="panel" id="panel-intel">
-        <!-- ── Tax Environment panel — static, always visible ──────────────── -->
+        <div class="sec-title">INTELLIGENCE REPORT</div>
+        <!-- ── Tax Environment panel ──────────────────────────────────────── -->
         <div style="background:#fff;border-radius:8px;margin-bottom:14px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.08);">
           <div style="padding:10px 16px;font-size:13px;font-weight:700;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;">
             US Tax Jurisdiction Environment
@@ -271,12 +249,10 @@
             <!-- LEFT: The environment -->
             <div style="padding:15px 18px;border-right:1px solid #f0f0f0;">
               <div style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#6b7280;font-weight:700;margin-bottom:8px;">The environment</div>
-
               <!-- Element A: editorial framing caption — not a data point -->
               <div style="font-size:12px;color:#6b7280;font-style:italic;line-height:1.5;margin-bottom:11px;">
                 Tax-change activity accelerated to a 10-year high in 2025.
               </div>
-
               <!-- Element B: measured data — sourced, exact years, no invented values -->
               <div style="border:1.5px solid #0ea5e9;border-radius:6px;padding:10px 12px;background:#f0f9ff;margin-bottom:9px;">
                 <div style="font-size:9px;font-weight:800;color:#0369a1;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Measured &middot; Vertex 2025 Report</div>
@@ -295,7 +271,6 @@
                   <div style="font-size:11px;color:#0369a1;font-weight:700;align-self:center;padding-left:4px;">doubled in one year</div>
                 </div>
               </div>
-
               <!-- Element C: conceptual complexity diagram — labeled as illustrative, NOT a data series -->
               <div style="border:1.5px dashed #d1d5db;border-radius:6px;padding:10px 12px;background:#f9fafb;margin-bottom:10px;">
                 <div style="font-size:9px;font-weight:800;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px;">Conceptual &middot; Complexity structure (not a data series)</div>
@@ -308,8 +283,7 @@
                   <div style="font-size:10px;color:#6b7280;padding-left:10px;">&#x21B3; changing continuously</div>
                 </div>
               </div>
-
-              <!-- Source line — under all three elements -->
+              <!-- Source line -->
               <div style="font-size:10px;color:#b0b7c3;border-top:1px solid #f0f0f0;padding-top:7px;">
                 Source: Vertex 2025 U.S. Sales Tax Rates and Rules Report &middot; Data year: 2025
               </div>
@@ -337,11 +311,33 @@
             </div>
           </div>
         </div>
-        <!-- ── End tax environment panel ──────────────────────────────────── -->
         <div id="intelContent">
           <div class="hero-banner"><h2>&#9889; Extraction Intelligence Report</h2><p>An engine-agnostic AI layer that verifies, corrects, and explains every extracted field &mdash; turning ~80% raw OCR into audit-ready data.</p></div>
           <div class="placeholder">Upload an invoice to generate the intelligence report</div>
         </div>
+      </div>
+
+      <div class="panel" id="panel-general">
+        <div class="sec-title">GENERAL INFORMATION</div>
+        <div id="chargeVerdictBanner"></div>
+        <div id="chargeStatusBanner"></div>
+        <div id="manualAddressEntry"></div>
+        <div class="card" id="generalInfoCard" style="display:none;">
+          <div class="card-title">General Information <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
+          <div id="genInfoTable"></div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-lineitems">
+        <div class="sec-title">INVOICE LINE ITEMS</div>
+        <div class="card"><div id="lineItemsContent"><div class="placeholder">Upload an invoice to see line items with freight and Vertex tax</div></div></div>
+      </div>
+
+      <div class="panel" id="panel-reconciliation">
+        <div class="sec-title">TAX RECONCILIATION</div>
+        <div class="card"><div id="reconContent"><div class="placeholder">Upload an invoice to reconcile vendor tax vs Vertex tax</div></div></div>
+        <div class="sec-title" style="margin-top:18px;">TAX ENGINE</div>
+        <div id="taxEngineContent"><div class="placeholder">Process an invoice to see the tax engine demo</div></div>
       </div>
 
       <div class="panel" id="panel-changelog">
@@ -504,14 +500,11 @@ function _showPdfFallback(b64){
   if(nav)nav.style.display='none';
   if(wrap)wrap.innerHTML='<embed src="data:application/pdf;base64,'+b64+'" type="application/pdf" style="width:100%;height:100%;min-height:600px;border:none;" />';
 }
-var _TAB_PANELS=['general','lineitems','reconciliation','intel','changelog'];
 function showTab(name,el){
   document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
   el.classList.add('active');
-  _TAB_PANELS.forEach(function(id){
-    var p=document.getElementById('panel-'+id);
-    if(p)p.style.display=(id===name)?'block':'none';
-  });
+  var target=document.getElementById('panel-'+name);
+  if(target)target.scrollIntoView({behavior:'smooth',block:'start'});
 }
 function confDot(c){var cls=c>=90?'conf-high':c>=70?'conf-med':'conf-low';return '<span class="conf-dot '+cls+'" title="'+c+'%"></span>';}
 function verdictPill(v){var m={VERIFIED:'verified',CORRECTED:'corrected',FLAGGED:'flagged'};return '<span class="pill '+(m[v]||'verified')+'">'+v+'</span>';}
@@ -3566,7 +3559,7 @@ function renderIntel(data){
   html+='</div>';
   var _iHeroBody='<div style="background:linear-gradient(135deg,#1e1b4b,#4338ca,#7c3aed);padding:20px 24px 22px;color:#fff;">'
     +'<div style="font-size:14px;color:#e9d5ff;line-height:1.7;margin-bottom:12px;">'
-    +'Document AI extracts every invoice at ~70&ndash;80% first-pass accuracy in seconds. The intelligence layer reconciles each extracted line value against the invoice&rsquo;s own arithmetic (unit price &times; quantity) and cross-checks fields across layers before tax calculation &mdash; surfacing any discrepancy transparently for review.'
+    +'Document AI extracts every invoice at ~70&ndash;80% first-pass accuracy in seconds. The intelligence layer reconciles each invoice&rsquo;s extracted line totals, freight, and tax against the invoice&rsquo;s extracted gross amount, and cross-checks fields across layers before tax calculation &mdash; surfacing any discrepancy transparently for review.'
     +'</div>'
     +'<div style="font-size:12px;color:#c4b5fd;line-height:1.6;border-top:1px solid rgba(255,255,255,.18);padding-top:10px;">'
     +'Corrections surfaced here can feed Document AI&rsquo;s continuous learning to improve first-pass accuracy over time.'
@@ -3729,13 +3722,6 @@ async function pickInvoice(fileName){
 
 loadInvoiceList();
 
-// ── Panel init: show only the default (General Information) tab on load ──
-(function(){
-  _TAB_PANELS.forEach(function(id){
-    var p=document.getElementById('panel-'+id);
-    if(p)p.style.display=(id==='general')?'block':'none';
-  });
-})();
 </script>
 </body>
 </html>

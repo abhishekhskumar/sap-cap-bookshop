@@ -455,20 +455,36 @@ var TAX_TOLERANCE=1.00;
 var SELF_BALANCE_TOLERANCE=1.00;
 function money(n){var x=parseFloat(n)||0;return x.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function escHtml(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):''}
-// Check whether the extracted totals self-balance: |net + freight + vendorTax - gross| ≤ SELF_BALANCE_TOLERANCE.
-// Returns null when the check does not apply (construction mode, missing gross, or no payload).
-// Otherwise returns {passes, lhs, gross, delta}.
-function _computeSelfBalance(tp,vTax){
-  if(!tp||tp.invoiceMode==='construction')return null;
-  var tot=tp.totals||{};
-  var net=tot.net!=null?parseFloat(tot.net):null;
-  var freight=tot.freight!=null?parseFloat(tot.freight):0;
-  var gross=tot.gross!=null?parseFloat(tot.gross):null;
-  if(net==null||gross==null||gross===0)return null;
-  var tax=vTax!=null?parseFloat(String(vTax).replace(/[^0-9.\-]/g,''))||0:0;
-  var lhs=+(net+freight+tax).toFixed(2);
-  var delta=+Math.abs(lhs-gross).toFixed(2);
-  return{passes:delta<=SELF_BALANCE_TOLERANCE,lhs:lhs,gross:gross,delta:delta};
+// Self-balance gate: Σ(keepLine netPrice) + invoiceFreightTotal + vendorTaxAmount vs EXTRACTED gross.
+// r = highest-priority layer result (docaiResult / claudeResult / visionResult).
+//
+// Why these sources, not taxPayload.totals:
+//   totals.net    = Σ(li.itemAmount) = Σ(netPrice + distributedFreight) — freight already inside
+//   totals.freight = invoiceFreightTotal — same freight again → double-count = the ~$5k delta
+//   totals.gross  = invoiceNetTotal + vendorTax — DERIVED in code, not read from invoice document
+//
+// Correct formula (never double-counts):
+//   keepNet  = Σ(li.amount) on KEEP lines — raw docAI netPrice, no distributed freight
+//   freight  = result.invoiceFreightTotal — server combines freight lines + shippingCostHeader once
+//   tax      = result.vendorTaxAmount     — server combines tax lines + taxAmount header once
+//   rhs      = result.fields['grossAmount'].docAIValue — extracted from invoice, not derived
+//
+// Returns null when check does not apply (construction, no extracted gross, or no payload).
+function _computeSelfBalance(r){
+  if(!r||r.invoiceMode==='construction')return null;
+  var _gf=(r.fields||[]).find(function(f){return f.fieldName==='grossAmount';});
+  if(!_gf)return null;
+  var _gv=(_gf.verdict==='CORRECTED'&&_gf.correctValue)?_gf.correctValue:_gf.docAIValue;
+  var extractedGross=parseFloat(String(_gv||'').replace(/[^0-9.\-]/g,''))||null;
+  if(!extractedGross||extractedGross===0)return null;
+  var keepNet=+((r.lineItems||[]).reduce(function(s,li){
+    return s+(parseFloat(li.amount||li.netAmount||0)||0);
+  },0)).toFixed(2);
+  var freight=parseFloat(r.invoiceFreightTotal||0)||0;
+  var tax=r.vendorTaxAmount!=null?parseFloat(String(r.vendorTaxAmount).replace(/[^0-9.\-]/g,''))||0:0;
+  var lhs=+(keepNet+freight+tax).toFixed(2);
+  var delta=+Math.abs(lhs-extractedGross).toFixed(2);
+  return{passes:delta<=SELF_BALANCE_TOLERANCE,lhs:lhs,gross:extractedGross,delta:delta};
 }
 function disagree(values){
   var present=values
@@ -2598,10 +2614,10 @@ function renderTaxEngine(data){
   window._teTaxPayload=tp;
   window._teVendorTax=vendorTax;
 
-  // Self-balance gate: always evaluated on the reconciled payload (= raw DocAI when only DocAI ran),
-  // regardless of which layer tab the analyst has selected for viewing.
-  var _gateVTax=(_reconSrc||{}).vendorTaxAmount;
-  var _selfBalance=_computeSelfBalance(_reconciledTaxPayload,_gateVTax);
+  // Self-balance gate: Σ(keepLine.amount) + invoiceFreightTotal + vendorTaxAmount vs extracted gross.
+  // Uses highest-priority layer result (not _reconciledTaxPayload) so it reads extracted, not derived, values.
+  var _gateSrc=visionResult||claudeResult||docaiResult;
+  var _selfBalance=_computeSelfBalance(_gateSrc);
   var _gateBlocked=_selfBalance!=null&&!_selfBalance.passes;
 
   var jur=tp.jurisdiction||{};

@@ -280,7 +280,7 @@
 </div>
 
 <script>
-var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[];
+var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[], _reconciledTaxPayload=null, _reconciledCalcResult=null;
 var _lineViewMode='compare';
 var _statusDocAI=null, _statusClaude=null, _statusVision=null;
 var allInvoices=[], filterAssetOnly=true;
@@ -318,6 +318,55 @@ function _toggleFieldRows(btn){
     btn.setAttribute('data-showing','filtered');
     btn.innerHTML='Show all fields &#9660;';
   }
+}
+function _buildReconciledPayload(){
+  var _d=docaiResult&&docaiResult.taxPayload?docaiResult.taxPayload:null;
+  var _c=claudeResult&&claudeResult.taxPayload?claudeResult.taxPayload:null;
+  var _v=visionResult&&visionResult.taxPayload?visionResult.taxPayload:null;
+  if(!_d&&!_c&&!_v)return null;
+  // Base: highest-priority available payload (deep clone to avoid mutating layer result)
+  var base=_v||_c||_d;
+  var out=JSON.parse(JSON.stringify(base));
+  // Per-field numeric reconciliation (Vision > Claude > Doc AI challenger logic)
+  var _totalsSpec=[
+    {key:'net',     field:'netAmount'},
+    {key:'freight', field:'shippingCostHeader'},
+    {key:'gross',   field:'grossAmount'}
+  ];
+  var _reconTotals=out.totals?Object.assign({},out.totals):{};
+  _totalsSpec.forEach(function(spec){
+    var dv=_d&&_d.totals&&_d.totals[spec.key]!=null?String(_d.totals[spec.key]):'';
+    var cv=_c&&_c.totals&&_c.totals[spec.key]!=null?String(_c.totals[spec.key]):'';
+    var vv=_v&&_v.totals&&_v.totals[spec.key]!=null?String(_v.totals[spec.key]):'';
+    var dvN=_feNormalize(spec.field,dv),cvN=_feNormalize(spec.field,cv),vvN=_feNormalize(spec.field,vv);
+    var bestRaw=dv;
+    if(visionRan&&vvN&&dvN&&_pickBest(dvN,vvN)==='chall')bestRaw=vv;
+    else if(claudeRan&&cvN&&dvN&&_pickBest(dvN,cvN)==='chall')bestRaw=cv;
+    else if(!dvN&&vvN)bestRaw=vv;
+    else if(!dvN&&cvN)bestRaw=cv;
+    var bestNum=parseFloat(bestRaw);
+    if(!isNaN(bestNum))_reconTotals[spec.key]=bestNum;
+  });
+  out.totals=_reconTotals;
+  // Jurisdiction: pick best non-sentinel value per component (Vision > Claude > Doc AI)
+  var _dJur=(_d&&_d.jurisdiction)||{};
+  var _cJur=(_c&&_c.jurisdiction)||{};
+  var _vJur=(_v&&_v.jurisdiction)||{};
+  var _reconJur=Object.assign({},out.jurisdiction||{});
+  ['state','postalCode','city','county'].forEach(function(jk){
+    var dj=_isNoAddressSentinel(_dJur[jk])?'':(_dJur[jk]||'');
+    var cj=_isNoAddressSentinel(_cJur[jk])?'':(_cJur[jk]||'');
+    var vj=_isNoAddressSentinel(_vJur[jk])?'':(_vJur[jk]||'');
+    var dvN2=dj.toString().trim().toLowerCase();
+    var cvN2=cj.toString().trim().toLowerCase();
+    var vvN2=vj.toString().trim().toLowerCase();
+    var best=dj;
+    if(visionRan&&vvN2&&vvN2!==dvN2)best=vj;
+    else if(claudeRan&&cvN2&&cvN2!==dvN2)best=cj;
+    if(best)_reconJur[jk]=best;
+  });
+  out.jurisdiction=_reconJur;
+  return out;
 }
 var dropZone=document.getElementById('dropZone'), fileInput=document.getElementById('fileInput'), docaiBtn=document.getElementById('docaiBtn');
 fileInput.addEventListener('change',function(e){handleFile(e.target.files[0]);});
@@ -669,7 +718,7 @@ function setLineView(mode){
   renderLineItems(lastResult||docaiResult||{});
 }
 
-function renderAll(data){ renderGeneral(data); renderRecon(data); renderLineItems(data); renderChangelog(data); renderIntel(data); renderTaxEngine(data); drawOcrBoxes(pdfCurrentPage); }
+function renderAll(data){ renderGeneral(data); _reconciledTaxPayload=_buildReconciledPayload(); _reconciledCalcResult=null; renderRecon(data); renderLineItems(data); renderChangelog(data); renderIntel(data); renderTaxEngine(data); drawOcrBoxes(pdfCurrentPage); }
 
 // ── Frontend normalize — mirrors srv/eval.js normalize() exactly ──────────
 var _FE_DATE_FIELDS=new Set(['documentDate']);
@@ -2510,18 +2559,23 @@ function renderTaxEngine(data){
   var el=document.getElementById('taxEngineContent');
   if(!el)return;
 
-  // Best-available default (Claude → DocAI → Vision)
-  var _bestAvail=(claudeResult&&claudeResult.taxPayload)?'claude':(docaiResult&&docaiResult.taxPayload)?'docai':(visionResult&&visionResult.taxPayload)?'vision':null;
+  // Best-available default: reconciled payload when present, else highest-priority single layer
+  var _bestAvail=_reconciledTaxPayload?'reconciled':(claudeResult&&claudeResult.taxPayload)?'claude':(docaiResult&&docaiResult.taxPayload)?'docai':(visionResult&&visionResult.taxPayload)?'vision':null;
   if(!_bestAvail){el.innerHTML='<div class="placeholder">Process an invoice to see the tax engine demo</div>';return;}
 
   // Resolve selected layer; reset to best-available if selection is stale (layer cleared or has no payload)
   var _teLayerMap={docai:docaiResult,claude:claudeResult,vision:visionResult};
-  var _teCandidate=teLayerView?_teLayerMap[teLayerView]:null;
-  if(!_teCandidate||!_teCandidate.taxPayload) teLayerView=_bestAvail;
-  var src=_teLayerMap[teLayerView];
-
-  var tp=src.taxPayload;
-  var vendorTax=src.vendorTaxAmount;
+  if(teLayerView!=='reconciled'){
+    var _teCandidate=teLayerView?_teLayerMap[teLayerView]:null;
+    if(!_teCandidate||!_teCandidate.taxPayload) teLayerView=_bestAvail;
+  } else if(!_reconciledTaxPayload){
+    teLayerView=_bestAvail;
+  }
+  // For 'reconciled': src provides provenance/vendorTax from the highest-priority layer; tp is the reconciled payload
+  var _reconSrc=claudeResult||docaiResult||visionResult;
+  var src=teLayerView==='reconciled'?_reconSrc:_teLayerMap[teLayerView];
+  var tp=teLayerView==='reconciled'?_reconciledTaxPayload:src.taxPayload;
+  var vendorTax=teLayerView==='reconciled'?(_reconSrc&&_reconSrc.vendorTaxAmount!=null?_reconSrc.vendorTaxAmount:null):src.vendorTaxAmount;
 
   // Persist payload and vendorTax so teSelect can use them after innerHTML is set
   window._teTaxPayload=tp;
@@ -2530,7 +2584,7 @@ function renderTaxEngine(data){
   var jur=tp.jurisdiction||{};
   var tot=tp.totals||{};
   var li_items=tp.lineItems||[];
-  var stxRes=src.taxEngineResults&&src.taxEngineResults.salestaxzip;
+  var stxRes=teLayerView==='reconciled'?_reconciledCalcResult:(src.taxEngineResults&&src.taxEngineResults.salestaxzip);
   var stxAvail=stxRes&&stxRes.available&&stxRes.totalTax!=null;
   var hasVendorTax=vendorTax!=null;
   var _jurCityClean=_isNoAddressSentinel(jur.city)?null:(jur.city||null);
@@ -2542,11 +2596,12 @@ function renderTaxEngine(data){
 
   // ── Layer toggle ──────────────────────────────────────────────────────────
   var _teLayerDefs=[
+    {key:'reconciled',label:'Reconciled Best',color:'#374151',ran:!!(docaiRan||claudeRan||visionRan),hasPayload:!!_reconciledTaxPayload},
     {key:'docai', label:'Doc AI', color:'#107e3e', ran:docaiRan, hasPayload:!!(docaiResult&&docaiResult.taxPayload)},
     {key:'claude',label:'Claude', color:'#3452d1', ran:claudeRan, hasPayload:!!(claudeResult&&claudeResult.taxPayload)},
     {key:'vision',label:'Vision', color:'#9d174d', ran:visionRan, hasPayload:!!(visionResult&&visionResult.taxPayload)}
   ];
-  var _teActiveLabel={'docai':'Doc AI','claude':'Claude','vision':'Vision'}[teLayerView]||teLayerView;
+  var _teActiveLabel={'docai':'Doc AI','claude':'Claude','vision':'Vision','reconciled':'Reconciled Best'}[teLayerView]||teLayerView;
   var html='<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px 6px;flex-wrap:wrap;gap:8px;border-bottom:1px solid #f0f0f0;margin-bottom:2px;">';
   html+='<div style="display:flex;gap:6px;flex-wrap:wrap;">';
   _teLayerDefs.forEach(function(L){
@@ -3015,58 +3070,77 @@ async function _manualZipSubmit(zipId,stateId,btnId,errId){
   if(!/^\d{5}$/.test(zip)){if(errEl)errEl.textContent='ZIP must be exactly 5 digits.';return;}
   if(!/^[A-Z]{2}$/.test(state)){if(errEl)errEl.textContent='State must be 2 letters (e.g. NJ).';return;}
   if(btn){btn.disabled=true;btn.textContent='Calculating…';}
+  var _isReconMode=teLayerView==='reconciled';
   var _srcMap={docai:docaiResult,claude:claudeResult,vision:visionResult};
-  var src=_srcMap[teLayerView];
-  if(!src){if(btn){btn.disabled=false;btn.textContent='Calculate with this address';}return;}
-  // Patch jurisdiction in both live references so Tax Engine re-render and Block 4 fetch use the override
-  if(!src.taxPayload)src.taxPayload={};
-  if(!src.taxPayload.jurisdiction)src.taxPayload.jurisdiction={};
-  src.taxPayload.jurisdiction.postalCode=zip;
-  src.taxPayload.jurisdiction.state=state;
+  var src=_isReconMode?null:_srcMap[teLayerView];
+  if(!_isReconMode&&!src){if(btn){btn.disabled=false;btn.textContent='Calculate with this address';}return;}
+  if(_isReconMode&&!_reconciledTaxPayload){if(btn){btn.disabled=false;btn.textContent='Calculate with this address';}return;}
+  // Patch jurisdiction in the active payload and window._teTaxPayload
+  if(_isReconMode){
+    _reconciledTaxPayload.jurisdiction=_reconciledTaxPayload.jurisdiction||{};
+    _reconciledTaxPayload.jurisdiction.postalCode=zip;
+    _reconciledTaxPayload.jurisdiction.state=state;
+  } else {
+    if(!src.taxPayload)src.taxPayload={};
+    if(!src.taxPayload.jurisdiction)src.taxPayload.jurisdiction={};
+    src.taxPayload.jurisdiction.postalCode=zip;
+    src.taxPayload.jurisdiction.state=state;
+  }
   if(window._teTaxPayload){
     window._teTaxPayload.jurisdiction=window._teTaxPayload.jurisdiction||{};
     window._teTaxPayload.jurisdiction.postalCode=zip;
     window._teTaxPayload.jurisdiction.state=state;
   }
+  var _fetchPayload=_isReconMode?_reconciledTaxPayload:src.taxPayload;
   try{
     var res=await fetch('/api/intelligence/calculateTaxWithEngine',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({taxPayload:JSON.stringify(src.taxPayload),engineName:'salestaxzip'})
+      body:JSON.stringify({taxPayload:JSON.stringify(_fetchPayload),engineName:'salestaxzip'})
     });
     var text=await res.text();
     var result=JSON.parse(text);
     if(result&&typeof result.value==='string')result=JSON.parse(result.value);
-    // Patch Tax Engine results so Block 2 roster shows the new calculated tax
-    if(!src.taxEngineResults)src.taxEngineResults={};
-    src.taxEngineResults.salestaxzip=result;
-    // Tag provenance MANUAL — Block 3 provenance card reads this on re-render
-    if(!src._provenance)src._provenance={};
-    src._provenance.shipToResolution={provenance:'MANUAL',provenanceDetail:'Analyst-entered: ZIP '+zip+', '+state};
-    // Synthesize simplifiedTax from SalesTaxZip component rates so the Reconciliation
-    // panel's "Simplified Rate Calculation" section also updates and clears the no-ZIP callout
-    if(result&&result.available){
-      var _rates={state:0,county:0,city:0,district:0};
-      var _tr=0;
-      if(result.lineItems&&result.lineItems.length>0){
-        (result.lineItems[0].taxes||[]).forEach(function(t){
-          var jt=(t.jurisdiction&&t.jurisdiction.jurisdictionType||'').toLowerCase();
-          var pct=+(t.effectiveRate*100).toFixed(4);
-          if(_rates.hasOwnProperty(jt)){_rates[jt]=pct;_tr+=pct;}
-        });
+    if(_isReconMode){
+      // Store reconciled engine result; tag provenance on the backing layer for recon panel
+      _reconciledCalcResult=result;
+      var _rSrc=claudeResult||docaiResult||visionResult;
+      if(_rSrc){
+        if(!_rSrc._provenance)_rSrc._provenance={};
+        _rSrc._provenance.shipToResolution={provenance:'MANUAL',provenanceDetail:'Analyst-entered: ZIP '+zip+', '+state};
       }
-      var _city=(src.taxPayload.jurisdiction.city||'').toLowerCase();
-      src.simplifiedTax={
-        available:true,
-        key:state+'|'+_city,
-        rates:_rates,
-        totalRate:+_tr.toFixed(3),
-        invoiceTotalLine:+(result.totalTax||0).toFixed(2),
-        invoiceTotalFreight:0,
-        invoiceTotal:+(result.totalTax||0).toFixed(2),
-        lineItems:(src.simplifiedTax&&src.simplifiedTax.lineItems)||[],
-        _fromManualOverride:true
-      };
+    } else {
+      // Patch Tax Engine results so Block 2 roster shows the new calculated tax
+      if(!src.taxEngineResults)src.taxEngineResults={};
+      src.taxEngineResults.salestaxzip=result;
+      // Tag provenance MANUAL — Block 3 provenance card reads this on re-render
+      if(!src._provenance)src._provenance={};
+      src._provenance.shipToResolution={provenance:'MANUAL',provenanceDetail:'Analyst-entered: ZIP '+zip+', '+state};
+      // Synthesize simplifiedTax from SalesTaxZip component rates so the Reconciliation
+      // panel's "Simplified Rate Calculation" section also updates and clears the no-ZIP callout
+      if(result&&result.available){
+        var _rates={state:0,county:0,city:0,district:0};
+        var _tr=0;
+        if(result.lineItems&&result.lineItems.length>0){
+          (result.lineItems[0].taxes||[]).forEach(function(t){
+            var jt=(t.jurisdiction&&t.jurisdiction.jurisdictionType||'').toLowerCase();
+            var pct=+(t.effectiveRate*100).toFixed(4);
+            if(_rates.hasOwnProperty(jt)){_rates[jt]=pct;_tr+=pct;}
+          });
+        }
+        var _city=(src.taxPayload.jurisdiction.city||'').toLowerCase();
+        src.simplifiedTax={
+          available:true,
+          key:state+'|'+_city,
+          rates:_rates,
+          totalRate:+_tr.toFixed(3),
+          invoiceTotalLine:+(result.totalTax||0).toFixed(2),
+          invoiceTotalFreight:0,
+          invoiceTotal:+(result.totalTax||0).toFixed(2),
+          lineItems:(src.simplifiedTax&&src.simplifiedTax.lineItems)||[],
+          _fromManualOverride:true
+        };
+      }
     }
     // Re-render all three panels so the canonical GI form clears and references resolve
     renderGeneral(lastResult);

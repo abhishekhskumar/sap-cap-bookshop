@@ -306,19 +306,6 @@
       </div>
       <div id="statusBox"></div>
       <div id="gateBlockBanner"></div>
-      <div class="card" id="fieldVerifCard" style="display:none;">
-        <div class="card-title">Three-Layer Field Comparison <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
-        <div id="triageBanner" style="margin-bottom:8px;"></div>
-        <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
-      </div>
-
-      <div class="panel" id="panel-intel">
-        <div class="sec-title">INTELLIGENCE REPORT</div>
-        <div id="intelContent">
-          <div class="hero-banner"><h2>&#9889; Extraction Intelligence Report</h2><p>An engine-agnostic AI layer that verifies, corrects, and explains every extracted field &mdash; turning ~80% raw OCR into audit-ready data.</p></div>
-          <div class="placeholder">Upload an invoice to generate the intelligence report</div>
-        </div>
-      </div>
 
       <div class="panel" id="panel-general">
         <div class="sec-title">GENERAL INFORMATION</div>
@@ -328,6 +315,11 @@
         <div class="card" id="generalInfoCard" style="display:none;">
           <div class="card-title">Invoice vs. Asset Record (ZA02) <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
           <div id="genInfoTable"></div>
+        </div>
+        <div class="card" id="fieldVerifCard" style="display:none;">
+          <div class="card-title">Three-Layer Field Comparison <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
+          <div id="triageBanner" style="margin-bottom:8px;"></div>
+          <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
         </div>
       </div>
 
@@ -341,6 +333,14 @@
         <div class="card"><div id="reconContent"><div class="placeholder">Upload an invoice to reconcile vendor tax vs Vertex tax</div></div></div>
         <div class="sec-title" style="margin-top:18px;">TAX ENGINE</div>
         <div id="taxEngineContent"><div class="placeholder">Process an invoice to see the tax engine demo</div></div>
+      </div>
+
+      <div class="panel" id="panel-intel">
+        <div class="sec-title">INTELLIGENCE REPORT</div>
+        <div id="intelContent">
+          <div class="hero-banner"><h2>&#9889; Extraction Intelligence Report</h2><p>An engine-agnostic AI layer that verifies, corrects, and explains every extracted field &mdash; turning ~80% raw OCR into audit-ready data.</p></div>
+          <div class="placeholder">Upload an invoice to generate the intelligence report</div>
+        </div>
       </div>
 
       <div class="panel" id="panel-changelog">
@@ -504,11 +504,30 @@ function _showPdfFallback(b64){
   if(nav)nav.style.display='none';
   if(wrap)wrap.innerHTML='<embed src="data:application/pdf;base64,'+b64+'" type="application/pdf" style="width:100%;height:100%;min-height:600px;border:none;" />';
 }
+var _scrollSpyPaused=false;
 function showTab(name,el){
   document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
   el.classList.add('active');
   var target=document.getElementById('panel-'+name);
-  if(target)target.scrollIntoView({behavior:'smooth',block:'start'});
+  if(target){_scrollSpyPaused=true;target.scrollIntoView({behavior:'smooth',block:'start'});setTimeout(function(){_scrollSpyPaused=false;},900);}
+}
+// Highlights the tab for the panel currently in view as the user scrolls.
+// Paused for 900ms after a tab click so the spy doesn't fight the smooth-scroll animation.
+function _initScrollSpy(){
+  var _pNames=['general','lineitems','reconciliation','intel','changelog'];
+  var _tMap={};
+  _pNames.forEach(function(n){_tMap[n]=document.querySelector('.tab[data-section="'+n+'"]');});
+  var obs=new IntersectionObserver(function(entries){
+    if(_scrollSpyPaused)return;
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        var n=e.target.id.replace('panel-','');
+        document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+        if(_tMap[n])_tMap[n].classList.add('active');
+      }
+    });
+  },{rootMargin:'-45px 0px -55% 0px',threshold:0});
+  _pNames.forEach(function(n){var p=document.getElementById('panel-'+n);if(p)obs.observe(p);});
 }
 function confDot(c){var cls=c>=90?'conf-high':c>=70?'conf-med':'conf-low';return '<span class="conf-dot '+cls+'" title="'+c+'%"></span>';}
 function verdictPill(v){var m={VERIFIED:'verified',CORRECTED:'corrected',FLAGGED:'flagged'};return '<span class="pill '+(m[v]||'verified')+'">'+v+'</span>';}
@@ -3776,6 +3795,7 @@ async function pickInvoice(fileName){
 }
 
 loadInvoiceList();
+_initScrollSpy();
 
 </script>
 </body>

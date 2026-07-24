@@ -2572,7 +2572,7 @@ function _teSalestaxzipCard(alt,vendorTax){
   c+='<div style="padding:10px 14px;background:'+(avail?'#ecfdf5':'#f9fafb')+';border-bottom:1px solid '+(avail?'#a7f3d0':'#e5e7eb')+';display:flex;justify-content:space-between;align-items:center;">';
   c+='<div>';
   c+='<div style="font-weight:700;font-size:13px;color:'+(avail?'#065f46':'#374151')+';">'+escHtml(alt.engineName||'SalesTaxZip')+'</div>';
-  c+='<div style="font-size:10px;color:#6b7280;margin-top:1px;">Illustrative (SalesTaxZip) &mdash; formatted to match Vertex O-Series output; production uses Vertex.</div>';
+  c+='<div style="font-size:10px;color:#6b7280;margin-top:1px;">Rates: SalesTaxZip (live, ZIP-level) &nbsp;&middot;&nbsp; Production engine: Vertex (full-address jurisdiction + product-specific taxability)</div>';
   c+='</div>';
   var badge=avail?(alt.rateSource==='api'?'LIVE ZIP LOOKUP':'LOCAL TABLE'):'NO RATE DATA';
   var badgeBg=avail?(alt.rateSource==='api'?'#0891b2':'#10b981'):'#9ca3af';
@@ -2585,6 +2585,43 @@ function _teSalestaxzipCard(alt,vendorTax){
     +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
     +(avail?' <span style="font-weight:400;font-size:10px;color:#0891b2;">via '+sourceLabel+'</span>':'')
     +'</div>';
+  // ── Jurisdiction Summary — Vertex-shaped document view ───────────────────
+  if(avail&&alt.jurisdictions&&alt.jurisdictions.length){
+    var _jTaxable=alt.docTaxable!=null?alt.docTaxable:alt.subTotal;
+    var _jCombined=alt.combinedRate!=null?alt.combinedRate:alt.jurisdictions.reduce(function(s,j){return s+j.rate;},0);
+    c+='<div style="border:1px solid #a7f3d0;border-radius:6px;margin-bottom:12px;overflow:hidden;">';
+    c+='<div style="padding:6px 12px 5px;background:#d1fae5;border-bottom:1px solid #a7f3d0;display:flex;justify-content:space-between;align-items:center;">';
+    c+='<span style="font-size:11px;font-weight:700;color:#065f46;">Jurisdiction Summary</span>';
+    c+='<span style="font-size:10px;color:#374151;">ZIP: <code style="font-family:monospace;">'+escHtml(alt.rateKey||'—')+'</code></span>';
+    c+='</div>';
+    c+='<table style="width:100%;border-collapse:collapse;font-size:11px;">';
+    c+='<tr style="background:#ecfdf5;">'
+      +'<th style="padding:5px 10px;text-align:left;font-weight:600;color:#374151;">Type</th>'
+      +'<th style="padding:5px 10px;text-align:left;font-weight:600;color:#374151;">Jurisdiction</th>'
+      +'<th style="padding:5px 10px;text-align:right;font-weight:600;color:#374151;">Rate</th>'
+      +'<th style="padding:5px 10px;text-align:right;font-weight:600;color:#374151;">Taxable Base</th>'
+      +'<th style="padding:5px 10px;text-align:right;font-weight:600;color:#374151;">Tax Amount</th>'
+      +'</tr>';
+    alt.jurisdictions.forEach(function(j,ji){
+      var _jbg=ji%2===1?'background:#f9fafb;':'';
+      c+='<tr style="'+_jbg+'">'
+        +'<td style="padding:4px 10px;font-family:monospace;font-size:10px;color:#1d4ed8;">'+escHtml(j.type)+'</td>'
+        +'<td style="padding:4px 10px;color:#111827;">'+escHtml(j.name||j.type)+'</td>'
+        +'<td style="padding:4px 10px;text-align:right;">'+j.rate.toFixed(3)+'%</td>'
+        +'<td style="padding:4px 10px;text-align:right;color:#374151;">$'+money(j.taxableAmount)+'</td>'
+        +'<td style="padding:4px 10px;text-align:right;font-weight:600;color:#065f46;">$'+money(j.taxAmount)+'</td>'
+        +'</tr>';
+    });
+    // Combined row uses alt.totalTax (per-line computation sum — the engine's actual output)
+    c+='<tr style="background:#f0fdf4;border-top:2px solid #6ee7b7;">'
+      +'<td colspan="2" style="padding:5px 10px;font-weight:700;color:#065f46;">Combined</td>'
+      +'<td style="padding:5px 10px;text-align:right;font-weight:700;">'+_jCombined.toFixed(3)+'%</td>'
+      +'<td style="padding:5px 10px;text-align:right;font-weight:700;">$'+money(_jTaxable)+'</td>'
+      +'<td style="padding:5px 10px;text-align:right;font-weight:700;color:#065f46;">$'+money(alt.totalTax)+'</td>'
+      +'</tr>';
+    c+='</table>';
+    c+='</div>';
+  }
   // ── Per-line breakdown (Vertex O-Series lineItems[].taxes[] shape) ────────
   if(avail&&alt.lineItems&&alt.lineItems.length){
     c+='<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Per-Line Jurisdiction Breakdown ('+alt.lineItems.length+(alt.lineItems.length!==1?' lines':' line')+')</summary><div>';

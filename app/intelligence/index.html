@@ -451,8 +451,25 @@ function provenancePill(p){
 }
 // Charge-status tolerance (USD). Config-driven per spec §14; would be server/config-injected in production.
 var TAX_TOLERANCE=1.00;
+// Self-balance gate tolerance (USD). Invoice must satisfy |net+freight+tax - gross| ≤ this before engine runs.
+var SELF_BALANCE_TOLERANCE=1.00;
 function money(n){var x=parseFloat(n)||0;return x.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function escHtml(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'):''}
+// Check whether the extracted totals self-balance: |net + freight + vendorTax - gross| ≤ SELF_BALANCE_TOLERANCE.
+// Returns null when the check does not apply (construction mode, missing gross, or no payload).
+// Otherwise returns {passes, lhs, gross, delta}.
+function _computeSelfBalance(tp,vTax){
+  if(!tp||tp.invoiceMode==='construction')return null;
+  var tot=tp.totals||{};
+  var net=tot.net!=null?parseFloat(tot.net):null;
+  var freight=tot.freight!=null?parseFloat(tot.freight):0;
+  var gross=tot.gross!=null?parseFloat(tot.gross):null;
+  if(net==null||gross==null||gross===0)return null;
+  var tax=vTax!=null?parseFloat(String(vTax).replace(/[^0-9.\-]/g,''))||0:0;
+  var lhs=+(net+freight+tax).toFixed(2);
+  var delta=+Math.abs(lhs-gross).toFixed(2);
+  return{passes:delta<=SELF_BALANCE_TOLERANCE,lhs:lhs,gross:gross,delta:delta};
+}
 function disagree(values){
   var present=values
     .filter(function(v){return v!==null&&v!==undefined&&String(v).trim()!=='';})
@@ -2581,6 +2598,12 @@ function renderTaxEngine(data){
   window._teTaxPayload=tp;
   window._teVendorTax=vendorTax;
 
+  // Self-balance gate: always evaluated on the reconciled payload (= raw DocAI when only DocAI ran),
+  // regardless of which layer tab the analyst has selected for viewing.
+  var _gateVTax=(_reconSrc||{}).vendorTaxAmount;
+  var _selfBalance=_computeSelfBalance(_reconciledTaxPayload,_gateVTax);
+  var _gateBlocked=_selfBalance!=null&&!_selfBalance.passes;
+
   var jur=tp.jurisdiction||{};
   var tot=tp.totals||{};
   var li_items=tp.lineItems||[];
@@ -2748,6 +2771,51 @@ function renderTaxEngine(data){
   }
   html+='<div style="padding:6px 14px;font-size:11px;color:'+_b1FtrClr+';background:'+_b1FtrBg+';border-top:1px solid '+_b1Div+';">'+_b1FtrTxt+'</div>';
   html+='</div>'; // block 1
+
+  // ── Self-balance gate: block engine if arithmetic doesn't reconcile ───────
+  if(_gateBlocked){
+    var _gb=_selfBalance;
+    var _gbEscLabel,_gbEscDetail,_gbIsManual=false;
+    if(visionRan){
+      _gbIsManual=true;
+      _gbEscLabel='Manual Action Required';
+      _gbEscDetail='All three extraction layers have run but the invoice still does not self-balance. The invoice requires manual review before tax calculation can proceed.';
+    } else if(claudeRan){
+      _gbEscLabel='Run Claude Vision to reconcile';
+      _gbEscDetail='Claude has run but the arithmetic still does not balance. Run Vision to get a second cross-check of the line amounts, freight, and tax total.';
+    } else {
+      _gbEscLabel='Run Claude to reconcile';
+      _gbEscDetail='Doc AI extraction does not self-balance. Run Claude to cross-check — it can often correct line totals, freight, or the tax figure.';
+    }
+    html+='<div style="margin:12px 16px 8px;border:2px solid #dc2626;border-radius:8px;overflow:hidden;">';
+    html+='<div style="padding:10px 16px;background:#fef2f2;border-bottom:1px solid #fecaca;display:flex;align-items:center;gap:8px;">';
+    html+='<span style="font-weight:700;font-size:13px;color:#991b1b;">&#9888; Tax Calculation Blocked &mdash; Extraction Does Not Self-Balance</span>';
+    html+='<span style="margin-left:auto;font-size:10px;font-weight:700;background:#dc2626;color:#fff;padding:2px 10px;border-radius:8px;letter-spacing:.3px;">'
+      +(_gbIsManual?'MANUAL ACTION REQUIRED':'BLOCKED')+'</span>';
+    html+='</div>';
+    html+='<div style="padding:14px 16px;background:#fffafa;">';
+    html+='<div style="font-family:Consolas,monospace;font-size:13px;color:#374151;margin-bottom:10px;padding:8px 12px;background:#fef2f2;border-radius:4px;">';
+    html+='Lines + Freight + Tax &nbsp;=&nbsp; <strong>$'+money(_gb.lhs)+'</strong>'
+      +'&nbsp;&nbsp;&nbsp;Gross &nbsp;=&nbsp; <strong>$'+money(_gb.gross)+'</strong>'
+      +'&nbsp;&nbsp;&nbsp;<span style="color:#dc2626;font-weight:700;">Off by $'+money(_gb.delta)+'</span>';
+    html+='</div>';
+    html+='<div style="font-size:12px;color:#7f1d1d;margin-bottom:14px;">'
+      +'Extraction does not self-balance: lines + freight + tax = <strong>$'+money(_gb.lhs)+'</strong>, '
+      +'gross = <strong>$'+money(_gb.gross)+'</strong> (off by <strong>$'+money(_gb.delta)+'</strong>). '
+      +'Tax calculation is blocked until this reconciles.</div>';
+    html+='<div style="border:1.5px solid #fca5a5;border-radius:6px;padding:12px;background:#fff;">';
+    html+='<div style="font-weight:700;font-size:11px;color:#dc2626;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Next escalation step</div>';
+    html+='<div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:4px;">'+escHtml(_gbEscLabel)+'</div>';
+    html+='<div style="font-size:12px;color:#6b7280;">'+escHtml(_gbEscDetail)+'</div>';
+    if(!_gbIsManual){
+      html+='<div style="margin-top:8px;font-size:11px;color:#9ca3af;font-style:italic;">Use the extraction panel above to run the next layer. The gate re-evaluates automatically when a layer completes.</div>';
+    }
+    html+='</div>';
+    html+='</div>';
+    html+='</div>';
+    el.innerHTML=html;
+    return;
+  }
 
   // ── Flow-through values — computed here so verdict can fold into Block 2 ──
   // Never derives vendor tax from gross − base.

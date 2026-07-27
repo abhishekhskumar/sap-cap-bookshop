@@ -2524,20 +2524,19 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     cityRow.caption = inv.resolvedFromCaption || null;
     cityRow.note    = inv.resolvedFromNote    || null;
     const rows = [
-      row('Vendor Name',  A.supplierName,  inv.vendorName),
-      row('SCNID',        A.scnId,         asset ? asset.scnid : null),
+      row('Vendor Name',     A.supplierName,     inv.vendorName),
+      row('SCNID',           A.scnId,            asset ? asset.scnid : null),
+      row('Ship to address', A.shipToAddressSAP, inv.shipToAddress),
+      row('Invoice Date',    null,               inv.documentDate),
+      row('PO Number',       A.poNumber,         inv.purchaseOrderNumber),
+      row('Total Amount',    null,               inv.invoiceNetTotal != null ? String(inv.invoiceNetTotal) : null),
+      row('APC End',         A.apcEndValue,      null),
+      exactRow('Postal Code', assetPostal,       inv.shipToPostalCode),
       cityRow,
-      exactRow('State',       assetState,  inv.shipToState,      normState),
-      exactRow('Postal Code', assetPostal, inv.shipToPostalCode),
+      exactRow('State',      assetState,         inv.shipToState, normState),
+      row('Country',         A.supplierCountry,  inv.country),
     ];
     if (assetCounty) rows.push(exactRow('County', assetCounty, inv.shipToCounty));
-    rows.push(
-      row('Invoice Date', null,            inv.documentDate),
-      row('PO Number',    A.poNumber,      inv.purchaseOrderNumber),
-      row('Total Amount', null,            inv.invoiceNetTotal != null ? String(inv.invoiceNetTotal) : null),
-      row('APC End',      A.apcEndValue,   null),
-      row('Country',      A.supplierCountry, inv.country)
-    );
     return rows;
   }
 };

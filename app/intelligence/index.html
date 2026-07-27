@@ -1595,10 +1595,14 @@ function renderGeneral(data){
     +'</tr></thead><tbody>';
 
   var _lastSevGroup=''; // track group changes to inject section headers
+  var _srcFields=new Set(['grossAmount','taxAmount','shippingCostHeader','shipToAddress','shipToCity','shipToState','shipToPostalCode']);
   allNames.forEach(function(name){
     var df=docaiResult&&docaiResult.fields?docaiResult.fields.find(function(f){return f.fieldName===name;}):null;
     var cf=claudeResult&&claudeResult.fields?claudeResult.fields.find(function(f){return f.fieldName===name;}):null;
     var vf=visionResult&&visionResult.fields?visionResult.fields.find(function(f){return f.fieldName===name;}):null;
+    var dSrc=_srcFields.has(name)&&df&&df.page?'Page '+df.page:null;
+    var cSrc=_srcFields.has(name)&&cf?cf.source||null:null;
+    var vSrc=_srcFields.has(name)&&vf?vf.source||null:null;
     var dv=df?(df.docAIValue||''):null;
     var cv=cf?(cf.correctValue||cf.docAIValue||''):null;
     var vv=vf?(vf.correctValue||vf.docAIValue||''):null;
@@ -1670,7 +1674,7 @@ function renderGeneral(data){
     var confSpan=conf>0?(' <span style="font-size:10px;color:'+(conf>=85?'#107e3e':'#df6e0c')+';margin-left:3px;">'+(conf<85?'⚠ ':'')+conf+'%</span>'):'';
     var dCell=!d_run?'<span style="color:#ddd;font-size:11px;">—</span>'
       :_isGapFill?'<span style="color:#93c5fd;font-size:11px;font-style:italic;">(blank — gap-filled by another layer)</span>'
-      :dv?escHtml(dv)+confSpan:'<span style="color:#aaa;">—</span>';
+      :dv?escHtml(dv)+confSpan+(dSrc?'<div style="font-size:10px;color:#6b7280;margin-top:2px;">&#128204; '+escHtml(dSrc)+'</div>':''):'<span style="color:#aaa;">—</span>';
 
     // Claude cell: ✓ same / ✎ corrected
     var cChanged=c_run&&cv!==null&&dv!==null&&cv.trim()!==dv.trim();
@@ -1678,16 +1682,17 @@ function renderGeneral(data){
     if(!c_run)cCell='<span style="color:#ddd;font-size:11px;">—</span>';
     else if(!cv)cCell='<span style="color:#aaa;">—</span>';
     else if(cChanged)cCell='<strong style="color:#a35a00;">'+escHtml(cv)+'</strong>'
-      +(cf&&cf.reason?'<div style="font-size:10px;color:#a35a00;opacity:.8;margin-top:2px;">&#10002; '+escHtml(cf.reason)+'</div>':'<span style="color:#a35a00;margin-left:3px;font-size:11px;">&#10002;</span>');
-    else cCell='<span style="color:#107e3e;font-size:13px;">&#10003;</span> <span style="color:#555;">'+escHtml(cv)+'</span>';
+      +(cf&&cf.reason?'<div style="font-size:10px;color:#a35a00;opacity:.8;margin-top:2px;">&#10002; '+escHtml(cf.reason)+'</div>':'<span style="color:#a35a00;margin-left:3px;font-size:11px;">&#10002;</span>')
+      +(cSrc?'<div style="font-size:10px;color:#1d4ed8;margin-top:2px;">&#128204; '+escHtml(cSrc)+'</div>':'');
+    else cCell='<span style="color:#107e3e;font-size:13px;">&#10003;</span> <span style="color:#555;">'+escHtml(cv)+'</span>'+(cSrc?'<div style="font-size:10px;color:#1d4ed8;margin-top:2px;">&#128204; '+escHtml(cSrc)+'</div>':'');
 
     // Vision cell
     var vChanged=v_run&&vv!==null&&dv!==null&&vv.trim()!==dv.trim();
     var vCell;
     if(!v_run)vCell='<span style="color:#ddd;font-size:11px;">—</span>';
     else if(!vv)vCell='<span style="color:#aaa;">—</span>';
-    else if(vChanged)vCell='<strong style="color:#9d174d;">'+escHtml(vv)+'</strong><span style="color:#9d174d;margin-left:3px;font-size:11px;">&#10002;</span>';
-    else vCell='<span style="color:#107e3e;font-size:13px;">&#10003;</span> <span style="color:#555;">'+escHtml(vv)+'</span>';
+    else if(vChanged)vCell='<strong style="color:#9d174d;">'+escHtml(vv)+'</strong><span style="color:#9d174d;margin-left:3px;font-size:11px;">&#10002;</span>'+(vSrc?'<div style="font-size:10px;color:#7e22ce;margin-top:2px;">&#128204; '+escHtml(vSrc)+' <em style="opacity:.7;">(visual est.)</em></div>':'');
+    else vCell='<span style="color:#107e3e;font-size:13px;">&#10003;</span> <span style="color:#555;">'+escHtml(vv)+'</span>'+(vSrc?'<div style="font-size:10px;color:#7e22ce;margin-top:2px;">&#128204; '+escHtml(vSrc)+' <em style="opacity:.7;">(visual est.)</em></div>':'');
 
     // Best value badge — ✓ on Doc AI when another layer explicitly confirmed it
     var badge='';

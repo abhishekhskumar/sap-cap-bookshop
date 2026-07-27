@@ -428,7 +428,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           ? { provenance: 'inferred', provenanceDetail: 'value corrected by Claude during audit' }
           : { provenance: 'extracted' };
         fields.push(Object.assign({}, cf, {
-          boundingBox: (docH && docH.coordinates) || cf.boundingBox || null,
+          // CORRECTED fields: inherited DocAI coordinates point at the original wrong spot — suppress
+          // so the OCR hover-highlight doesn't falsely imply Claude's corrected value lives there.
+          // The textual source anchor (cf.source) is the authoritative location for corrected values.
+          boundingBox: cf.verdict === 'CORRECTED' ? null : ((docH && docH.coordinates) || cf.boundingBox || null),
           page: (docH && docH.page) || cf.page || 1
         }, prov));
       } else {
@@ -452,7 +455,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           ? { provenance: 'inferred', provenanceDetail: 'value corrected by Claude during audit' }
           : { provenance: 'extracted' };
         fields.push(Object.assign({}, f, {
-          boundingBox: (docH && docH.coordinates) || f.boundingBox || null,
+          boundingBox: f.verdict === 'CORRECTED' ? null : ((docH && docH.coordinates) || f.boundingBox || null),
           page: (docH && docH.page) || f.page || 1
         }, prov));
       }
@@ -1520,13 +1523,15 @@ CONSISTENCY CHECKS — report these:
 - If tax rate and tax amount are both visible, does base × rate ≈ tax amount?
 - Is ship-to state consistent with city and ZIP?
 
+FIELD SOURCE ANCHOR (scoped fields only — grossAmount, taxAmount, shippingCostHeader, shipToAddress, shipToCity, shipToState, shipToPostalCode): add a "source" key — a short plain-text string naming the page and labeled element you observed to arrive at correctValue. Format: "Page N · [labeled element/column/row]" with " (visual estimate)" appended, since your input is image-based (e.g. "Page 1 · invoice header · Ship To block (visual estimate)", "Page 5 · Sworn Statement · THIS PAYMENT column · TOTAL LABOR row (visual estimate)"). HONESTY RULE: if you cannot confidently identify the specific page and element from the image, return source: null — NEVER fabricate a page number or row label. For all other fields, set source: null.
+
 Return ONLY this JSON — no markdown fences, no prose before or after:
 {
   "invoiceMode": "non_construction",
   "invoiceTaxRate": 0,
   "vendorTaxAmount": null,
   "fields": [
-    { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED", "confidence": 0, "reason": "read from invoice header top-left", "taxCritical": false, "routedTo": "claude-vision" }
+    { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED", "confidence": 0, "reason": "read from invoice header top-left", "taxCritical": false, "routedTo": "claude-vision", "source": null }
   ],
   "lineItems": [
     { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "lineVerdict": "VERIFIED", "lineReason": "", "lineConfidence": 80, "page": 1 }
@@ -1631,13 +1636,15 @@ LINE ITEM OUTPUT MODE:
 - CONSTRUCTION invoice: output ONE consolidated line (isFreight=false, lineVerdict="VERIFIED"): description "Non-Residential building construction services", amount = the SAME value used for grossAmount per the construction grossAmount rule above — the printed TOTAL ROW value from the THIS PAYMENT column (Sworn Statement) or Column E THIS PERIOD (Continuation Sheet only). NEVER re-sum individual contractor/subcontractor rows to compute this amount — read the printed total-row cell VERBATIM. The consolidated line amount and the grossAmount field must be identical.
 - NON-CONSTRUCTION invoice: output ALL lines including freight (isFreight=true) and suppressed rows, each with their lineVerdict. Code will filter displayable lines.
 
+FIELD SOURCE ANCHOR — for these fields only (grossAmount, taxAmount, shippingCostHeader, shipToAddress, shipToCity, shipToState, shipToPostalCode) add a "source" key: a short plain-text string naming the page and labeled element you read to arrive at correctValue. Format: "Page N · [labeled element/column/row]" (e.g. "Page 5 · Sworn Statement · THIS PAYMENT column · TOTAL LABOR & MATERIAL row", "Page 1 · invoice header · Ship To block"). HONESTY RULE: if you cannot confidently name the specific page and element from the invoice text, return source: null — NEVER fabricate a page number or row label you did not observe. For all other fields, set source: null.
+
 OUTPUT - return ONLY this JSON, no markdown:
 {
   "invoiceMode": "${schemaType === 'construction' ? 'construction' : 'non_construction'}",
   "invoiceTaxRate": 0,
   "vendorTaxAmount": null,
   "fields": [
-    { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED|CORRECTED|FLAGGED", "confidence": 0, "reason": "Specific evidence for THIS field only — e.g. 'Doc AI read X from the Y block; correct value per Z rule is W'", "taxCritical": true, "routedTo": "docai|claude-text" }
+    { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED|CORRECTED|FLAGGED", "confidence": 0, "reason": "Specific evidence for THIS field only — e.g. 'Doc AI read X from the Y block; correct value per Z rule is W'", "taxCritical": true, "routedTo": "docai|claude-text", "source": null }
   ],
   "lineItems": [
     { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "lineVerdict": "VERIFIED|CORRECTED|SUPPRESSED|FLAGGED", "lineReason": "", "lineConfidence": 95, "page": 1 }
@@ -2040,9 +2047,9 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
       return {
         fieldName:   name,
         taxCritical: TAX_CRITICAL_FIELDS.has(name),
-        docAI:  f  ? { value: dv, confidence: f.confidence || 0 } : null,
-        claude: claudeRan ? (f  ? { value: cv, verdict: f.verdict  || null, reason: f.reason  || null } : null) : undefined,
-        vision: visionRan ? (vf ? { value: vv, verdict: vf.verdict || null, reason: vf.reason || null } : null) : undefined,
+        docAI:  f  ? { value: dv, confidence: f.confidence || 0, source: f.page ? 'Page ' + f.page : null } : null,
+        claude: claudeRan ? (f  ? { value: cv, verdict: f.verdict  || null, reason: f.reason  || null, source: f.source  || null } : null) : undefined,
+        vision: visionRan ? (vf ? { value: vv, verdict: vf.verdict || null, reason: vf.reason || null, source: vf.source || null } : null) : undefined,
         bestValue,
         bestLayer
       };

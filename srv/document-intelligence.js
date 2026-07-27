@@ -1138,6 +1138,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       const descF = fieldArray.find(function(f){ return f.name === 'materialDescription'; });
       const rawCoords = descF && descF.coordinates;
       const lineCoords = rawCoords && (rawCoords.w || 0) > 0 ? rawCoords : null;
+      const priceF = fieldArray.find(function(f){ return f.name === 'netPrice'; })
+                  || fieldArray.find(function(f){ return f.name === 'Amount'; });
+      const rawPriceCoords = priceF && priceF.coordinates;
+      const priceCoords = rawPriceCoords && (rawPriceCoords.w || 0) > 0 ? rawPriceCoords : null;
       return {
         description: desc,
         amount: safeAmount,
@@ -1149,7 +1153,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         lineType,
         pageType,
         page: (fieldArray[0] && fieldArray[0].page) || 1,
-        coordinates: lineCoords
+        coordinates: lineCoords,
+        netPriceCoordinates: priceCoords
       };
     }).filter(function(li){ return li.description || li.amount != null; });
 

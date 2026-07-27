@@ -804,6 +804,19 @@ function drawOcrBoxes(pageNum){
     ctx.globalAlpha=1;
     ocrBoxes.push({fieldName:'line:'+idx,docAIValue:dli.description||'',correctValue:'',
       verdict:verdict||null,taxCritical:false,rect:{x:cx,y:cy,w:cw,h:ch},color});
+    // Second box: amount/netPrice column
+    var bb2=dli.netPriceCoordinates;
+    if(bb2){var x2=bb2.x||0,y2=bb2.y||0,w2=bb2.w||0,h2=bb2.h||0;
+      var cx2=x2*ocr.width,cy2=y2*ocr.height,cw2=w2*ocr.width,ch2=h2*ocr.height;
+      if(cw2>=4&&ch2>=2){
+        ctx.strokeStyle=color;ctx.lineWidth=1.5;
+        ctx.globalAlpha=0.85;ctx.strokeRect(cx2,cy2,cw2,ch2);
+        ctx.globalAlpha=0.08;ctx.fillStyle=color;ctx.fillRect(cx2,cy2,cw2,ch2);
+        ctx.globalAlpha=1;
+        ocrBoxes.push({fieldName:'line:'+idx+':amt',docAIValue:dli.description||'',correctValue:'',
+          verdict:verdict||null,taxCritical:false,rect:{x:cx2,y:cy2,w:cw2,h:ch2},color});
+      }
+    }
   });
 }
 

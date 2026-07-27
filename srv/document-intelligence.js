@@ -97,6 +97,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     } catch (err) {
       LOG.warn('extractDocAI: Doc AI failed:', err.message);
     }
+    // Normalize to valid binary modes — 'auto' and any unknown value fall through to non_construction.
+    // Without this, a DOX failure leaves routedTo='auto' which is truthy and bypasses the
+    // || 'non_construction' guard in processInvoice, silently using the non-construction chain.
+    if (routedTo !== 'construction') routedTo = 'non_construction';
 
     const schemaFields = schemaHeaderFields(routedTo);
     const schemaSet = new Set(schemaFields);
@@ -260,7 +264,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const keepLines          = docAIParsed.keepLines || [];
     const docAISuppressedLines = docAIParsed.suppressedLines || [];
     const docAIHeader        = docAIParsed.docAIHeader || {};
-    const routedTo           = docAIParsed.invoiceMode || 'non_construction';
+    const routedTo           = docAIParsed.invoiceMode === 'construction' ? 'construction' : 'non_construction';
     const docAIFreightTotal  = docAIParsed.invoiceFreightTotal || 0;
     const docAIVendorTax     = docAIParsed.vendorTaxAmount ?? null;
     const fullText           = docAIParsed.fullText || '';

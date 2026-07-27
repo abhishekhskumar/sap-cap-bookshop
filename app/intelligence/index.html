@@ -778,22 +778,32 @@ function drawOcrBoxes(pageNum){
     ocrBoxes.push({fieldName:f.fieldName,docAIValue:f.docAIValue||'',correctValue:f.correctValue||'',
       verdict:f.verdict||null,taxCritical:!!f.taxCritical,rect:{x:cx,y:cy,w:cw,h:ch},color});
   });
-  // Draw Doc AI line-item bounding boxes using the same coordinate format as header fields.
-  // Uses a teal color — distinct from header field colors — so line items are visually separate.
-  (result.lineItems || []).forEach(function(li, idx){
-    var bb=li.boundingBox;
+  // Line-item bounding boxes — always sourced from docaiResult (the only layer with real
+  // Doc-AI coordinates). In non-docai views the box anchors the document region; the current
+  // layer's verdict/value annotates it. Identity match by description: no match → no box,
+  // which correctly suppresses consolidated or reordered lines rather than drawing wrong-row boxes.
+  var _normDesc=function(s){return(s||'').toLowerCase().replace(/\s+/g,' ').trim();};
+  var _docaiLines=(docaiResult&&docaiResult.lineItems)||[];
+  var _layerLines=result.lineItems||[];
+  var _layerMap={};
+  _layerLines.forEach(function(li){var k=_normDesc(li.description);if(k)_layerMap[k]=li;});
+  _docaiLines.forEach(function(dli,idx){
+    var bb=dli.boundingBox;
     if(!bb)return;
-    if((li.page||1)!==pageNum)return;
+    if((dli.page||1)!==pageNum)return;
     var x=bb.x||0,y=bb.y||0,w=bb.w||0,h=bb.h||0;
     var cx=x*ocr.width,cy=y*ocr.height,cw=w*ocr.width,ch=h*ocr.height;
-    if(cw<4||ch<2)return; // skip zero-sized or absent boxes
-    var color='#0a7e5c'; // teal
+    if(cw<4||ch<2)return;
+    var layerLi=viewMode==='docai'?dli:_layerMap[_normDesc(dli.description)];
+    if(!layerLi&&viewMode!=='docai')return; // no identity match — skip rather than draw a wrong-row box
+    var verdict=layerLi?layerLi.lineVerdict:null;
+    var color=verdict==='CORRECTED'?'#df6e0c':verdict==='FLAGGED'?'#bb0000':verdict==='SUPPRESSED'?'#888888':'#0a7e5c';
     ctx.strokeStyle=color;ctx.lineWidth=1.5;
     ctx.globalAlpha=0.85;ctx.strokeRect(cx,cy,cw,ch);
     ctx.globalAlpha=0.08;ctx.fillStyle=color;ctx.fillRect(cx,cy,cw,ch);
     ctx.globalAlpha=1;
-    ocrBoxes.push({fieldName:'line:'+idx,docAIValue:li.description||'',correctValue:'',
-      verdict:li.lineVerdict||null,taxCritical:false,rect:{x:cx,y:cy,w:cw,h:ch},color});
+    ocrBoxes.push({fieldName:'line:'+idx,docAIValue:dli.description||'',correctValue:'',
+      verdict:verdict||null,taxCritical:false,rect:{x:cx,y:cy,w:cw,h:ch},color});
   });
 }
 

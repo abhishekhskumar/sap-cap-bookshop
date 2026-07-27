@@ -429,10 +429,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           ? { provenance: 'inferred', provenanceDetail: 'value corrected by Claude during audit' }
           : { provenance: 'extracted' };
         fields.push(Object.assign({}, cf, {
-          // CORRECTED fields: inherited DocAI coordinates point at the original wrong spot — suppress
-          // so the OCR hover-highlight doesn't falsely imply Claude's corrected value lives there.
-          // The textual source anchor (cf.source) is the authoritative location for corrected values.
-          boundingBox: cf.verdict === 'CORRECTED' ? null : ((docH && docH.coordinates) || cf.boundingBox || null),
+          boundingBox: (docH && docH.coordinates) || cf.boundingBox || null,
           page: (docH && docH.page) || cf.page || 1
         }, prov));
       } else {
@@ -456,7 +453,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           ? { provenance: 'inferred', provenanceDetail: 'value corrected by Claude during audit' }
           : { provenance: 'extracted' };
         fields.push(Object.assign({}, f, {
-          boundingBox: f.verdict === 'CORRECTED' ? null : ((docH && docH.coordinates) || f.boundingBox || null),
+          boundingBox: (docH && docH.coordinates) || f.boundingBox || null,
           page: (docH && docH.page) || f.page || 1
         }, prov));
       }
@@ -649,10 +646,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     // 1. Ensure every schema field is represented
     schemaFields.forEach(function(k) {
       const vf = visionFieldMap.get(k);
+      const prevF = prevFieldMap.get(k);
       if (vf) {
-        fields.push(Object.assign({}, vf, { routedTo: 'claude-vision', provenance: 'extracted' }));
+        fields.push(Object.assign({}, vf, {
+          routedTo: 'claude-vision', provenance: 'extracted',
+          boundingBox: vf.boundingBox || (prevF && prevF.boundingBox) || null,
+          page: vf.page || (prevF && prevF.page) || 1
+        }));
       } else {
-        const prevF = prevFieldMap.get(k);
         const docAIVal = prevF ? (prevF.correctValue || prevF.docAIValue || '') : '';
         fields.push({
           fieldName: k, docAIValue: docAIVal, correctValue: '',

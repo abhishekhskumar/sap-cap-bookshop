@@ -778,6 +778,23 @@ function drawOcrBoxes(pageNum){
     ocrBoxes.push({fieldName:f.fieldName,docAIValue:f.docAIValue||'',correctValue:f.correctValue||'',
       verdict:f.verdict||null,taxCritical:!!f.taxCritical,rect:{x:cx,y:cy,w:cw,h:ch},color});
   });
+  // Draw Doc AI line-item bounding boxes using the same coordinate format as header fields.
+  // Uses a teal color — distinct from header field colors — so line items are visually separate.
+  (result.lineItems || []).forEach(function(li, idx){
+    var bb=li.boundingBox;
+    if(!bb)return;
+    if((li.page||1)!==pageNum)return;
+    var x=bb.x||0,y=bb.y||0,w=bb.w||0,h=bb.h||0;
+    var cx=x*ocr.width,cy=y*ocr.height,cw=w*ocr.width,ch=h*ocr.height;
+    if(cw<4||ch<2)return; // skip zero-sized or absent boxes
+    var color='#0a7e5c'; // teal
+    ctx.strokeStyle=color;ctx.lineWidth=1.5;
+    ctx.globalAlpha=0.85;ctx.strokeRect(cx,cy,cw,ch);
+    ctx.globalAlpha=0.08;ctx.fillStyle=color;ctx.fillRect(cx,cy,cw,ch);
+    ctx.globalAlpha=1;
+    ocrBoxes.push({fieldName:'line:'+idx,docAIValue:li.description||'',correctValue:'',
+      verdict:li.lineVerdict||null,taxCritical:false,rect:{x:cx,y:cy,w:cw,h:ch},color});
+  });
 }
 
 function hoverField(fieldName){

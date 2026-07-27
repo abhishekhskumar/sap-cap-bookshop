@@ -133,6 +133,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           lineAction: li.lineAction || 'KEEP',
           lineType: li.lineType || null,
           page: li.page || 1,
+          boundingBox: li.coordinates || null,
           provenance: 'extracted',
           freightProvenance: docAIFreightTotal > 0 ? 'inferred' : 'extracted',
           freightProvenanceDetail: docAIFreightTotal > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined,
@@ -1130,6 +1131,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         /shipping|freight|delivery|estimated travel|travel and shipping|handling/i.test(desc || '')
       );
       console.log('CLASSIFIED AS:', {lineAction, lineType, isFreight});
+      // Anchor the row's bounding box to the materialDescription field's coordinates.
+      // lineAction / lineType / pageType are virtual classification fields — their boxes
+      // are zero-sized {x:0,y:0,w:0,h:0} and must not be used (they'd draw at the origin).
+      const descF = fieldArray.find(function(f){ return f.name === 'materialDescription'; });
+      const rawCoords = descF && descF.coordinates;
+      const lineCoords = rawCoords && (rawCoords.w || 0) > 0 ? rawCoords : null;
       return {
         description: desc,
         amount: safeAmount,
@@ -1140,7 +1147,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         lineAction,
         lineType,
         pageType,
-        page: (fieldArray[0] && fieldArray[0].page) || 1
+        page: (fieldArray[0] && fieldArray[0].page) || 1,
+        coordinates: lineCoords
       };
     }).filter(function(li){ return li.description || li.amount != null; });
 

@@ -166,7 +166,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       shipToAddress: resolved.shipToAddress,
       documentDate: getH('documentDate'), purchaseOrderNumber: getH('purchaseOrderNumber'),
       invoiceNetTotal, shipToPostalCode: resolved.shipToPostalCode,
-      shipToCity: resolved.shipToCity, shipToState: resolved.shipToState, country: getH('country'),
+      shipToCity: resolved.shipToCity, shipToState: resolved.shipToState, shipToCounty: resolved.shipToCounty, country: getH('country'),
       resolvedFromCaption: resolved.resolvedFromCaption, resolvedFromNote: resolved.resolvedFromNote
     };
     const generalInfo = this._buildGeneralInfo(inv, asset);
@@ -478,6 +478,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       shipToPostalCode: resolved.shipToPostalCode,
       shipToCity: resolved.shipToCity,
       shipToState: resolved.shipToState,
+      shipToCounty: resolved.shipToCounty,
       country: getF('country'),
       resolvedFromCaption: resolved.resolvedFromCaption,
       resolvedFromNote: resolved.resolvedFromNote
@@ -2347,10 +2348,10 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     const _isSentinel = v => typeof v === 'string' && v.trimStart().toLowerCase().startsWith('manual action required');
     const g = k => { const v = getVal(k); return (v == null || v === '' || _isSentinel(v)) ? null : v; };
     const blocks = {
-      project:   { city: g('projectAddressCity'),   postal: g('projectAddressPostalCode'),  state: g('projectAddressState'),   addr: g('projectAddress') },
-      contract:  { city: g('contractDetailsCity'),  postal: g('contractDetailsPostalcode'), state: null,                       addr: g('contractDetails') },
-      shipto:    { city: g('shipToCity'),            postal: g('shipToPostalCode'),          state: g('shipToState'),           addr: g('shipToAddress') },
-      accenture: { city: g('accentureAddressCity'), postal: g('accentureAddressPostalCode'), state: g('accentureAddressState'), addr: g('accentureAddress') }
+      project:   { city: g('projectAddressCity'),   postal: g('projectAddressPostalCode'),  state: g('projectAddressState'),   addr: g('projectAddress'),   county: g('projectAddressCounty') },
+      contract:  { city: g('contractDetailsCity'),  postal: g('contractDetailsPostalcode'), state: null,                       addr: g('contractDetails'),  county: null },
+      shipto:    { city: g('shipToCity'),            postal: g('shipToPostalCode'),          state: g('shipToState'),           addr: g('shipToAddress'),    county: g('shipToCounty') },
+      accenture: { city: g('accentureAddressCity'), postal: g('accentureAddressPostalCode'), state: g('accentureAddressState'), addr: g('accentureAddress'), county: g('accentureAddressCounty') }
     };
 
     // Parse city/state/postal from a US address string when sub-fields are not separately extracted
@@ -2402,7 +2403,7 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
       const isExplicit = name === 'shipto';
       console.log('_resolveShipTo: winner=%s city=%s state=%s postal=%s explicit=%s', name, city, state, postal, isExplicit);
       return {
-        shipToAddress: b.addr, shipToCity: city, shipToState: state, shipToPostalCode: postal,
+        shipToAddress: b.addr, shipToCity: city, shipToState: state, shipToPostalCode: postal, shipToCounty: b.county || null,
         resolvedFrom: name, resolvedFromCaption: caption, resolvedFromNote: note,
         provenance: isExplicit ? 'extracted' : 'inferred',
         provenanceDetail: isExplicit ? 'explicit Ship-To address block on invoice' : caption
@@ -2411,7 +2412,7 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
 
     console.log('_resolveShipTo: no block won — returning nulls');
     return {
-      shipToAddress: null, shipToCity: null, shipToState: null, shipToPostalCode: null,
+      shipToAddress: null, shipToCity: null, shipToState: null, shipToPostalCode: null, shipToCounty: null,
       resolvedFrom: 'none', resolvedFromCaption: null, resolvedFromNote: null,
       provenance: 'inferred', provenanceDetail: 'no address block resolved — all priority blocks empty'
     };
@@ -2514,27 +2515,25 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     const assetCity = A.cityName || A.supplierCity || null;
     const assetState = A.stateName || A.supplierState || null;
     const assetPostal = A.supplierPostalCode || A.postalCodeShipTo || null;
-    let shipMatch = null;
-    if ((assetCity || assetPostal) && (inv.shipToCity || inv.shipToPostalCode)) {
-      const cityOk = !assetCity || !inv.shipToCity || norm(assetCity) === norm(inv.shipToCity);
-      const postalOk = !assetPostal || !inv.shipToPostalCode || norm(assetPostal) === norm(inv.shipToPostalCode);
-      const stateOk = !assetState || !inv.shipToState || normState(assetState) === normState(inv.shipToState);
-      shipMatch = cityOk && postalOk && stateOk;
-    }
-    return [
+    const assetCounty = A.countyName || null;
+    const cityRow = exactRow('City', assetCity, inv.shipToCity);
+    cityRow.caption = inv.resolvedFromCaption || null;
+    cityRow.note    = inv.resolvedFromNote    || null;
+    const rows = [
       row('Vendor Name',  A.supplierName,  inv.vendorName),
       row('SCNID',        A.scnId,         asset ? asset.scnid : null),
-      { field: 'Ship-to Location', type: 'shipTo',
-        invoiceAddress: inv.shipToAddress || null, invoiceCity: inv.shipToCity || null,
-        invoiceState: inv.shipToState || null, invoicePostalCode: inv.shipToPostalCode || null,
-        assetAddress: A.shipToAddressSAP || null, assetCity, assetState, assetPostal,
-        caption: inv.resolvedFromCaption || null, note: inv.resolvedFromNote || null,
-        match: shipMatch },
+      cityRow,
+      exactRow('State',       assetState,  inv.shipToState,      normState),
+      exactRow('Postal Code', assetPostal, inv.shipToPostalCode),
+    ];
+    if (assetCounty) rows.push(exactRow('County', assetCounty, inv.shipToCounty));
+    rows.push(
       row('Invoice Date', null,            inv.documentDate),
       row('PO Number',    A.poNumber,      inv.purchaseOrderNumber),
       row('Total Amount', null,            inv.invoiceNetTotal != null ? String(inv.invoiceNetTotal) : null),
       row('APC End',      A.apcEndValue,   null),
       row('Country',      A.supplierCountry, inv.country)
-    ];
+    );
+    return rows;
   }
 };

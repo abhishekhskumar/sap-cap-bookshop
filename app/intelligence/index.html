@@ -1520,31 +1520,15 @@ function renderGeneral(data){
         if(r.match===true) matchPill='<span style="display:inline-block;background:#e6f4ea;color:#1a7f37;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">&#10003; MATCH</span>';
         else if(r.match===false) matchPill='<span style="display:inline-block;background:#fde8e8;color:#cc0000;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap;">&#10007; MISMATCH</span>';
         else matchPill='<span style="color:#ccc;font-size:15px;line-height:1;">—</span>';
-        if(r.type==='shipTo'){
-          var assetLines=[];
-          if(r.assetAddress) assetLines.push(escHtml(r.assetAddress));
-          var assetCityLine=[r.assetCity,r.assetState,r.assetPostal].filter(Boolean).map(escHtml).join(', ');
-          if(assetCityLine) assetLines.push(assetCityLine);
-          var invLines=[];
-          if(r.invoiceAddress) invLines.push(escHtml(r.invoiceAddress));
-          var invCityLine=[r.invoiceCity,r.invoiceState,r.invoicePostalCode].filter(Boolean).map(escHtml).join(', ');
-          if(invCityLine) invLines.push(invCityLine);
-          var captionHtml=r.caption?'<div style="font-size:11px;color:#555;margin-top:6px;font-style:italic;">'+escHtml(r.caption)+'</div>':'';
-          var noteHtml=r.note?'<div style="font-size:11px;color:#b25000;margin-top:5px;background:#fff3e0;padding:4px 8px;border-radius:4px;line-height:1.4;">&#9888; '+escHtml(r.note)+'</div>':'';
-          html+='<tr style="border-bottom:1px solid #ebebeb;'+rowBg+'">';
-          html+='<td style="padding:8px 12px;font-weight:500;color:#333;vertical-align:top;white-space:nowrap;">Ship-to Location</td>';
-          html+='<td style="padding:8px 12px;color:#555;vertical-align:top;">'+(assetLines.length?assetLines.join('<br>'):'<span style="color:#aaa;">—</span>')+'</td>';
-          html+='<td style="padding:8px 12px;color:#222;vertical-align:top;">'+(invLines.length?invLines.join('<br>'):'<span style="color:#aaa;">—</span>')+captionHtml+noteHtml+'</td>';
-          html+='<td style="padding:8px 12px;text-align:center;vertical-align:top;">'+matchPill+'</td>';
-          html+='</tr>';
-        } else {
-          html+='<tr style="border-bottom:1px solid #ebebeb;'+rowBg+'">';
-          html+='<td style="padding:8px 12px;font-weight:500;color:#333;white-space:nowrap;">'+r.field+'</td>';
-          html+='<td style="padding:8px 12px;color:#555;">'+(r.assetReportValue!=null?r.assetReportValue:'')+'</td>';
-          html+='<td style="padding:8px 12px;color:#222;">'+(r.invoiceValue!=null?r.invoiceValue:'')+'</td>';
-          html+='<td style="padding:8px 12px;text-align:center;">'+matchPill+'</td>';
-          html+='</tr>';
-        }
+        var captionHtml=r.caption?'<div style="font-size:11px;color:#555;margin-top:5px;font-style:italic;">'+escHtml(r.caption)+'</div>':'';
+        var noteHtml=r.note?'<div style="font-size:11px;color:#b25000;margin-top:5px;background:#fff3e0;padding:4px 8px;border-radius:4px;line-height:1.4;">&#9888; '+escHtml(r.note)+'</div>':'';
+        var hasAnnotation=!!(r.caption||r.note);
+        html+='<tr style="border-bottom:1px solid #ebebeb;'+rowBg+'">';
+        html+='<td style="padding:8px 12px;font-weight:500;color:#333;white-space:nowrap;'+(hasAnnotation?'vertical-align:top;':'')+'">'+escHtml(r.field)+'</td>';
+        html+='<td style="padding:8px 12px;color:#555;'+(hasAnnotation?'vertical-align:top;':'')+'">'+(r.assetReportValue!=null?escHtml(r.assetReportValue):'')+'</td>';
+        html+='<td style="padding:8px 12px;color:#222;'+(hasAnnotation?'vertical-align:top;':'')+'">'+(r.invoiceValue!=null?escHtml(r.invoiceValue):'')+captionHtml+noteHtml+'</td>';
+        html+='<td style="padding:8px 12px;text-align:center;'+(hasAnnotation?'vertical-align:top;':'')+'">'+matchPill+'</td>';
+        html+='</tr>';
       });
       html+='</table>';
       if(giTable) giTable.innerHTML=html;

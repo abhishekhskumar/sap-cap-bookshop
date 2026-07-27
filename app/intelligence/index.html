@@ -778,24 +778,24 @@ function drawOcrBoxes(pageNum){
     ocrBoxes.push({fieldName:f.fieldName,docAIValue:f.docAIValue||'',correctValue:f.correctValue||'',
       verdict:f.verdict||null,taxCritical:!!f.taxCritical,rect:{x:cx,y:cy,w:cw,h:ch},color});
   });
-  // Line-item bounding boxes — always sourced from docaiResult (the only layer with real
-  // Doc-AI coordinates). In non-docai views the box anchors the document region; the current
-  // layer's verdict/value annotates it. Identity match by description: no match → no box,
-  // which correctly suppresses consolidated or reordered lines rather than drawing wrong-row boxes.
+  // Line-item boxes: source from docaiResult.keepLines (individual rows, coordinates key).
+  // keepLines has real per-row {x,y,w,h} for both construction (Sworn Statement rows) and
+  // non-construction. docaiResult.lineItems is NOT used — construction produces one consolidated
+  // item with no coordinates; lineItems is the wrong source for box drawing.
+  // Draws unconditionally like the header loop: only skip null/zero-sized boxes (virtual fields).
+  // Description match is best-effort color annotation only — no match uses teal, never skips.
   var _normDesc=function(s){return(s||'').toLowerCase().replace(/\s+/g,' ').trim();};
-  var _docaiLines=(docaiResult&&docaiResult.lineItems)||[];
-  var _layerLines=result.lineItems||[];
+  var _keepLines=(docaiResult&&docaiResult.keepLines)||[];
   var _layerMap={};
-  _layerLines.forEach(function(li){var k=_normDesc(li.description);if(k)_layerMap[k]=li;});
-  _docaiLines.forEach(function(dli,idx){
-    var bb=dli.boundingBox;
+  (result.lineItems||[]).forEach(function(li){var k=_normDesc(li.description);if(k)_layerMap[k]=li;});
+  _keepLines.forEach(function(dli,idx){
+    var bb=dli.coordinates; // keepLines uses 'coordinates', not 'boundingBox'
     if(!bb)return;
     if((dli.page||1)!==pageNum)return;
     var x=bb.x||0,y=bb.y||0,w=bb.w||0,h=bb.h||0;
     var cx=x*ocr.width,cy=y*ocr.height,cw=w*ocr.width,ch=h*ocr.height;
-    if(cw<4||ch<2)return;
-    var layerLi=viewMode==='docai'?dli:_layerMap[_normDesc(dli.description)];
-    if(!layerLi&&viewMode!=='docai')return; // no identity match — skip rather than draw a wrong-row box
+    if(cw<4||ch<2)return; // zero-sized: virtual fields (lineAction/lineType/pageType) already null'd in Gap #1
+    var layerLi=_layerMap[_normDesc(dli.description)]; // best-effort; null → teal, never a skip
     var verdict=layerLi?layerLi.lineVerdict:null;
     var color=verdict==='CORRECTED'?'#df6e0c':verdict==='FLAGGED'?'#bb0000':verdict==='SUPPRESSED'?'#888888':'#0a7e5c';
     ctx.strokeStyle=color;ctx.lineWidth=1.5;

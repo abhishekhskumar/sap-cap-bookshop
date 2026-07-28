@@ -1195,7 +1195,11 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           : isTax
             ? 'Tax line — excluded (handled in tax layer)'
             : 'PO/PR/reference — not billable';
-        suppressedLines.push(Object.assign({}, li, { suppressReason, isFreight, isTax }));
+        // docAITaxAmount > 0 on a freight line is an observable Yes signal (DOX extracted it from the invoice)
+        const freightTaxed = isFreight
+          ? (li.docAITaxAmount != null && parseFloat(li.docAITaxAmount) > 0 ? true : null)
+          : null;
+        suppressedLines.push(Object.assign({}, li, { suppressReason, isFreight, isTax, freightTaxed }));
       } else {
         // Secondary freight check: catch KEEP lines whose PURPOSE is freight/shipping
         // (e.g. "deposit for Estimated Shipping and Travel") and move them to the freight pool.
@@ -1203,7 +1207,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         if (_DOCAI_FREIGHT_FOR_RE.test(d)) {
           suppressedLines.push(Object.assign({}, li, {
             suppressReason: 'Freight/shipping — distributed across line items',
-            isFreight: true, isTax: false
+            isFreight: true, isTax: false,
+            freightTaxed: (li.docAITaxAmount != null && parseFloat(li.docAITaxAmount) > 0) ? true : null
           }));
         } else {
           keepLinesRaw.push(li);
@@ -1526,6 +1531,12 @@ ROW-LEVEL SUPPRESSION — within valid invoice pages, set lineVerdict="SUPPRESSE
   · DEPOSIT/PREPAYMENT FOR FREIGHT: when a line is a deposit or advance whose purpose (subject) is freight/shipping, classify by the subject. Examples: "Deposit for Estimated Travel and Shipping" → subject is Travel-and-Shipping → isFreight=true; "50% deposit for Estimated Shipping and Travel" → isFreight=true; "Deposit for Equipment" → subject is Equipment → isFreight=false.
   · COMBINED TRAVEL-AND-SHIPPING: a description naming travel and shipping together as a unit ("Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight — isFreight=true. "Travel" or "Travel Expenses" ALONE (no freight keyword) is NOT freight.
   · AMBIGUOUS: if genuinely uncertain whether the subject is freight or a billable service, set isFreight=false, lineVerdict="FLAGGED".
+  FREIGHT TAX DETECTION — when isFreight=true, ALSO report freightTaxed (true | false | null) by reading what the image shows:
+  · freightTaxed=true ONLY when the image OBSERVABLY shows tax applied to this shipping/freight charge: (1) a tax amount in a tax column on the freight line itself; (2) a separate tax line in the line-item table whose description explicitly covers freight (e.g. "Tax on Shipping", "Freight Tax", "GST on Freight"); (3) a visible invoice note or label on the page explicitly stating this freight charge is subject to tax.
+  · freightTaxed=false ONLY when the image OBSERVABLY shows no tax on the shipping charge — e.g. a note visible in the image states "Freight exempt" or "Shipping not taxable", or the tax line's stated base demonstrably excludes freight, or the freight line has no tax entry while goods lines do.
+  · freightTaxed=null when tax on freight CANNOT BE DETERMINED from what you can read in the image. Use null when the image shows a freight line and a tax total but no visible link; when you could only infer from arithmetic that freight might be included; or when the image simply does not address freight taxability.
+  HONESTY RULE: if only arithmetic (effective-rate arithmetic suggesting freight might be in the base) distinguishes the cases, return freightTaxed=null — that is inference, not an observable image fact. The downstream system will categorise it Uncertain. Never fabricate freightTaxed=true from totals patterns.
+  freightTaxed is only meaningful on freight lines (isFreight=true). Set freightTaxed=null on every non-freight line.
 - Tax lines (Sales Tax / Tax / VAT / GST or similar) — isFreight=false, lineReason="Tax line — handled in tax layer". This applies even in Credit or reversal rows.
 - REIMBURSABLE BACKUP RECEIPTS: An expense invoice may show per-person/vendor reimbursable SUMMARY LINES (a person's name or consulting-firm name paired with a dollar total, e.g. "Sheehan, David $114.00", "THE ROCK BROOK CONSULTING GROUP PA $2,930.00", "Ivanoff $128.80") alongside individual backup-detail receipts for each person (subway fare, bus/transit ticket, taxi, Uber/Lyft, parking, hotel night, meal, mileage, gas, toll — often with a date prefix, e.g. "1/8/2025 Subway to Penn Station NYC $2.90"). KEEP the per-person/vendor SUMMARY LINES — they are real billable lines (lineVerdict="VERIFIED"). SUPPRESS the individual backup receipts only: lineVerdict="SUPPRESSED", lineReason="Backup receipt detail — rolls into reimbursable summary; suppressed to prevent double-counting". Emit a lineItemCorrections entry for each suppressed receipt: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt for [person/vendor name] — individual transaction rolled into summary total", oldValue=[amount as string], newValue="0". CRITICAL DISTINCTIONS — (a) Named person/vendor lines (Rock Brook, Sheehan, Ivanoff) are ALWAYS summary lines — NEVER suppress them as backup receipts. (b) "Total Reimbursables" / "Total Expenses" aggregate lines are already caught by the Subtotal rule above — do NOT use them as the summary-line anchor here. (c) Individual transit/expense receipts are NOT PO/PR references — do not classify them under the PO/PR rule. ONLY suppress when a matching named-person summary line exists for that person's expenses; if no clear summary exists, keep lines as VERIFIED.
 - PO / Ariba reference rows with no real billable amount — lineReason="PO/reference — not billable". NOTE: individual travel/expense receipts (subway fare, taxi, hotel, meal, transit) are NOT PO/PR references — classify them under REIMBURSABLE BACKUP RECEIPTS above.
@@ -1553,7 +1564,7 @@ Return ONLY this JSON — no markdown fences, no prose before or after:
     { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED", "confidence": 0, "reason": "read from invoice header top-left", "taxCritical": false, "routedTo": "claude-vision", "source": null }
   ],
   "lineItems": [
-    { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "lineVerdict": "VERIFIED", "lineReason": "", "lineConfidence": 80, "page": 1 }
+    { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "freightTaxed": null, "lineVerdict": "VERIFIED", "lineReason": "", "lineConfidence": 80, "page": 1 }
   ],
   "lineItemCorrections": [
     { "action": "SUPPRESSED_BREAKUP|SUPPRESSED_PRPO|SUPPRESSED_TAX|CORRECTED_AMOUNT", "description": "", "reason": "", "oldValue": "", "newValue": "" }
@@ -1639,6 +1650,12 @@ LINE ITEMS - audit every line; classify freight; code does the math:
   (c) COMBINED TRAVEL-AND-SHIPPING → isFreight=true: a description naming both travel and shipping as a unit (e.g. "Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight. "Travel" or "Travel Expenses" ALONE (no freight/shipping keyword) is NOT freight.
   (d) AMBIGUOUS → isFreight=false: if genuinely uncertain whether the subject is freight or a billable service, keep as billable and set lineVerdict="FLAGGED".
   NEVER set isFreight=true based solely on the dollar amount matching a shipping total.
+- FREIGHT TAX DETECTION — when isFreight=true, ALSO report freightTaxed (true | false | null):
+  · freightTaxed=true ONLY when the invoice OBSERVABLY shows tax applied to this shipping/freight charge. Observable evidence means one of: (1) a tax amount is printed on or in a tax column adjacent to the freight line itself; (2) a separate tax line in the line-item table explicitly covers freight (e.g. "Tax on Shipping", "Freight Tax", "GST on Freight", "Sales Tax on Freight Charges"); (3) an invoice note or label visible on the page explicitly states that freight/shipping is subject to tax for this invoice.
+  · freightTaxed=false ONLY when the invoice OBSERVABLY shows no tax on the shipping charge — e.g. a note explicitly states "Freight is not taxable" or "Shipping exempt from tax", or the tax line's stated base demonstrably excludes freight, or the freight line has no tax column while goods lines do.
+  · freightTaxed=null when tax on freight CANNOT BE DETERMINED by reading the invoice text. This IS the correct answer when: the invoice shows a freight line and a tax total but no clear link between them; when you can only infer from effective-rate arithmetic that freight might be in the taxable base; or when the invoice simply does not address taxability of freight.
+  HONESTY RULE — totals-based inference is NOT observation: if the only available signal is arithmetic (effective tax rate is slightly higher than the nominal rate, suggesting freight is probably included), that is inference, not an observable fact. Return freightTaxed=null. The downstream system will categorise it as Uncertain. Never set freightTaxed=true based solely on totals patterns.
+  freightTaxed is only meaningful on freight lines (isFreight=true). Set freightTaxed=null on every non-freight line.
 - SOURCE CONSTRAINT: Only emit line items from the INVOICE LINE-ITEM TABLE (the structured grid of description/amount rows). Do NOT emit freight/shipping/tax amounts visible in the invoice TOTALS SECTION or SUMMARY AREA (e.g. a row "Shipping: $3,632.99" or "Tax: $700" in the totals block at the bottom of the invoice) as lineItems — those are header-level summary values already captured as fields (shippingCostHeader, taxAmount, grossAmount). Emitting totals-section rows as line items causes them to be suppressed and permanently lost from the gross.
 - SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE. Never suppress a line item because its amount matches shippingCostHeader, a subtotal row, or a totals-section value — those are header/aggregate figures and must not drive individual line-item suppression.
 - Credit, discount, or adjustment lines (e.g. "Credit", "Service Credit", "Rate Adjustment") are real billable line items — NEVER suppress them as freight or tax, even if their dollar amount equals a freight or tax figure shown elsewhere on the invoice.
@@ -1666,7 +1683,7 @@ OUTPUT - return ONLY this JSON, no markdown:
     { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED|CORRECTED|FLAGGED", "confidence": 0, "reason": "Specific evidence for THIS field only — e.g. 'Doc AI read X from the Y block; correct value per Z rule is W'", "taxCritical": true, "routedTo": "docai|claude-text", "source": null }
   ],
   "lineItems": [
-    { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "lineVerdict": "VERIFIED|CORRECTED|SUPPRESSED|FLAGGED", "lineReason": "", "lineConfidence": 95, "page": 1 }
+    { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "freightTaxed": null, "lineVerdict": "VERIFIED|CORRECTED|SUPPRESSED|FLAGGED", "lineReason": "", "lineConfidence": 95, "page": 1 }
   ],
   "lineItemsTotal": 0,
   "lineItemCorrections": [

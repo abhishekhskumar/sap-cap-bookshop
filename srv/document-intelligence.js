@@ -221,6 +221,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       { documentId, shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode, lineItems },
       consistencyChecks, fields
     );
+    const shippingTaxedByVendor = this._resolveShippingTaxed(suppressedLines, [], []);
 
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
@@ -235,7 +236,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
       apcReconciliation,
-      consistencyChecks, manualAction,
+      consistencyChecks, manualAction, shippingTaxedByVendor,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: lineItems, claudeLines: null, visionLines: null, claudeRan: false, visionRan: false }),
       generalInfo, docAIHeader, keepLines, fullText,
       _provenance: {
@@ -543,6 +544,11 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       { documentId, shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode, lineItems: claudeLineItems },
       consistencyChecks, fields
     );
+    const shippingTaxedByVendor = this._resolveShippingTaxed(
+      docAISuppressedLines || [],
+      claudeSuppressedItems,
+      []
+    );
 
     return JSON.stringify({
       documentId,
@@ -552,7 +558,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
       lineItemCorrections: intelligence.lineItemCorrections || [],
       consistencyChecks,
-      manualAction,
+      manualAction, shippingTaxedByVendor,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: keepLines, claudeLines: claudeLineItems, visionLines: null, claudeRan: true, visionRan: false }),
       freightTotal: intelligence.freightTotal || 0,
       summary: intelligence.summary || '',
@@ -876,6 +882,17 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     }
     LOG.info('Vision lineItemCorrections: passthrough=%d reconstructed=%d', (intelligence.lineItemCorrections || []).length, _visionAmtCorrections.length);
 
+    // Cross-layer shipping-tax resolution: separate prev-result suppressed lines back into their
+    // originating layers so _resolveShippingTaxed can apply the per-layer signal rules correctly.
+    const _prevSuppressed    = prevResult ? (prevResult.suppressedLines || []) : [];
+    const _docaiFreightLines  = _prevSuppressed.filter(li => li.suppressedBy === 'docai');
+    const _claudeFreightLines = _prevSuppressed.filter(li => li.suppressedBy === 'claude');
+    const shippingTaxedByVendor = this._resolveShippingTaxed(
+      _docaiFreightLines,
+      _claudeFreightLines,
+      visionSuppressedLines
+    );
+
     return JSON.stringify({
       documentId,
       schemaType: mode,
@@ -895,7 +912,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceTotalAmount: invoiceGrossTotal,
       invoiceFreightTotal: 0,
       apcReconciliation: null,
-      generalInfo: [],
+      generalInfo: [], shippingTaxedByVendor,
       simplifiedTax: taxCalc,
       taxPayload, taxEngineResults,
       reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex', chargeabilityStatus: 'Pending Vertex' },
@@ -2555,5 +2572,59 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     ];
     if (assetCounty) rows.push(exactRow('County', assetCounty, inv.shipToCounty));
     return rows;
+  }
+
+  // Cross-layer resolution of per-line freightTaxed signals → invoice-level shippingTaxedByVendor.
+  // Each layer array contains that layer's suppressed lines (which carry freightTaxed on freight lines).
+  // Pass [] for layers that have not run.
+  _resolveShippingTaxed(docaiSuppressed, claudeSuppressed, visionSuppressed) {
+    const freightOf = lines => (lines || []).filter(li => li.isFreight);
+    const dFreight = freightOf(docaiSuppressed);
+    const cFreight = freightOf(claudeSuppressed);
+    const vFreight = freightOf(visionSuppressed);
+    const allFreight = [...dFreight, ...cFreight, ...vFreight];
+
+    if (allFreight.length === 0) {
+      return { state: 'NO_SHIPPING_LINE', label: 'No shipping line', reason: null, amount: null };
+    }
+
+    // Per-layer judgment: undefined = layer didn't contribute freight lines (not run or no freight);
+    // null = ran but could not determine; true/false = observed on invoice.
+    const layerSignal = freight => {
+      if (freight.length === 0) return undefined;
+      if (freight.some(li => li.freightTaxed === true))  return true;
+      if (freight.some(li => li.freightTaxed === false)) return false;
+      return null;
+    };
+
+    // Collect only observed (non-null, non-undefined) signals — nulls mean "didn't determine," not "No"
+    const activeSignals = [layerSignal(dFreight), layerSignal(cFreight), layerSignal(vFreight)]
+      .filter(s => s === true || s === false);
+
+    if (activeSignals.length === 0) {
+      return { state: 'UNCERTAIN', label: 'Uncertain', reason: 'Not determinable from invoice', amount: null };
+    }
+
+    const hasTrue  = activeSignals.some(s => s === true);
+    const hasFalse = activeSignals.some(s => s === false);
+
+    if (hasTrue && hasFalse) {
+      return { state: 'UNCERTAIN', label: 'Uncertain', reason: 'Layers disagree — review required', amount: null };
+    }
+
+    if (hasTrue) {
+      // Attach dollar amount from DOX docAITaxAmount if available (factual extracted figure)
+      const taxAmtLine = allFreight.find(li => li.docAITaxAmount != null && parseFloat(li.docAITaxAmount) > 0);
+      const amount = taxAmtLine ? +(parseFloat(taxAmtLine.docAITaxAmount)).toFixed(2) : null;
+      return {
+        state: 'YES',
+        label: amount != null ? 'Yes [$' + amount.toFixed(2) + ']' : 'Yes',
+        reason: 'Observed on invoice',
+        amount
+      };
+    }
+
+    // hasFalse only — observed no tax on shipping
+    return { state: 'NO', label: 'No', reason: 'Observed on invoice — no tax on shipping', amount: null };
   }
 };

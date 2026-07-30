@@ -2244,10 +2244,11 @@ function unspscCell(li){
   var confColor=conf==='high'?'#166534':conf==='medium'?'#92400e':'#991b1b';
   var confBg=conf==='high'?'#dcfce7':conf==='medium'?'#fef3c7':'#fee2e2';
   var confLabel=conf==='high'?'high':conf==='medium'?'med':'low ⚠';
-  return '<td style="font-size:11px;min-width:140px;">'
+  return '<td style="font-size:11px;min-width:140px;" title="UNSPSC AI-determined (demo) — production uses PO/DataLake and BTP custom-table lookup, AI for disambiguation only.">'
     +'<span style="font-family:Consolas,monospace;font-weight:700;color:#1d4ed8;">'+escHtml(li.unspsc)+'</span>'
     +(li.unspscDescription?'<div style="color:#555;font-size:10px;margin-top:1px;">'+escHtml(li.unspscDescription)+'</div>':'')
     +'<span style="display:inline-block;margin-top:3px;background:'+confBg+';color:'+confColor+';font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;">'+confLabel+'</span>'
+    +'<div style="font-size:9px;color:#94a3b8;margin-top:2px;font-style:italic;">AI-determined (demo)</div>'
     +'</td>';
 }
 
@@ -2725,7 +2726,7 @@ function openItemDetails(i){
       +(li.unspscDescription?'<span style="font-size:13px;color:#334155;">'+escHtml(li.unspscDescription)+'</span>':'')
       +'<span style="background:'+confBg+';color:'+confColor+';font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">'+conf+' confidence</span>'
       +'</div>'
-      +'<div style="margin-top:6px;font-size:11px;color:#94a3b8;">Family-level code (4-digit segment+family). Draft only — verify against official UNSPSC taxonomy before use.</div>'
+      +'<div style="margin-top:6px;font-size:11px;color:#94a3b8;">Family-level code (4-digit segment+family). UNSPSC AI-determined (demo) — production uses PO/DataLake and BTP custom-table lookup, AI for disambiguation only.</div>'
       +'</div>';
   }
   if(stzLi){
@@ -3613,7 +3614,7 @@ function renderTaxEngine(data){
     html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
     html+='<thead><tr style="background:#eff6ff;">'
       +'<th style="padding:6px 10px;text-align:left;font-weight:600;color:#374151;">Description</th>'
-      +'<th style="padding:6px 10px;text-align:left;font-weight:600;color:#374151;">UNSPSC</th>'
+      +'<th style="padding:6px 10px;text-align:left;font-weight:600;color:#374151;" title="UNSPSC AI-determined (demo) — production uses PO/DataLake and BTP custom-table lookup, AI for disambiguation only.">UNSPSC (AI, demo)</th>'
       +'<th style="padding:6px 10px;text-align:right;font-weight:600;color:#374151;">Net Amt</th>'
       +'<th style="padding:6px 10px;text-align:right;font-weight:600;color:#374151;">Freight Share</th>'
       +'<th style="padding:6px 10px;text-align:right;font-weight:600;color:#374151;">Taxable Total</th>'

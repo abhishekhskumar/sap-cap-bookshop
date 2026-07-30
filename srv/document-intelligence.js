@@ -234,6 +234,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const freightReconciliation = this._buildFreightReconciliation(
       shippingTaxedByVendor, freightTaxabilityPrediction, docAIFreightTotal, taxEngineResults
     );
+    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null, manualAction);
 
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
@@ -248,7 +249,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
       apcReconciliation,
-      consistencyChecks, manualAction, shippingTaxedByVendor, freightReconciliation,
+      consistencyChecks, manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: lineItems, claudeLines: null, visionLines: null, claudeRan: false, visionRan: false }),
       generalInfo, docAIHeader, keepLines, fullText,
       _provenance: {
@@ -582,6 +583,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const freightReconciliation = this._buildFreightReconciliation(
       shippingTaxedByVendor, freightTaxabilityPrediction, invoiceFreightTotal, taxEngineResults
     );
+    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null, manualAction);
+    reconciliation.chargeabilityStatus = chargeabilityResult.chargeabilityStatus;
+    reconciliation.taxAmountDifference = chargeabilityResult.taxAmountDifference;
 
     return JSON.stringify({
       documentId,
@@ -591,7 +595,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
       lineItemCorrections: intelligence.lineItemCorrections || [],
       consistencyChecks,
-      manualAction, shippingTaxedByVendor, freightReconciliation,
+      manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: keepLines, claudeLines: claudeLineItems, visionLines: null, claudeRan: true, visionRan: false }),
       freightTotal: intelligence.freightTotal || 0,
       summary: intelligence.summary || '',
@@ -937,6 +941,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const freightReconciliation = this._buildFreightReconciliation(
       shippingTaxedByVendor, freightTaxabilityPrediction, _visionPayloadFreight, taxEngineResults
     );
+    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount, null);
 
     return JSON.stringify({
       documentId,
@@ -957,10 +962,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceTotalAmount: invoiceGrossTotal,
       invoiceFreightTotal: _visionPayloadFreight || 0,
       apcReconciliation: null,
-      generalInfo: [], shippingTaxedByVendor, freightReconciliation,
+      generalInfo: [], shippingTaxedByVendor, freightReconciliation, chargeabilityResult,
       simplifiedTax: taxCalc,
       taxPayload, taxEngineResults,
-      reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex', chargeabilityStatus: 'Pending Vertex' },
+      reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex',
+        chargeabilityStatus: chargeabilityResult.chargeabilityStatus,
+        taxAmountDifference: chargeabilityResult.taxAmountDifference },
       stats: { total: fields.length, verified, corrected, flagged },
       _provenance: {
         invoiceNetTotal: { provenance: 'inferred', provenanceDetail: 'sum of line item amounts from vision extraction' },
@@ -2164,6 +2171,74 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       note: 'Freight tax reconciliation — illustrative: STZ rate + AI freight-taxability prediction (UNCERTAIN-leaning). ' +
             'Vendor freight tax: factual from invoice. Estimated freight tax: single destination-ZIP rate — situs not modeled. ' +
             'Vertex-authoritative pending. Non-authoritative AI estimate — not compliance-grade.'
+    };
+  }
+
+  // Computes invoice-level chargeability status: estimatedTax (STZ) − vendorTax →
+  // UNDERCHARGED / OVERCHARGED / ACCURATELY_CHARGED / MANUAL_ACTION_REQUIRED.
+  // Always illustrative while STZ+GenAI is the stand-in; flips to authoritative when Vertex connects.
+  _buildChargeabilityStatus(taxEngineResults, vendorTaxAmount, manualAction) {
+    const TOLERANCE = 1.00;
+    const stz = taxEngineResults && taxEngineResults.salestaxzip;
+    const stzAvail = stz && stz.available && stz.totalTax != null;
+
+    if (manualAction && manualAction.required) {
+      return {
+        chargeabilityStatus: 'MANUAL_ACTION_REQUIRED',
+        chargeabilityStatusLabel: 'Manual Action Required',
+        taxAmountDifference: null,
+        estimatedTax: stzAvail ? stz.totalTax : null,
+        vendorTax: vendorTaxAmount,
+        tolerance: TOLERANCE,
+        illustrative: true,
+        note: 'illustrative status (Vertex pending) — manual action required: invoice has unresolved issues blocking tax calculation'
+      };
+    }
+
+    if (!stzAvail) {
+      return {
+        chargeabilityStatus: 'UNAVAILABLE',
+        chargeabilityStatusLabel: 'Awaiting Vertex',
+        taxAmountDifference: null,
+        estimatedTax: null,
+        vendorTax: vendorTaxAmount,
+        tolerance: TOLERANCE,
+        illustrative: true,
+        note: 'illustrative status (Vertex pending) — no rate available for this jurisdiction'
+      };
+    }
+
+    if (vendorTaxAmount == null) {
+      return {
+        chargeabilityStatus: 'VENDOR_TAX_UNKNOWN',
+        chargeabilityStatusLabel: 'Vendor Tax Unknown',
+        taxAmountDifference: null,
+        estimatedTax: stz.totalTax,
+        vendorTax: null,
+        tolerance: TOLERANCE,
+        illustrative: true,
+        note: 'illustrative status (Vertex pending) — vendor tax amount not found on invoice'
+      };
+    }
+
+    const diff = +(stz.totalTax - vendorTaxAmount).toFixed(2);
+    let status, label;
+    if (Math.abs(diff) <= TOLERANCE) {
+      status = 'ACCURATELY_CHARGED'; label = 'Accurately Charged';
+    } else if (diff > 0) {
+      status = 'UNDERCHARGED'; label = 'Undercharged';
+    } else {
+      status = 'OVERCHARGED'; label = 'Overcharged';
+    }
+    return {
+      chargeabilityStatus: status,
+      chargeabilityStatusLabel: label,
+      taxAmountDifference: diff,
+      estimatedTax: stz.totalTax,
+      vendorTax: vendorTaxAmount,
+      tolerance: TOLERANCE,
+      illustrative: true,
+      note: 'illustrative status (Vertex pending) — SalesTaxZip+AI stand-in; authoritative when Vertex connects'
     };
   }
 

@@ -1400,9 +1400,28 @@ function renderGeneral(data){
       var _cvVt=data.vendorTaxAmount!=null?parseFloat(data.vendorTaxAmount):null;
       var _cvTaxExplicit=data._provenance&&data._provenance.vendorTaxAmount&&data._provenance.vendorTaxAmount.provenance==='extracted';
 
-      // ── Row 1: Illustrative (SalesTaxZip) — conditional ─────────────────
+      // ── Row 1: Illustrative — reads persisted chargeabilityResult (single source of truth) ─
       var _cvRow1='';
-      if(_cvStxAvail&&_cvTaxExplicit&&_cvVt!=null){
+      var _cr=data.chargeabilityResult||null;
+      var _crStatus=_cr?_cr.chargeabilityStatus:null;
+      if(_crStatus&&_crStatus!=='UNAVAILABLE'&&_crStatus!=='VENDOR_TAX_UNKNOWN'&&_cvTaxExplicit){
+        var _cvLabel=_cr.chargeabilityStatusLabel;
+        var _cvD=_cr.taxAmountDifference;
+        var _cvAbsD=_cvD!=null?Math.abs(_cvD):0;
+        var _cvTol=_crStatus==='ACCURATELY_CHARGED';
+        var _cvE=_cr.estimatedTax;
+        var _cvBadgeBg=_cvTol?'#16a34a':(_crStatus==='UNDERCHARGED'?'#92400e':'#991b1b');
+        var _cvGapStr=_cvTol?('within $'+money(_cr.tolerance||1)+' tolerance'):('gap: '+(_cvD>0?'+':'−')+'$'+money(_cvAbsD));
+        _cvRow1='<div style="padding:10px 14px 9px;background:#fffbeb;border-bottom:1px solid #fcd34d;">'
+          +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;">'
+          +'<span style="font-size:10px;font-weight:700;color:#78350f;text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;">Illustrative (SalesTaxZip)</span>'
+          +'<span style="font-size:12px;font-weight:700;background:'+_cvBadgeBg+';color:#fff;padding:2px 9px;border-radius:7px;text-transform:uppercase;letter-spacing:.3px;">'+_cvLabel+'</span>'
+          +'<span style="font-size:11px;color:#78350f;">$'+money(_cvE)+' vs vendor $'+money(_cvVt)+'&nbsp;&nbsp;('+_cvGapStr+')</span>'
+          +'</div>'
+          +'<div style="font-size:11px;color:#92400e;font-weight:600;">&#9888; Rate-only estimate, no exemption logic &mdash; likely overstates tax on exempt lines. Illustrative, not authoritative.</div>'
+          +'</div>';
+      }else if(_cvStxAvail&&_cvTaxExplicit&&_cvVt!=null){
+        // Fallback for results predating persisted chargeabilityResult
         var _cvE=parseFloat(_cvStx.totalTax);
         if(_cvVt!==0&&_cvE!==0){
           var _cvD=+(_cvE-_cvVt).toFixed(2);
@@ -1412,8 +1431,7 @@ function renderGeneral(data){
           var _cvLabel=_cvTol?'Accurately Charged':_cvUnder?'Undercharged':'Overcharged';
           var _cvBadgeBg=_cvTol?'#16a34a':_cvUnder?'#92400e':'#991b1b';
           var _cvGapStr=_cvTol?('within $'+money(TAX_TOLERANCE)+' tolerance'):('gap: '+(_cvD>0?'+':'−')+'$'+money(_cvAbsD));
-          _cvRow1=
-            '<div style="padding:10px 14px 9px;background:#fffbeb;border-bottom:1px solid #fcd34d;">'
+          _cvRow1='<div style="padding:10px 14px 9px;background:#fffbeb;border-bottom:1px solid #fcd34d;">'
             +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;">'
             +'<span style="font-size:10px;font-weight:700;color:#78350f;text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;">Illustrative (SalesTaxZip)</span>'
             +'<span style="font-size:12px;font-weight:700;background:'+_cvBadgeBg+';color:#fff;padding:2px 9px;border-radius:7px;text-transform:uppercase;letter-spacing:.3px;">'+_cvLabel+'</span>'
@@ -3320,7 +3338,18 @@ function renderTaxEngine(data){
   var _agreeCount=stxLineItems.length-_exceptionLines.length;
 
   var _vLabel,_vColor,_vBg,_vBorder;
-  if(!taxIsExplicit||!stxAvail||_ftZero){
+  var _cr3=src.chargeabilityResult||null;
+  var _cr3Status=_cr3?_cr3.chargeabilityStatus:null;
+  if(_cr3Status&&_cr3Status!=='UNAVAILABLE'){
+    // Persisted status from backend (single source of truth)
+    if(_cr3Status==='ACCURATELY_CHARGED'){_vLabel='Accurately charged';_vColor='#166534';_vBg='#f0fdf4';_vBorder='#86efac';}
+    else if(_cr3Status==='UNDERCHARGED'){_vLabel='Undercharged';_vColor='#92400e';_vBg='#fffbeb';_vBorder='#fcd34d';}
+    else if(_cr3Status==='OVERCHARGED'){_vLabel='Overcharged';_vColor='#991b1b';_vBg='#fef2f2';_vBorder='#fca5a5';}
+    else if(_cr3Status==='MANUAL_ACTION_REQUIRED'){_vLabel='Manual Action Required';_vColor='#92400e';_vBg='#fffbeb';_vBorder='#fcd34d';}
+    else if(_cr3Status==='VENDOR_TAX_UNKNOWN'){_vLabel='Vendor Tax Unknown';_vColor='#6b7280';_vBg='#f9fafb';_vBorder='#e5e7eb';}
+    else{_vLabel='Awaiting Vertex';_vColor='#6b7280';_vBg='#f9fafb';_vBorder='#e5e7eb';}
+  }else if(!taxIsExplicit||!stxAvail||_ftZero){
+    // Fallback for results predating persisted chargeabilityResult
     _vLabel='Awaiting Vertex';_vColor='#6b7280';_vBg='#f9fafb';_vBorder='#e5e7eb';
   }else if(_ftTol){
     _vLabel='Accurately charged';_vColor='#166534';_vBg='#f0fdf4';_vBorder='#86efac';

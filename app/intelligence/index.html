@@ -2792,9 +2792,15 @@ function _teSalestaxzipCard(alt,vendorTax){
   c+='<div style="padding:14px;">';
   // ── Source line ───────────────────────────────────────────────────────────
   var sourceLabel=alt.rateSource==='api'?'SalesTaxZip API':alt.rateSource==='local'?'local rate table':'—';
-  c+='<div style="font-size:12px;color:#065f46;font-weight:600;margin-bottom:10px;">Jurisdiction Results'
-    +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
+  c+='<div style="font-size:12px;color:#065f46;font-weight:600;margin-bottom:6px;">Jurisdiction Results'
+    +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'destination ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
     +(avail?' <span style="font-weight:400;font-size:10px;color:#0891b2;">via '+sourceLabel+'</span>':'')
+    +'</div>';
+  c+='<div style="font-size:10px;color:#78350f;background:#fff7ed;border:1px solid #fed7aa;border-radius:4px;padding:4px 10px;margin-bottom:10px;line-height:1.5;">'
+    +'<strong>Sourcing caveat:</strong> Single destination-ZIP lookup &mdash; does not model origin/destination situs. '
+    +'Vertex applies situs rules per jurisdiction tier (e.g. state/county from origin, district from destination), which may select different rates. '
+    +(avail&&alt.jurisdictions&&alt.jurisdictions.some(function(j){return j.type==='DISTRICT';})
+      ?'District shown as a combined local/district figure &mdash; Vertex itemizes named special districts individually. ':'')
     +'</div>';
   // ── Jurisdiction Summary — Vertex-shaped document view ───────────────────
   if(avail&&alt.jurisdictions&&alt.jurisdictions.length){
@@ -3220,6 +3226,7 @@ function renderTaxEngine(data){
   if(_uncertCount2>0)_aiParts2.push(_uncertCount2+' uncertain');
   if(_aiParts2.length>0)_trustParts.push(_aiParts2.join(', ')+' (AI)');
   _trustParts.push('not audit-grade');
+  _trustParts.push('situs not modeled');
   _trustParts.push('Vertex pending');
 
   html+='<div style="margin:10px 16px 0;border:2px solid '+_vBorder+';border-radius:8px;overflow:hidden;">';
@@ -3380,8 +3387,13 @@ function renderTaxEngine(data){
   }
   html+='</div>';
 
-  html+='<div style="padding:8px 14px;background:#fef9c3;border-top:1px solid #fde68a;font-size:11px;color:#78350f;line-height:1.5;">';
-  html+='<strong>Note:</strong> Vertex, Avalara, and ONESOURCE are not connected in this POC (production/pluggable stubs). SalesTaxZip provides live illustrative rate estimates; ZIP-based rates diverge from enterprise engines. Authoritative charge verdict requires Vertex. The same extraction payload feeds any connected engine.';
+  html+='<div style="padding:8px 14px;background:#fef9c3;border-top:1px solid #fde68a;font-size:11px;color:#78350f;line-height:1.6;">';
+  html+='<strong>Note:</strong> Vertex, Avalara, and ONESOURCE are not connected in this POC (production/pluggable stubs). SalesTaxZip provides live illustrative rate estimates only.';
+  html+='<ul style="margin:4px 0 0 0;padding-left:16px;">';
+  html+='<li><strong>Situs simplified:</strong> rates from a single destination (ship-to) ZIP lookup'+(stxAvail&&stxRes.rateKey?' (<code>'+escHtml(stxRes.rateKey)+'</code>)':'')+'. Vertex applies origin/destination situs rules per jurisdiction tier (e.g. state/county from administrative origin, district from destination address) — which may select different rates. This estimate does not model situs.</li>';
+  html+='<li><strong>District granularity:</strong> SalesTaxZip returns a single flattened local/district rate. Vertex itemizes named special districts individually (e.g. 7 districts at separate rates). The combined figure here may over- or under-count compared to Vertex\'s district stack.</li>';
+  html+='<li>Authoritative charge verdict and per-jurisdiction taxability require Vertex. The same extraction payload feeds any connected engine.</li>';
+  html+='</ul>';
   html+='</div>';
   html+='</div>'; // engine roster
 

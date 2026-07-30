@@ -64,7 +64,7 @@ function _jurisdictionName(component, jInfo, rates) {
     case 'city':
       return (rates && rates._apiCity) || (jInfo.city || 'CITY').toUpperCase();
     case 'district':
-      return 'LOCAL DISTRICT';
+      return 'LOCAL/DISTRICT (combined)';
     default:
       return component.toUpperCase();
   }
@@ -172,7 +172,7 @@ module.exports = {
             jurisdictions: bd.jurisdictions,
             combinedRate:  apiRates.combined,
             lineItems:     bd.lineItems,
-            note: 'Rates: SalesTaxZip (live, ZIP-level) · Production engine: Vertex (full-address jurisdiction + product-specific taxability). Not compliance-grade — verify with your state DOR or a licensed CPA before use. Data © SalesTaxZip.'
+            note: 'Rates: SalesTaxZip · destination (ship-to) ZIP ' + zip + ' · sourcing simplified: single-ZIP lookup — Vertex applies origin/destination situs rules per jurisdiction tier (e.g. state/county from origin, district from destination), which may select different rates; this estimate does not model situs · district rate is a combined local/district figure — Vertex itemizes named special districts individually · AI taxability (UNCERTAIN-leaning) · Vertex-authoritative pending · not compliance-grade'
           };
         }
         // API returned 404/429 or empty — fall through to local table
@@ -198,7 +198,7 @@ module.exports = {
         jurisdictions: bd.jurisdictions,
         combinedRate:  tableRates.combined,
         lineItems:     bd.lineItems,
-        note: 'Rates: SalesTaxZip (local table fallback) · Production engine: Vertex (full-address jurisdiction + product-specific taxability). ZIP lookup unavailable — fell back to srv/data/tax-rates.json. All seeded entries are placeholder (0.000%) until replaced with verified values. Not compliance-grade.'
+        note: 'Rates: local table fallback (srv/data/tax-rates.json) · destination key: ' + tableKey + ' · sourcing simplified: table lookup does not model origin/destination situs — Vertex applies situs rules per jurisdiction tier · district rate is a combined local/district figure — Vertex itemizes named special districts individually · all local table entries are placeholder (0.000%) until replaced with verified values · AI taxability (UNCERTAIN-leaning) · Vertex-authoritative pending · not compliance-grade'
       };
     }
 

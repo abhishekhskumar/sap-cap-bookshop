@@ -234,7 +234,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const freightReconciliation = this._buildFreightReconciliation(
       shippingTaxedByVendor, freightTaxabilityPrediction, docAIFreightTotal, taxEngineResults
     );
-    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null, manualAction);
+    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null);
+    const taxabilityResult    = this._buildTaxabilityStatus(apcEnd, manualAction);
 
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
@@ -249,7 +250,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
       apcReconciliation,
-      consistencyChecks, manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult,
+      consistencyChecks, manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: lineItems, claudeLines: null, visionLines: null, claudeRan: false, visionRan: false }),
       generalInfo, docAIHeader, keepLines, fullText,
       _provenance: {
@@ -583,7 +584,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const freightReconciliation = this._buildFreightReconciliation(
       shippingTaxedByVendor, freightTaxabilityPrediction, invoiceFreightTotal, taxEngineResults
     );
-    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null, manualAction);
+    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null);
+    const taxabilityResult    = this._buildTaxabilityStatus(apcEnd, manualAction);
     reconciliation.chargeabilityStatus = chargeabilityResult.chargeabilityStatus;
     reconciliation.taxAmountDifference = chargeabilityResult.taxAmountDifference;
 
@@ -595,7 +597,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
       lineItemCorrections: intelligence.lineItemCorrections || [],
       consistencyChecks,
-      manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult,
+      manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: keepLines, claudeLines: claudeLineItems, visionLines: null, claudeRan: true, visionRan: false }),
       freightTotal: intelligence.freightTotal || 0,
       summary: intelligence.summary || '',
@@ -941,7 +943,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const freightReconciliation = this._buildFreightReconciliation(
       shippingTaxedByVendor, freightTaxabilityPrediction, _visionPayloadFreight, taxEngineResults
     );
-    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount, null);
+    const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount);
+    const _visionApcEnd = prevResult && prevResult.apcReconciliation && prevResult.apcReconciliation.apcEnd != null
+      ? prevResult.apcReconciliation.apcEnd : null;
+    const taxabilityResult = this._buildTaxabilityStatus(_visionApcEnd, null);
 
     return JSON.stringify({
       documentId,
@@ -962,7 +967,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceTotalAmount: invoiceGrossTotal,
       invoiceFreightTotal: _visionPayloadFreight || 0,
       apcReconciliation: null,
-      generalInfo: [], shippingTaxedByVendor, freightReconciliation, chargeabilityResult,
+      generalInfo: [], shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult,
       simplifiedTax: taxCalc,
       taxPayload, taxEngineResults,
       reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex',
@@ -2174,26 +2179,13 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     };
   }
 
-  // Computes invoice-level chargeability status: estimatedTax (STZ) − vendorTax →
-  // UNDERCHARGED / OVERCHARGED / ACCURATELY_CHARGED / MANUAL_ACTION_REQUIRED.
+  // Reconciliation verdict only: estimatedTax (STZ) − vendorTax → UNDERCHARGED / OVERCHARGED /
+  // ACCURATELY_CHARGED. Separate from the FD §5.8 processing status (_buildTaxabilityStatus).
   // Always illustrative while STZ+GenAI is the stand-in; flips to authoritative when Vertex connects.
-  _buildChargeabilityStatus(taxEngineResults, vendorTaxAmount, manualAction) {
+  _buildChargeabilityStatus(taxEngineResults, vendorTaxAmount) {
     const TOLERANCE = 1.00;
     const stz = taxEngineResults && taxEngineResults.salestaxzip;
     const stzAvail = stz && stz.available && stz.totalTax != null;
-
-    if (manualAction && manualAction.required) {
-      return {
-        chargeabilityStatus: 'MANUAL_ACTION_REQUIRED',
-        chargeabilityStatusLabel: 'Manual Action Required',
-        taxAmountDifference: null,
-        estimatedTax: stzAvail ? stz.totalTax : null,
-        vendorTax: vendorTaxAmount,
-        tolerance: TOLERANCE,
-        illustrative: true,
-        note: 'illustrative status (Vertex pending) — manual action required: invoice has unresolved issues blocking tax calculation'
-      };
-    }
 
     if (!stzAvail) {
       return {
@@ -2204,7 +2196,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         vendorTax: vendorTaxAmount,
         tolerance: TOLERANCE,
         illustrative: true,
-        note: 'illustrative status (Vertex pending) — no rate available for this jurisdiction'
+        note: 'reconciliation verdict (Vertex pending) — no rate available for this jurisdiction'
       };
     }
 
@@ -2217,7 +2209,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         vendorTax: null,
         tolerance: TOLERANCE,
         illustrative: true,
-        note: 'illustrative status (Vertex pending) — vendor tax amount not found on invoice'
+        note: 'reconciliation verdict (Vertex pending) — vendor tax amount not found on invoice'
       };
     }
 
@@ -2238,7 +2230,56 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       vendorTax: vendorTaxAmount,
       tolerance: TOLERANCE,
       illustrative: true,
-      note: 'illustrative status (Vertex pending) — SalesTaxZip+AI stand-in; authoritative when Vertex connects'
+      note: 'reconciliation verdict (Vertex pending) — SalesTaxZip+AI stand-in; authoritative when Vertex connects'
+    };
+  }
+
+  // FD §5.8 processing status — three values, independent of the reconciliation verdict:
+  //   NO_ACTION_REQUIRED  — APC End value is zero (no use tax liability)
+  //   MANUAL_ACTION_REQUIRED — one or more FD triggers: (a) missing invoice/SCN, (b) missing
+  //                            mandatory inputs (ship-to, UNSPSC, amounts), (c) Vertex failure
+  //   CALCULATED          — stand-in: SalesTaxZip+GenAI; label notes Vertex-pending status
+  _buildTaxabilityStatus(apcEnd, manualAction) {
+    if (apcEnd != null && apcEnd === 0) {
+      return {
+        taxabilityStatus: 'NO_ACTION_REQUIRED',
+        taxabilityStatusLabel: 'No Action Required',
+        taxabilityStatusDetail: 'APC End value is zero — no use tax liability',
+        manualActionCategories: []
+      };
+    }
+
+    if (manualAction && manualAction.required) {
+      const reasons = manualAction.reasons || [];
+      const cats = [];
+      // (a) Missing Invoice PDF — SCNID absent or unknown
+      if (reasons.some(r => /SCNID/i.test(r))) {
+        cats.push({ code: 'a', label: 'Missing Invoice PDF', detail: 'No SCN/URN — DFM fetch cannot proceed' });
+      }
+      // (b) Vertex Mandatory Inputs Missing — ship-to, postal, UNSPSC, or amount issues
+      if (reasons.some(r => /ship.to|postal|UNSPSC|amount|confidence|Consistency/i.test(r))) {
+        cats.push({ code: 'b', label: 'Vertex Mandatory Inputs Missing', detail: 'Ship-To, Postal Code, UNSPSC, or amount data unavailable' });
+      }
+      // (c) Vertex Response Missing — technical failure (not yet wired; placeholder)
+      if (reasons.some(r => /vertex.*fail|technical.*fail/i.test(r))) {
+        cats.push({ code: 'c', label: 'Vertex Response Missing', detail: 'UNSPSC not in Vertex or Vertex technical failure' });
+      }
+      if (cats.length === 0) {
+        cats.push({ code: 'b', label: 'Vertex Mandatory Inputs Missing', detail: 'Invoice data quality prevents reliable tax calculation' });
+      }
+      return {
+        taxabilityStatus: 'MANUAL_ACTION_REQUIRED',
+        taxabilityStatusLabel: 'Manual Action Required',
+        taxabilityStatusDetail: reasons.slice(0, 5).join('; '),
+        manualActionCategories: cats
+      };
+    }
+
+    return {
+      taxabilityStatus: 'CALCULATED',
+      taxabilityStatusLabel: 'Calculated — illustrative, Vertex pending',
+      taxabilityStatusDetail: 'Tax calculated using SalesTaxZip+GenAI stand-in; authoritative when Vertex connects',
+      manualActionCategories: []
     };
   }
 

@@ -1464,9 +1464,40 @@ function renderGeneral(data){
       var _cvEduText='SalesTaxZip applies the jurisdiction rate to the entire invoice base, treating all lines as taxable.'+_cvEduNums+' Vertex determines taxability per line from each item\'s UNSPSC code &mdash; exempt lines (services, resale, installation) are excluded from the taxable base. Which lines are taxable is what determines the verdict &mdash; a determination Vertex makes and a rate-only estimate cannot.';
 
       var _cvExtrRow=_chargeStatusBanner(_cvVt,_cvStx);
+
+      // ── Row 0: FD §5.8 Taxability Status (processing status) ─────────────
+      var _cvRow0='';
+      var _tsr=data.taxabilityResult||null;
+      var _tsStatus=_tsr?_tsr.taxabilityStatus:null;
+      if(_tsStatus){
+        var _tsBg,_tsClr,_tsBdr,_tsBadgeBg,_tsBadgeClr;
+        if(_tsStatus==='NO_ACTION_REQUIRED'){
+          _tsBg='#f0fdf4';_tsClr='#14532d';_tsBdr='#86efac';_tsBadgeBg='#16a34a';_tsBadgeClr='#fff';
+        }else if(_tsStatus==='MANUAL_ACTION_REQUIRED'){
+          _tsBg='#fff7ed';_tsClr='#7c2d12';_tsBdr='#fed7aa';_tsBadgeBg='#ea580c';_tsBadgeClr='#fff';
+        }else{
+          _tsBg='#eff6ff';_tsClr='#1e3a5f';_tsBdr='#93c5fd';_tsBadgeBg='#2563eb';_tsBadgeClr='#fff';
+        }
+        var _tsLabel=_tsr.taxabilityStatusLabel||_tsStatus;
+        _cvRow0='<div style="padding:9px 14px 8px;background:'+_tsBg+';border-bottom:1px solid '+_tsBdr+';">'
+          +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+          +'<span style="font-size:10px;font-weight:700;color:'+_tsClr+';text-transform:uppercase;letter-spacing:.07em;white-space:nowrap;">Taxability Status</span>'
+          +'<span style="font-size:11px;font-weight:700;background:'+_tsBadgeBg+';color:'+_tsBadgeClr+';padding:2px 10px;border-radius:7px;">'+escHtml(_tsLabel)+'</span>';
+        if(_tsStatus==='MANUAL_ACTION_REQUIRED'&&_tsr.manualActionCategories&&_tsr.manualActionCategories.length>0){
+          _cvRow0+='<span style="font-size:11px;color:'+_tsClr+';">'
+            +_tsr.manualActionCategories.map(function(c){return'('+c.code+') '+escHtml(c.label);}).join(' &nbsp;&#183;&nbsp; ')
+            +'</span>';
+        }
+        _cvRow0+='</div>'
+          +(_tsStatus==='MANUAL_ACTION_REQUIRED'&&_tsr.taxabilityStatusDetail
+            ?'<div style="font-size:11px;color:'+_tsClr+';margin-top:4px;">'+escHtml(_tsr.taxabilityStatusDetail.slice(0,200))+'</div>':'')
+          +'</div>';
+      }
+
       cvb.innerHTML=
         '<div style="margin-bottom:10px;border:1.5px solid #e5e7eb;border-radius:8px;overflow:hidden;">'
         +'<div style="padding:5px 14px;background:#f9fafb;border-bottom:1px solid #e5e7eb;font-size:10px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.08em;">Charge Status</div>'
+        +_cvRow0
         +_cvExtrRow
         +_cvRow1
         +_cvRow2

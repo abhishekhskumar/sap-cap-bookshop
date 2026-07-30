@@ -2090,6 +2090,16 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     const combinedRate  = stzAvail ? stzResult.combinedRate : null;
     const rateKey       = stzAvail ? (stzResult.rateKey || null) : null;
 
+    // Rate completeness: detect state-only rate (no county/local tiers returned non-zero by STZ API).
+    // When only the STATE tier has rate > 0, the estimate may understate tax if county/local applies.
+    // Note: some states (e.g. VA Northern Virginia) fold regional levies into the state figure, so
+    // "state-only" does not always mean incomplete — but we cannot confirm completeness from the API
+    // response alone, so we flag it for disclosure.
+    const _jurs = stzAvail && stzResult.jurisdictions ? stzResult.jurisdictions : [];
+    const hasLocalTier = _jurs.some(j => j.type !== 'STATE' && (j.rate || 0) > 0);
+    const rateIncomplete = stzAvail && _jurs.length > 0 && !hasLocalTier;
+    const rateSource = stzAvail ? (stzResult.rateSource || 'SalesTaxZip') : null;
+
     // Estimated freight tax — gated by AI taxability prediction (UNCERTAIN → conservative: apply rate)
     let estimatedFreightTax = null;
     if (stzAvail && freightAmt > 0 && freightTaxabilityPrediction) {
@@ -2143,9 +2153,11 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       vendorFreightTax,
       freightTaxabilityPrediction: freightTaxabilityPrediction || null,
       estimatedFreightTax,
-      rateUsed:    combinedRate,
+      rateUsed:        combinedRate,
       rateKey,
-      rateSource:  stzAvail ? 'SalesTaxZip' : null,
+      rateSource:      stzAvail ? (rateSource || 'SalesTaxZip') : null,
+      rateIncomplete,                      // true when only STATE tier non-zero
+      rateTiersReturned: _jurs.map(j => j.type),
       variance,
       verdict,
       tolerance:   FREIGHT_TAX_TOLERANCE,

@@ -1815,25 +1815,56 @@ function renderRecon(data){
 
     var verdict=fr.verdict||'UNAVAILABLE';
 
-    // Verdict display config — neutral palette, no validation checkmarks
+    // ── Cross-layer freight amount disagreement ────────────────────────────
+    // Compare invoiceFreightTotal from each layer that has run; if they differ
+    // by more than $1.00, the freight base used in the estimate is contested.
+    var _FREIGHT_AGREE_TOL=1.00;
+    var _layerFreights=[];
+    if(docaiResult&&docaiResult.invoiceFreightTotal!=null)_layerFreights.push({layer:'DocAI',amt:parseFloat(docaiResult.invoiceFreightTotal)||0});
+    if(claudeResult&&claudeResult.invoiceFreightTotal!=null)_layerFreights.push({layer:'Claude',amt:parseFloat(claudeResult.invoiceFreightTotal)||0});
+    if(visionResult&&visionResult.invoiceFreightTotal!=null)_layerFreights.push({layer:'Vision',amt:parseFloat(visionResult.invoiceFreightTotal)||0});
+    var _freightAmounts=_layerFreights.map(function(l){return l.amt;});
+    var _freightMin=_freightAmounts.length?Math.min.apply(null,_freightAmounts):0;
+    var _freightMax=_freightAmounts.length?Math.max.apply(null,_freightAmounts):0;
+    var _freightDisputed=(_freightMax-_freightMin)>_FREIGHT_AGREE_TOL&&_layerFreights.length>1;
+
+    // ── Rate incompleteness (state-only) ──────────────────────────────────
+    var _rateIncomplete=!!(fr.rateIncomplete);
+    var _rateTiers=fr.rateTiersReturned||[];
+
+    // ── Estimate is "soft" if either disputed freight OR incomplete rate ──
+    var _softEstimate=_freightDisputed||_rateIncomplete;
+
+    // Verdict display config
     var vcfg={
-      ACCURATELY_TAXED:     {label:'Freight accurately taxed',  bg:'#f0fdf4',border:'#86efac',hColor:'#166534'},
-      OVER_TAXED:           {label:'Freight over-taxed',         bg:'#fffbeb',border:'#fcd34d',hColor:'#92400e'},
-      UNDER_TAXED:          {label:'Freight under-taxed',        bg:'#fffbeb',border:'#fcd34d',hColor:'#92400e'},
-      NO_RATE:              {label:'Freight tax',                bg:'#f8fafc',border:'#e2e8f0',hColor:'#64748b'},
-      VENDOR_AMOUNT_UNKNOWN:{label:'Freight tax',                bg:'#f8fafc',border:'#e2e8f0',hColor:'#64748b'},
-      VENDOR_UNCERTAIN:     {label:'Freight tax (uncertain)',    bg:'#fffbeb',border:'#fcd34d',hColor:'#78350f'},
-      UNAVAILABLE:          {label:'Freight tax',                bg:'#f8fafc',border:'#e2e8f0',hColor:'#64748b'}
+      ACCURATELY_TAXED:     {label:'Freight accurately taxed',    bg:'#f0fdf4',border:'#86efac',hColor:'#166534'},
+      OVER_TAXED:           {label:'Freight over-taxed',           bg:'#fffbeb',border:'#fcd34d',hColor:'#92400e'},
+      UNDER_TAXED:          {label:'Freight under-taxed',          bg:'#fffbeb',border:'#fcd34d',hColor:'#92400e'},
+      NO_RATE:              {label:'Freight tax',                  bg:'#f8fafc',border:'#e2e8f0',hColor:'#64748b'},
+      VENDOR_AMOUNT_UNKNOWN:{label:'Freight tax',                  bg:'#f8fafc',border:'#e2e8f0',hColor:'#64748b'},
+      VENDOR_UNCERTAIN:     {label:'Freight tax (uncertain)',      bg:'#fffbeb',border:'#fcd34d',hColor:'#78350f'},
+      UNAVAILABLE:          {label:'Freight tax',                  bg:'#f8fafc',border:'#e2e8f0',hColor:'#64748b'}
     };
+    // When estimate is soft, soften the verdict label and use muted styling
+    if(_softEstimate&&(verdict==='OVER_TAXED'||verdict==='UNDER_TAXED'||verdict==='ACCURATELY_TAXED')){
+      vcfg[verdict]=Object.assign({},vcfg[verdict],{
+        label: verdict==='ACCURATELY_TAXED'?'Freight tax (estimate soft)':'Freight '+verdict.replace('_TAXED','').toLowerCase()+'-taxed (estimate soft)',
+        bg:'#fafafa',border:'#d1d5db',hColor:'#4b5563'
+      });
+    }
     var vc=vcfg[verdict]||vcfg.UNAVAILABLE;
 
     var html='<div style="margin-bottom:10px;padding:10px 14px;background:'+vc.bg+';border:1px solid '+vc.border+';border-radius:6px;font-size:12px;line-height:1.7;">';
 
     // Headline
     html+='<div style="font-size:15px;font-weight:800;color:'+vc.hColor+';margin-bottom:4px;">'+escHtml(vc.label);
-    if(verdict==='OVER_TAXED'&&fr.variance!=null)html+=' <span style="font-size:12px;font-weight:600;">(+$'+money(Math.abs(fr.variance))+')</span>';
-    if(verdict==='UNDER_TAXED'&&fr.variance!=null)html+=' <span style="font-size:12px;font-weight:600;">(&minus;$'+money(Math.abs(fr.variance))+')</span>';
-    if(verdict==='ACCURATELY_TAXED')html+=' <span style="font-size:11px;font-weight:500;color:#15803d;">(within $'+money(fr.tolerance||0.25)+')</span>';
+    if(fr.variance!=null&&(verdict==='OVER_TAXED'||verdict==='UNDER_TAXED')){
+      var _vSign=fr.variance>0?'+':'&minus;';
+      html+=' <span style="font-size:12px;font-weight:600;">('
+        +_vSign+'$'+money(Math.abs(fr.variance))+(_softEstimate?' <span style="font-weight:400;font-size:11px;color:#6b7280;">illustrative</span>':'')
+        +')</span>';
+    }
+    if(verdict==='ACCURATELY_TAXED')html+=' <span style="font-size:11px;font-weight:500;">(within $'+money(fr.tolerance||0.25)+')</span>';
     html+='</div>';
 
     // Key numbers row
@@ -1847,27 +1878,49 @@ function renderRecon(data){
     else if(fr.vendorFreightTaxState==='UNCERTAIN')
       numParts.push('<span>Vendor freight tax: <strong>Uncertain</strong></span>');
 
-    if(fr.estimatedFreightTax!=null)
+    if(fr.estimatedFreightTax!=null){
+      var _estNote='STZ '+(_rateIncomplete?'<span style="color:#b45309;font-style:italic;">'+fr.rateUsed.toFixed(3)+'%*</span>':fr.rateUsed.toFixed(3)+'%')
+        +' &times; $'+money(fr.vendorFreightAmount||0)+' freight'+(_freightDisputed?' <span style="color:#b45309;font-style:italic;">**</span>':'');
       numParts.push('<span>Estimated: <strong>$'+money(fr.estimatedFreightTax)+'</strong>'
-        +(fr.rateUsed!=null?' <span style="font-size:10px;color:#6b7280;">(STZ '+fr.rateUsed.toFixed(3)+'% &times; $'+money(fr.vendorFreightAmount||0)+' freight)</span>':'')+'</span>');
-    else if(verdict==='NO_RATE')
+        +(fr.rateUsed!=null?' <span style="font-size:10px;color:#6b7280;">('+_estNote+')</span>':'')+'</span>');
+    }else if(verdict==='NO_RATE')
       numParts.push('<span style="color:#6b7280;">Estimated: no rate available (ZIP/city not resolved)</span>');
 
-    if(numParts.length)html+='<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:3px;">'+numParts.join('')+'</div>';
+    if(numParts.length)html+='<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:4px;">'+numParts.join('')+'</div>';
+
+    // ── Disputed inputs disclosure boxes ──────────────────────────────────
+    if(_freightDisputed){
+      var _byLayer=_layerFreights.map(function(l){return l.layer+' $'+money(l.amt);}).join(' &nbsp;&#183;&nbsp; ');
+      html+='<div style="font-size:11px;background:#fff7ed;border:1px solid #fed7aa;border-radius:4px;padding:4px 10px;margin-top:3px;color:#78350f;">'
+        +'<strong>** Freight amount disputed across layers:</strong> '+_byLayer
+        +' &mdash; estimate uses <strong>$'+money(fr.vendorFreightAmount||0)+'</strong> ('+escHtml(stb===visionResult?'Vision':stb===claudeResult?'Claude':'DocAI')+' layer)'
+        +'. Resolve the freight discrepancy before treating this variance as actionable.'
+        +'</div>';
+    }
+    if(_rateIncomplete){
+      html+='<div style="font-size:11px;background:#fff7ed;border:1px solid #fed7aa;border-radius:4px;padding:4px 10px;margin-top:3px;color:#78350f;">'
+        +'<strong>* Rate incomplete — state-only:</strong> STZ API returned '+escHtml(_rateTiers.join('+') ||'STATE')+' tier only'
+        +' ('+money(fr.rateUsed||0)+'%). No county or local component returned for this ZIP. '
+        +'Actual combined rate may be higher — estimate may understate tax. Vertex required for full-stack rate.'
+        +'</div>';
+    }
 
     // Freight taxability AI row
     var ftp=fr.freightTaxabilityPrediction;
     if(ftp){
       var taxBadgeColor=ftp.taxability==='TAXABLE'?'#166534':ftp.taxability==='EXEMPT'?'#1e40af':'#92400e';
       var taxBadgeBg=ftp.taxability==='TAXABLE'?'#dcfce7':ftp.taxability==='EXEMPT'?'#dbeafe':'#fef3c7';
-      html+='<div style="font-size:11px;color:#374151;">'
+      html+='<div style="font-size:11px;color:#374151;margin-top:2px;">'
         +'Freight taxability (AI): <span style="padding:1px 7px;border-radius:9px;font-weight:700;background:'+taxBadgeBg+';color:'+taxBadgeColor+';">'+escHtml(ftp.taxability)+'</span>'
         +(ftp.taxabilityReason?' &nbsp;&#8212; <span style="color:#6b7280;">'+escHtml(ftp.taxabilityReason)+'</span>':'')
         +'</div>';
     }
 
     // Provenance note
-    html+='<div style="font-size:10px;color:#9ca3af;margin-top:3px;">Illustrative &nbsp;&#183;&nbsp; STZ+AI estimate &nbsp;&#183;&nbsp; situs not modeled &nbsp;&#183;&nbsp; Vertex-authoritative pending</div>';
+    var _provParts=['Illustrative','STZ+AI estimate','situs not modeled'];
+    if(_softEstimate)_provParts.push('estimate inputs disputed — not actionable without Vertex');
+    else _provParts.push('Vertex-authoritative pending');
+    html+='<div style="font-size:10px;color:#9ca3af;margin-top:3px;">'+_provParts.join(' &nbsp;&#183;&nbsp; ')+'</div>';
     html+='</div>';
 
     stvDiv.innerHTML=html;

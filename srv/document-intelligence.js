@@ -192,6 +192,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
     lineItems = await this._classifyLineItemsUNSPSC(lineItems);
+    // AI taxability determination per line + jurisdiction — provisional, NOT authoritative tax law
+    lineItems = await this._determineTaxability(lineItems, { state: resolved.shipToState, city: resolved.shipToCity });
     // Simplified destination-based tax calc — additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(lineItems, resolved.shipToState, resolved.shipToCity);
     lineItems = taxCalc.lineItems;
@@ -515,6 +517,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
     claudeLineItems = await this._classifyLineItemsUNSPSC(claudeLineItems);
+    // AI taxability determination per line + jurisdiction — provisional, NOT authoritative tax law
+    claudeLineItems = await this._determineTaxability(claudeLineItems, { state: resolved.shipToState, city: resolved.shipToCity });
     // Simplified destination-based tax calc — additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(claudeLineItems, resolved.shipToState, resolved.shipToCity);
     claudeLineItems = taxCalc.lineItems;
@@ -823,8 +827,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     }
     // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
     lineItems = await this._classifyLineItemsUNSPSC(lineItems);
-    // Simplified destination-based tax calc — additive, illustrative only
+    // AI taxability determination per line + jurisdiction — provisional, NOT authoritative tax law
     const _getVF = name => { const f = fields.find(x => x.fieldName === name); return (f && (f.correctValue || f.docAIValue) || '').trim(); };
+    lineItems = await this._determineTaxability(lineItems, { state: _getVF('shipToState'), city: _getVF('shipToCity') });
+    // Simplified destination-based tax calc — additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(lineItems, _getVF('shipToState'), _getVF('shipToCity'));
     lineItems = taxCalc.lineItems;
 
@@ -1838,6 +1844,109 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     }
   }
 
+  // Determines taxability (TAXABLE | EXEMPT | UNCERTAIN) per line item for the given jurisdiction.
+  // Uses AI reasoning over UNSPSC code + description — provisional, NOT authoritative tax law.
+  // Returns original lineItems unchanged on any failure.
+  async _determineTaxability(lineItems, jurisdiction) {
+    const billable = lineItems.filter(li => !li.isFreight && li.lineVerdict !== 'SUPPRESSED');
+    if (!billable.length) return lineItems;
+
+    const authUrl       = process.env.AI_CORE_AUTH_URL;
+    const clientId      = process.env.AI_CORE_CLIENT_ID;
+    const clientSecret  = process.env.AI_CORE_CLIENT_SECRET;
+    const deploymentUrl = process.env.AI_CORE_DEPLOYMENT_URL;
+    const resourceGroup = process.env.AI_CORE_RESOURCE_GROUP || 'use-tax';
+    const modelName     = process.env.AI_CORE_MODEL || 'anthropic--claude-4.5-sonnet';
+
+    if (!authUrl || !clientId || !deploymentUrl) {
+      LOG.warn('_determineTaxability: AI Core credentials not configured — skipping');
+      return lineItems;
+    }
+
+    const state = (jurisdiction.state || '').trim().toUpperCase();
+    const city  = (jurisdiction.city  || '').trim();
+
+    try {
+      const tokenRes = await fetch(authUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret })
+      });
+      if (!tokenRes.ok) throw new Error(`Token failed: ${tokenRes.status}`);
+      const { access_token } = await tokenRes.json();
+
+      const itemList = billable.map((li, i) =>
+        `${i + 1}. Description: "${li.description || ''}" | UNSPSC: ${li.unspsc || 'unknown'} (${li.unspscDescription || 'unknown'})`
+      ).join('\n');
+
+      const prompt = `You are a sales and use tax analyst. For each invoice line item, determine whether it is TAXABLE, EXEMPT, or UNCERTAIN under the general sales tax rules for ${state}${city ? ' (' + city + ')' : ''}.
+
+IMPORTANT RULES — READ CAREFULLY:
+- Return "UNCERTAIN" whenever taxability is not clearly established. Uncertainty is expected and correct for many item types.
+- Do NOT force TAXABLE or EXEMPT when you are not highly confident. When in doubt, UNCERTAIN is always the right answer.
+- This is an AI estimate from training knowledge — NOT authoritative tax law. Be conservative and flag uncertainty liberally.
+- Common reasons to return UNCERTAIN: ambiguous service-vs-goods distinction, SaaS/software (varies widely by state), professional or managed services (often exempt but varies), mixed transactions, special-use equipment, items that depend on buyer type or exemption certificates.
+- EXEMPT requires a clear, well-established statutory exemption in ${state} (e.g. prescription drugs, qualifying resale, certain manufacturing equipment with clear basis).
+- TAXABLE requires the item to clearly be tangible personal property or a clearly taxable service in ${state}.
+
+Return ONLY a JSON array with exactly ${billable.length} object(s), one per input line, in the same order:
+{"taxability":"TAXABLE","taxabilityReason":"Networking hardware — tangible personal property, generally taxable in ${state}"}
+
+Allowed values for taxability: "TAXABLE", "EXEMPT", "UNCERTAIN"
+taxabilityReason: one sentence explaining the determination; note key uncertainty when UNCERTAIN.
+
+Items to assess (jurisdiction: ${state}${city ? ', ' + city : ''}):
+${itemList}
+
+Return ONLY the JSON array. No explanation, no markdown fences.`;
+
+      const orchBody = {
+        orchestration_config: {
+          module_configurations: {
+            templating_module_config: { template: [{ role: 'user', content: '{{?input}}' }] },
+            llm_module_config: { model_name: modelName, model_params: { max_tokens: 1024, temperature: 0 } }
+          }
+        },
+        input_params: { input: prompt }
+      };
+
+      const response = await fetch(deploymentUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+          'Content-Type': 'application/json',
+          'AI-Resource-Group': resourceGroup
+        },
+        body: JSON.stringify(orchBody)
+      });
+      if (!response.ok) throw new Error(`AI Core call failed: ${response.status}`);
+
+      const data = await response.json();
+      const content = data.orchestration_result?.choices?.[0]?.message?.content || '';
+      const cleaned = content.replace(/```json|```/g, '').trim();
+      const determinations = JSON.parse(cleaned);
+
+      if (!Array.isArray(determinations) || determinations.length !== billable.length) {
+        throw new Error(`Expected ${billable.length} taxability determinations, got ${Array.isArray(determinations) ? determinations.length : 'non-array'}`);
+      }
+
+      let billableIdx = 0;
+      return lineItems.map(li => {
+        if (li.isFreight || li.lineVerdict === 'SUPPRESSED') return li;
+        const det = determinations[billableIdx++] || {};
+        const taxability = ['TAXABLE', 'EXEMPT', 'UNCERTAIN'].includes(det.taxability) ? det.taxability : 'UNCERTAIN';
+        return Object.assign({}, li, {
+          taxability,
+          taxabilityReason: det.taxabilityReason || '',
+          taxabilitySource: 'AI'
+        });
+      });
+    } catch (err) {
+      LOG.warn('_determineTaxability failed — skipping: ' + err.message);
+      return lineItems;
+    }
+  }
+
   // Extracts FOB / shipping terms from invoice full text via regex.
   // Returns the matched string (e.g. "F.O.B. Ship Point") or null if not found.
   _extractFobTerms(text) {
@@ -1866,11 +1975,14 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
       freightSeparatelyStated,
       fobTerms,
       lineItems: billable.map(li => ({
-        description:    li.description || '',
-        unspscCode:     li.unspsc || '',
-        netAmount:      parseFloat(li.netAmount || li.amount) || 0,
-        freightShare:   parseFloat(li.freightAmount) || 0,
-        taxableTotal:   parseFloat(li.itemAmount) || 0
+        description:       li.description || '',
+        unspscCode:        li.unspsc || '',
+        netAmount:         parseFloat(li.netAmount || li.amount) || 0,
+        freightShare:      parseFloat(li.freightAmount) || 0,
+        taxableTotal:      parseFloat(li.itemAmount) || 0,
+        taxability:        li.taxability       || null,
+        taxabilityReason:  li.taxabilityReason || null,
+        taxabilitySource:  li.taxabilitySource || null
       })),
       jurisdiction: {
         state:      jurisdiction.state      || null,

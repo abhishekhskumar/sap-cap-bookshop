@@ -72,26 +72,29 @@ function _jurisdictionName(component, jInfo, rates) {
 
 // Returns Vertex O-Series shaped result: per-line taxes[], document subTotal/total/totalTax,
 // plus a document-level jurisdictions[] summary with non-zero tiers only.
+// Respects li.taxability === 'EXEMPT': zeroes tax for that line and propagates AI determination.
 function computeBreakdown(rates, lineItems, jInfo) {
   const resultLines = lineItems.map(li => {
-    const net     = +(parseFloat(li.netAmount != null ? li.netAmount : (li.amount || 0)) || 0).toFixed(2);
-    const freight = +(parseFloat(li.freightShare || 0) || 0).toFixed(2);
-    const taxable = +(+net + +freight).toFixed(2);
+    const net      = +(parseFloat(li.netAmount != null ? li.netAmount : (li.amount || 0)) || 0).toFixed(2);
+    const freight  = +(parseFloat(li.freightShare || 0) || 0).toFixed(2);
+    const taxable  = +(+net + +freight).toFixed(2);
+    const isExempt = li.taxability === 'EXEMPT';
 
     // Only include tiers with a non-zero rate — zero-rate tiers (e.g. county=0) add no information
     const taxes = COMPONENTS
       .filter(c => (rates[c] || 0) > 0)
       .map(c => {
-        const ratePct  = rates[c];
-        const effRate  = +(ratePct / 100).toFixed(6);
-        const calcTax  = +(taxable * effRate).toFixed(2);
+        const ratePct    = rates[c];
+        const effRate    = +(ratePct / 100).toFixed(6);
+        const taxableAmt = isExempt ? 0 : taxable;
+        const calcTax    = isExempt ? 0 : +(taxable * effRate).toFixed(2);
         return {
           jurisdiction:   { jurisdictionType: JURISDICTION_TYPES[c], value: _jurisdictionName(c, jInfo, rates) },
           effectiveRate:  effRate,
           nominalRate:    effRate,
-          taxable,
-          calculatedTax:  Math.abs(calcTax) < 1e-6 ? 0 : calcTax,
-          taxResult:      'TAXABLE',
+          taxable:        taxableAmt,
+          calculatedTax:  isExempt ? 0 : (Math.abs(calcTax) < 1e-6 ? 0 : calcTax),
+          taxResult:      isExempt ? 'EXEMPT' : 'TAXABLE',
           taxType:        'CONSUMERS_USE',
           situs:          'DESTINATION',
           impositionType: { value: 'General Sales and Use Tax' }
@@ -99,25 +102,45 @@ function computeBreakdown(rates, lineItems, jInfo) {
       });
 
     const totalTax = +taxes.reduce((s, t) => s + t.calculatedTax, 0).toFixed(2);
-    return { description: li.description || '', netAmount: +net, freightShare: +freight, taxes, totalTax };
+    return {
+      description:      li.description || '',
+      netAmount:        +net,
+      freightShare:     +freight,
+      taxes,
+      totalTax,
+      taxabilityAI:     li.taxability       || null,
+      taxabilityReason: li.taxabilityReason || null
+    };
   });
 
   const docTotalTax = +resultLines.reduce((s, li) => s + li.totalTax, 0).toFixed(2);
   const subTotal    = +resultLines.reduce((s, li) => s + li.netAmount, 0).toFixed(2);
   const total       = +(subTotal + docTotalTax).toFixed(2);
-  // Total taxable base = Σ(net + freight per line) — matches what each line's tax was computed on
+  // Total taxable base = Σ(net + freight per line) — includes exempt lines for informational display
   const docTaxable  = +resultLines.reduce((s, li) => s + li.netAmount + li.freightShare, 0).toFixed(2);
 
-  // Document-level jurisdiction summary — Vertex {type, name, rate, taxableAmount, taxAmount} shape
+  // Document-level jurisdiction summary — sums actual per-line taxes per component
+  // (correctly accounts for EXEMPT lines whose calculatedTax is 0)
   const jurisdictions = COMPONENTS
     .filter(c => (rates[c] || 0) > 0)
-    .map(c => ({
-      type:          JURISDICTION_TYPES[c],
-      name:          _jurisdictionName(c, jInfo, rates),
-      rate:          rates[c],                                    // percentage (e.g. 6.25)
-      taxableAmount: docTaxable,
-      taxAmount:     +(docTaxable * (rates[c] / 100)).toFixed(2) // document-level computation
-    }));
+    .map(c => {
+      const jType = JURISDICTION_TYPES[c];
+      const jTaxAmount  = +resultLines.reduce((s, li) => {
+        const t = li.taxes.find(t => t.jurisdiction.jurisdictionType === jType);
+        return s + (t ? t.calculatedTax : 0);
+      }, 0).toFixed(2);
+      const jTaxable = +resultLines.reduce((s, li) => {
+        const t = li.taxes.find(t => t.jurisdiction.jurisdictionType === jType);
+        return s + (t ? t.taxable : 0);
+      }, 0).toFixed(2);
+      return {
+        type:          jType,
+        name:          _jurisdictionName(c, jInfo, rates),
+        rate:          rates[c],
+        taxableAmount: jTaxable,
+        taxAmount:     jTaxAmount
+      };
+    });
 
   return { lineItems: resultLines, subTotal, total, totalTax: docTotalTax, docTaxable, jurisdictions };
 }

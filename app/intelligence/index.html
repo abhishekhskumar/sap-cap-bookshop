@@ -2675,6 +2675,16 @@ function _teSalestaxzipCard(alt,vendorTax){
     +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
     +(avail?' <span style="font-weight:400;font-size:10px;color:#0891b2;">via '+sourceLabel+'</span>':'')
     +'</div>';
+  // ── AI Taxability Disclaimer (unmissable) ─────────────────────────────────
+  c+='<div style="background:#fef3c7;border:2px solid #f59e0b;border-radius:6px;padding:10px 14px;margin-bottom:14px;">';
+  c+='<div style="display:flex;align-items:flex-start;gap:8px;">';
+  c+='<span style="font-size:18px;line-height:1.2;flex-shrink:0;" aria-hidden="true">&#9888;</span>';
+  c+='<div>';
+  c+='<div style="font-weight:700;font-size:12px;color:#92400e;margin-bottom:3px;letter-spacing:0.01em;">AI-Generated Taxability &#8212; NOT Authoritative Tax Law</div>';
+  c+='<div style="font-size:11px;color:#78350f;line-height:1.5;">Taxability determinations are AI-generated from commodity/jurisdiction reasoning &#8212; <strong>NOT authoritative tax law</strong>. For correct, audit-grade taxability, refer to <strong>Vertex</strong> (integration pending). AI may be wrong on exempt items and jurisdiction-specific rules. <strong>UNCERTAIN</strong> is expected and correct for many item types; it does not mean TAXABLE.</div>';
+  c+='</div>';
+  c+='</div>';
+  c+='</div>';
   // ── Jurisdiction Summary — Vertex-shaped document view ───────────────────
   if(avail&&alt.jurisdictions&&alt.jurisdictions.length){
     var _jTaxable=alt.docTaxable!=null?alt.docTaxable:alt.subTotal;
@@ -2711,22 +2721,52 @@ function _teSalestaxzipCard(alt,vendorTax){
       +'</tr>';
     c+='</table>';
     c+='</div>';
+    // Contextual note when AI taxability altered any line amounts
+    var _exemptCount=avail&&alt.lineItems?alt.lineItems.filter(function(li){return li.taxabilityAI==='EXEMPT';}).length:0;
+    var _uncertainCount=avail&&alt.lineItems?alt.lineItems.filter(function(li){return li.taxabilityAI==='UNCERTAIN';}).length:0;
+    if(_exemptCount>0||_uncertainCount>0){
+      c+='<div style="font-size:10px;color:#78350f;background:#fef9c3;border:1px solid #fde68a;border-radius:4px;padding:5px 10px;margin-bottom:8px;">';
+      c+='<strong>AI taxability applied to totals above:</strong> ';
+      if(_exemptCount>0)c+=_exemptCount+' line'+(_exemptCount!==1?'s':'')+' EXEMPT (AI) — tax zeroed for those lines. ';
+      if(_uncertainCount>0)c+=_uncertainCount+' line'+(_uncertainCount!==1?'s':'')+' UNCERTAIN (AI) — tax computed at full rate (conservative). ';
+      c+='See per-line breakdown below for details and reasons.';
+      c+='</div>';
+    }
   }
   // ── Per-line breakdown (Vertex O-Series lineItems[].taxes[] shape) ────────
   if(avail&&alt.lineItems&&alt.lineItems.length){
     c+='<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Per-Line Jurisdiction Breakdown ('+alt.lineItems.length+(alt.lineItems.length!==1?' lines':' line')+')</summary><div>';
     alt.lineItems.forEach(function(li,idx){
       var rowBg=idx%2===1?'#f9fafb':'#f0fdf4';
-      c+='<div style="margin-bottom:10px;border:1px solid #d1fae5;border-radius:6px;overflow:hidden;">';
+      var aiStatus=li.taxabilityAI||null;
+      var aiLabel=aiStatus?aiStatus+' (AI)':'— (AI)';
+      var aiBadgeBg=aiStatus==='EXEMPT'?'#fef3c7':aiStatus==='UNCERTAIN'?'#eff6ff':'#d1fae5';
+      var aiBadgeColor=aiStatus==='EXEMPT'?'#92400e':aiStatus==='UNCERTAIN'?'#1e40af':'#065f46';
+      var aiBadgeBorder=aiStatus==='EXEMPT'?'#fcd34d':aiStatus==='UNCERTAIN'?'#93c5fd':'#6ee7b7';
+      var aiReason=li.taxabilityReason||'';
+      var lineIsExempt=aiStatus==='EXEMPT';
+      c+='<div style="margin-bottom:10px;border:1px solid '+(lineIsExempt?'#fcd34d':'#d1fae5')+';border-radius:6px;overflow:hidden;">';
       // Line header
       c+='<div style="padding:6px 10px;background:'+rowBg+';display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">';
+      c+='<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
       c+='<span style="font-size:12px;font-weight:600;color:#065f46;">'+escHtml(li.description||'Line '+(idx+1))+'</span>';
+      if(aiStatus){
+        c+='<span style="font-size:10px;font-weight:700;background:'+aiBadgeBg+';color:'+aiBadgeColor+';border:1px solid '+aiBadgeBorder+';padding:1px 7px;border-radius:10px;white-space:nowrap;cursor:default;" title="'+escHtml(aiReason)+'">'+escHtml(aiLabel)+'</span>';
+      }
+      c+='</div>';
       c+='<span style="font-size:11px;color:#374151;">';
       c+='Net: <strong>$'+money(li.netAmount)+'</strong>';
       if(li.freightShare>0)c+=' &nbsp;&middot;&nbsp;Freight: <strong>$'+money(li.freightShare)+'</strong>';
-      c+=' &nbsp;&middot;&nbsp;Line Tax: <strong style="color:#065f46;">$'+money(li.totalTax)+'</strong>';
+      c+=' &nbsp;&middot;&nbsp;Line Tax: <strong style="color:'+(lineIsExempt?'#92400e':'#065f46')+';font-style:'+(lineIsExempt?'italic':'normal')+';">$'+money(li.totalTax)+'</strong>';
+      if(lineIsExempt)c+=' <span style="font-size:10px;color:#92400e;">(exempt)</span>';
       c+='</span>';
       c+='</div>';
+      // EXEMPT rationale banner
+      if(lineIsExempt&&aiReason){
+        c+='<div style="padding:4px 10px;background:#fef9c3;border-bottom:1px solid #fde68a;font-size:10px;color:#78350f;">';
+        c+='<strong>Exempt rationale (AI):</strong> '+escHtml(aiReason);
+        c+='</div>';
+      }
       // Jurisdiction table (Vertex O-Series taxes[] shape)
       c+='<table style="width:100%;border-collapse:collapse;font-size:11px;">';
       c+='<tr style="background:#ecfdf5;">'
@@ -2735,6 +2775,7 @@ function _teSalestaxzipCard(alt,vendorTax){
         +'<th style="padding:4px 8px;text-align:right;font-weight:600;">Effective Rate</th>'
         +'<th style="padding:4px 8px;text-align:right;font-weight:600;">Taxable</th>'
         +'<th style="padding:4px 8px;text-align:right;font-weight:600;">Calculated Tax</th>'
+        +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Taxability (AI)</th>'
         +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Result</th>'
         +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Situs</th>'
         +'</tr>';
@@ -2745,8 +2786,11 @@ function _teSalestaxzipCard(alt,vendorTax){
           +'<td style="padding:4px 8px;">'+escHtml(t.jurisdiction.value)+'</td>'
           +'<td style="padding:4px 8px;text-align:right;">'+(t.effectiveRate*100).toFixed(3)+'%</td>'
           +'<td style="padding:4px 8px;text-align:right;">$'+money(t.taxable)+'</td>'
-          +'<td style="padding:4px 8px;text-align:right;font-weight:600;">$'+money(t.calculatedTax)+'</td>'
-          +'<td style="padding:4px 8px;font-size:10px;color:#065f46;">'+escHtml(t.taxResult)+'</td>'
+          +'<td style="padding:4px 8px;text-align:right;font-weight:600;'+(lineIsExempt?'color:#92400e;':'')+'">$'+money(t.calculatedTax)+'</td>'
+          +'<td style="padding:4px 8px;">'
+          +(aiStatus?'<span style="font-size:10px;font-weight:700;background:'+aiBadgeBg+';color:'+aiBadgeColor+';border:1px solid '+aiBadgeBorder+';padding:1px 6px;border-radius:4px;white-space:nowrap;cursor:default;" title="'+escHtml(aiReason)+'">'+escHtml(aiLabel)+'</span>':'<span style="color:#9ca3af;font-size:10px;">&#8212;</span>')
+          +'</td>'
+          +'<td style="padding:4px 8px;font-size:10px;color:'+(lineIsExempt?'#92400e':'#065f46')+';">'+escHtml(t.taxResult)+'</td>'
           +'<td style="padding:4px 8px;font-size:10px;color:#6b7280;">'+escHtml(t.situs)+'</td>'
           +'</tr>';
       });

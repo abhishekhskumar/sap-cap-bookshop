@@ -360,7 +360,7 @@
 </div>
 
 <script>
-var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[], _reconciledTaxPayload=null, _reconciledCalcResult=null;
+var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[], _reconciledTaxPayload=null, _reconciledCalcResult=null, _stzLineItems=[];
 var _lineViewMode='compare';
 var _statusDocAI=null, _statusClaude=null, _statusVision=null;
 var allInvoices=[], filterAssetOnly=true;
@@ -2548,6 +2548,12 @@ function renderLineItems(data){
 
 function openItemDetails(i){
   var li=_renderedLineItems[i]||(lastResult&&(lastResult.lineItems||[])[i]); if(!li)return;
+  // Try to find matching STZ line item by description — enables Vertex column layout + AI attribution
+  var _liDesc=(li.description||'').trim().toLowerCase();
+  var stzLi=null;
+  for(var _si=0;_si<_stzLineItems.length;_si++){
+    if((_stzLineItems[_si].description||'').trim().toLowerCase()===_liDesc){stzLi=_stzLineItems[_si];break;}
+  }
   var html='';
   if(li.unspsc){
     var conf=li.unspscConfidence||'low';
@@ -2563,7 +2569,61 @@ function openItemDetails(i){
       +'<div style="margin-top:6px;font-size:11px;color:#94a3b8;">Family-level code (4-digit segment+family). Draft only — verify against official UNSPSC taxonomy before use.</div>'
       +'</div>';
   }
-  if(!li.jurisdictions){
+  if(stzLi){
+    // ── STZ data available: render Vertex column layout with AI attribution ──
+    var aiSt=stzLi.taxabilityAI||null;
+    var aiRsn=stzLi.taxabilityReason||'';
+    var isEx=aiSt==='EXEMPT';
+    var aBg=aiSt==='EXEMPT'?'#fef3c7':aiSt==='UNCERTAIN'?'#eff6ff':'#d1fae5';
+    var aCol=aiSt==='EXEMPT'?'#92400e':aiSt==='UNCERTAIN'?'#1e40af':'#065f46';
+    var aBdr=aiSt==='EXEMPT'?'#fcd34d':aiSt==='UNCERTAIN'?'#93c5fd':'#6ee7b7';
+    // AI disclaimer
+    html+='<div style="background:#fef3c7;border-bottom:2px solid #f59e0b;padding:10px 16px;display:flex;align-items:flex-start;gap:8px;">';
+    html+='<span style="font-size:18px;line-height:1.2;flex-shrink:0;">&#9888;</span>';
+    html+='<div><div style="font-weight:700;font-size:12px;color:#92400e;margin-bottom:2px;">AI-Generated Taxability &#8212; NOT Authoritative Tax Law</div>';
+    html+='<div style="font-size:11px;color:#78350f;">Taxability is AI-generated from commodity/jurisdiction reasoning &#8212; <strong>not authoritative tax law</strong>. Rates: SalesTaxZip (ZIP-level). For audit-grade taxability refer to <strong>Vertex</strong> (integration pending). UNCERTAIN is expected and correct for many item types.</div>';
+    html+='</div></div>';
+    // Rationale
+    if(aiRsn){
+      var rBg=isEx?'#fef9c3':aiSt==='UNCERTAIN'?'#eff6ff':'#f0fdf4';
+      var rBdr=isEx?'#fde68a':aiSt==='UNCERTAIN'?'#c7d2fe':'#a7f3d0';
+      var rCol=isEx?'#78350f':aiSt==='UNCERTAIN'?'#1e40af':'#065f46';
+      html+='<div style="padding:6px 16px;background:'+rBg+';border-bottom:1px solid '+rBdr+';font-size:11px;color:'+rCol+'">';
+      html+='<strong>'+(isEx?'Exempt rationale':aiSt==='UNCERTAIN'?'Uncertainty note':'Taxability note')+' (AI):</strong> '+escHtml(aiRsn);
+      html+='</div>';
+    }
+    // Vertex column layout
+    html+='<table><tr><th>Jurisdiction</th><th>Taxability</th><th class="num">Tax Rate</th>';
+    html+='<th class="num">Taxable Amount<br><small>(Line Item)</small></th><th class="num">Tax Amount<br><small>(Line Item)</small></th>';
+    html+='<th class="num">Taxable Amount<br><small>(Freight)</small></th><th class="num">Tax Amount<br><small>(Freight)</small></th>';
+    html+='<th class="num">Total Tax Amount</th></tr>';
+    var sLT=0,sFT=0,sTT=0;
+    (stzLi.taxes||[]).forEach(function(tx){
+      var rPct=+(tx.effectiveRate*100).toFixed(4);
+      var lTx=isEx?0:+(stzLi.netAmount*tx.effectiveRate).toFixed(2);
+      var fTx=isEx?0:+(stzLi.freightShare*tx.effectiveRate).toFixed(2);
+      var ttx=isEx?0:tx.calculatedTax;
+      sLT+=lTx; sFT+=fTx; sTT+=ttx;
+      html+='<tr>';
+      html+='<td>'+escHtml(tx.jurisdiction.value||tx.jurisdiction.jurisdictionType)+'</td>';
+      html+='<td><span style="font-size:10px;font-weight:700;background:'+aBg+';color:'+aCol+';border:1px solid '+aBdr+';padding:1px 6px;border-radius:4px;" title="'+escHtml(aiRsn)+'">'
+        +escHtml((aiSt||'&#8212;')+' (AI)')+'</span></td>';
+      html+='<td class="num">'+rPct.toFixed(3)+'%</td>';
+      html+='<td class="num">$'+money(isEx?0:stzLi.netAmount)+'</td>';
+      html+='<td class="num">'+(isEx?'<span style="color:#92400e;font-style:italic;">$0.00</span>':'$'+money(lTx))+'</td>';
+      html+='<td class="num">$'+money(isEx?0:stzLi.freightShare)+'</td>';
+      html+='<td class="num">'+(isEx?'<span style="color:#92400e;font-style:italic;">$0.00</span>':'$'+money(fTx))+'</td>';
+      html+='<td class="num"><strong>'+(isEx?'<span style="color:#92400e;font-style:italic;">$0.00</span>':'$'+money(ttx))+'</strong></td>';
+      html+='</tr>';
+    });
+    html+='<tr class="totals-row"><td>Total</td><td></td><td class="num">&mdash;</td>';
+    html+='<td class="num">$'+money(stzLi.netAmount)+'</td>';
+    html+='<td class="num">$'+money(+sLT.toFixed(2))+'</td>';
+    html+='<td class="num">$'+money(stzLi.freightShare)+'</td>';
+    html+='<td class="num">$'+money(+sFT.toFixed(2))+'</td>';
+    html+='<td class="num"><strong>$'+money(+sTT.toFixed(2))+'</strong></td>';
+    html+='</tr></table>';
+  } else if(!li.jurisdictions){
     var _liStk=(lastResult&&lastResult.simplifiedTax&&lastResult.simplifiedTax.key)||'';
     var _liNoZip=_liStk&&(_liStk.split('|')[0]==='');
     if(_liNoZip){
@@ -2576,20 +2636,89 @@ function openItemDetails(i){
       html+='<div style="padding:24px;text-align:center;color:#999;"><span class="pill mock">RATE NOT AVAILABLE</span><p style="margin-top:12px;">Jurisdiction not in rate table &mdash; requires Vertex, or add rates to <code>srv/data/tax-rates.json</code> for this destination.</p><p style="font-size:12px;">Freight distribution shown in the line items is computed live from extraction.</p></div>';
     }
   } else {
-    var t=li.jurisdictionTotals||{};
+    var jt=li.jurisdictionTotals||{};
     html+='<div style="padding:8px 14px;background:#eef2ff;border-bottom:1px solid #c7d2fe;display:flex;align-items:center;gap:8px;">'
       +'<span style="font-weight:700;font-size:12px;color:#3730a3;">Simplified Rate Calculation — per line</span>'
       +'<span style="font-size:11px;font-weight:600;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:8px;border:1px solid #fde68a;">Illustrative only — production uses Vertex</span>'
       +'</div>';
-    html+='<table><tr><th>Jurisdiction</th><th>Taxability</th><th class="num">Tax Rate</th><th class="num">Taxable Amount (Line)</th><th class="num">Tax Amount (Line)</th><th class="num">Taxable Amount (Freight)</th><th class="num">Tax Amount (Freight)</th><th class="num">Total Tax</th></tr>';
+    html+='<table><tr><th>Jurisdiction</th><th>Taxability</th><th class="num">Tax Rate</th><th class="num">Taxable Amount<br><small>(Line Item)</small></th><th class="num">Tax Amount<br><small>(Line Item)</small></th><th class="num">Taxable Amount<br><small>(Freight)</small></th><th class="num">Tax Amount<br><small>(Freight)</small></th><th class="num">Total Tax Amount</th></tr>';
     li.jurisdictions.forEach(function(j){
       html+='<tr><td>'+j.jurisdiction+'</td><td>'+j.taxability+'</td><td class="num">'+money(j.taxRate)+'</td>';
       html+='<td class="num">'+money(j.taxableAmountLine)+'</td><td class="num">'+money(j.taxAmountLine)+'</td>';
       html+='<td class="num">'+money(j.taxableAmountFreight)+'</td><td class="num">'+money(j.taxAmountFreight)+'</td><td class="num">'+money(j.totalTaxAmount)+'</td></tr>';
     });
-    html+='<tr class="totals-row"><td>Total</td><td></td><td class="num">'+money(t.rate)+'</td><td></td><td class="num">'+money(t.line)+'</td><td></td><td class="num">'+money(t.freight)+'</td><td class="num">'+money(t.total)+'</td></tr>';
+    html+='<tr class="totals-row"><td>Total</td><td></td><td class="num">'+money(jt.rate)+'</td><td></td><td class="num">'+money(jt.line)+'</td><td></td><td class="num">'+money(jt.freight)+'</td><td class="num">'+money(jt.total)+'</td></tr>';
     html+='</table>';
   }
+  document.getElementById('modalBody').innerHTML=html;
+  document.getElementById('modalBg').classList.add('show');
+}
+
+function openSTZLineDetails(idx){
+  var li=_stzLineItems[idx]; if(!li)return;
+  var aiSt=li.taxabilityAI||null;
+  var aiRsn=li.taxabilityReason||'';
+  var isEx=aiSt==='EXEMPT';
+  var aBg=aiSt==='EXEMPT'?'#fef3c7':aiSt==='UNCERTAIN'?'#eff6ff':'#d1fae5';
+  var aCol=aiSt==='EXEMPT'?'#92400e':aiSt==='UNCERTAIN'?'#1e40af':'#065f46';
+  var aBdr=aiSt==='EXEMPT'?'#fcd34d':aiSt==='UNCERTAIN'?'#93c5fd':'#6ee7b7';
+  var html='';
+  // AI disclaimer (prominent, unmissable)
+  html+='<div style="background:#fef3c7;border-bottom:2px solid #f59e0b;padding:10px 16px;display:flex;align-items:flex-start;gap:8px;">';
+  html+='<span style="font-size:18px;line-height:1.2;flex-shrink:0;">&#9888;</span>';
+  html+='<div><div style="font-weight:700;font-size:12px;color:#92400e;margin-bottom:2px;">AI-Generated Taxability &#8212; NOT Authoritative Tax Law</div>';
+  html+='<div style="font-size:11px;color:#78350f;">Taxability is AI-generated from commodity/jurisdiction reasoning &#8212; <strong>not authoritative tax law</strong>. Rates: SalesTaxZip (ZIP-level). For audit-grade taxability refer to <strong>Vertex</strong> (integration pending). UNCERTAIN is expected and correct for many item types.</div>';
+  html+='</div></div>';
+  // Line info header
+  html+='<div style="padding:10px 16px;background:#f8fafc;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">';
+  html+='<div style="display:flex;align-items:center;gap:8px;">';
+  html+='<span style="font-size:13px;font-weight:600;color:#111827;">'+escHtml(li.description||'Line '+(idx+1))+'</span>';
+  if(aiSt){html+='<span style="font-size:10px;font-weight:700;background:'+aBg+';color:'+aCol+';border:1px solid '+aBdr+';padding:2px 8px;border-radius:10px;" title="'+escHtml(aiRsn)+'">'+escHtml(aiSt+' (AI)')+'</span>';}
+  html+='</div>';
+  html+='<span style="font-size:11px;color:#374151;">Net: <strong>$'+money(li.netAmount)+'</strong>';
+  if(li.freightShare>0)html+=' &nbsp;&middot;&nbsp; Freight: <strong>$'+money(li.freightShare)+'</strong>';
+  html+=' &nbsp;&middot;&nbsp; Line Tax: <strong style="color:'+(isEx?'#92400e':'#065f46')+';">$'+money(li.totalTax)+'</strong></span>';
+  html+='</div>';
+  // Rationale banner (EXEMPT / UNCERTAIN / TAXABLE)
+  if(aiRsn){
+    var rBg=isEx?'#fef9c3':aiSt==='UNCERTAIN'?'#eff6ff':'#f0fdf4';
+    var rBdr=isEx?'#fde68a':aiSt==='UNCERTAIN'?'#c7d2fe':'#a7f3d0';
+    var rCol=isEx?'#78350f':aiSt==='UNCERTAIN'?'#1e40af':'#065f46';
+    html+='<div style="padding:6px 16px;background:'+rBg+';border-bottom:1px solid '+rBdr+';font-size:11px;color:'+rCol+'">';
+    html+='<strong>'+(isEx?'Exempt rationale':aiSt==='UNCERTAIN'?'Uncertainty note':'Taxability note')+' (AI):</strong> '+escHtml(aiRsn);
+    html+='</div>';
+  }
+  // Per-jurisdiction table — Vertex column layout
+  html+='<table><tr><th>Jurisdiction</th><th>Taxability</th><th class="num">Tax Rate</th>';
+  html+='<th class="num">Taxable Amount<br><small>(Line Item)</small></th><th class="num">Tax Amount<br><small>(Line Item)</small></th>';
+  html+='<th class="num">Taxable Amount<br><small>(Freight)</small></th><th class="num">Tax Amount<br><small>(Freight)</small></th>';
+  html+='<th class="num">Total Tax Amount</th></tr>';
+  var sLT=0,sFT=0,sTT=0;
+  (li.taxes||[]).forEach(function(tx){
+    var rPct=+(tx.effectiveRate*100).toFixed(4);
+    var lTx=isEx?0:+(li.netAmount*tx.effectiveRate).toFixed(2);
+    var fTx=isEx?0:+(li.freightShare*tx.effectiveRate).toFixed(2);
+    var ttx=isEx?0:tx.calculatedTax;
+    sLT+=lTx; sFT+=fTx; sTT+=ttx;
+    html+='<tr>';
+    html+='<td>'+escHtml(tx.jurisdiction.value||tx.jurisdiction.jurisdictionType)+'</td>';
+    html+='<td><span style="font-size:10px;font-weight:700;background:'+aBg+';color:'+aCol+';border:1px solid '+aBdr+';padding:1px 6px;border-radius:4px;" title="'+escHtml(aiRsn)+'">'+escHtml((aiSt||'&#8212;')+' (AI)')+'</span></td>';
+    html+='<td class="num">'+rPct.toFixed(3)+'%</td>';
+    html+='<td class="num">$'+money(isEx?0:li.netAmount)+'</td>';
+    html+='<td class="num">'+(isEx?'<span style="color:#92400e;font-style:italic;">$0.00</span>':'$'+money(lTx))+'</td>';
+    html+='<td class="num">$'+money(isEx?0:li.freightShare)+'</td>';
+    html+='<td class="num">'+(isEx?'<span style="color:#92400e;font-style:italic;">$0.00</span>':'$'+money(fTx))+'</td>';
+    html+='<td class="num"><strong>'+(isEx?'<span style="color:#92400e;font-style:italic;">$0.00</span>':'$'+money(ttx))+'</strong></td>';
+    html+='</tr>';
+  });
+  // Total row
+  html+='<tr class="totals-row"><td>Total</td><td></td><td class="num">&mdash;</td>';
+  html+='<td class="num">$'+money(li.netAmount)+'</td>';
+  html+='<td class="num">$'+money(+sLT.toFixed(2))+'</td>';
+  html+='<td class="num">$'+money(li.freightShare)+'</td>';
+  html+='<td class="num">$'+money(+sFT.toFixed(2))+'</td>';
+  html+='<td class="num"><strong>$'+money(+sTT.toFixed(2))+'</strong></td>';
+  html+='</tr></table>';
   document.getElementById('modalBody').innerHTML=html;
   document.getElementById('modalBg').classList.add('show');
 }
@@ -2733,77 +2862,40 @@ function _teSalestaxzipCard(alt,vendorTax){
       c+='</div>';
     }
   }
-  // ── Per-line breakdown (Vertex O-Series lineItems[].taxes[] shape) ────────
+  // ── Per-line items — compact list with modal expand per line ─────────────
   if(avail&&alt.lineItems&&alt.lineItems.length){
-    c+='<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Per-Line Jurisdiction Breakdown ('+alt.lineItems.length+(alt.lineItems.length!==1?' lines':' line')+')</summary><div>';
+    _stzLineItems=alt.lineItems;
+    c+='<div style="margin-bottom:8px;">';
+    c+='<div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:5px;">Per-Line Items ('+alt.lineItems.length+(alt.lineItems.length!==1?' lines':' line')+') <span style="font-weight:400;font-size:10px;color:#6b7280;">&#9656; Details opens Item Details modal for each line</span></div>';
     alt.lineItems.forEach(function(li,idx){
       var rowBg=idx%2===1?'#f9fafb':'#f0fdf4';
       var aiStatus=li.taxabilityAI||null;
-      var aiLabel=aiStatus?aiStatus+' (AI)':'— (AI)';
       var aiBadgeBg=aiStatus==='EXEMPT'?'#fef3c7':aiStatus==='UNCERTAIN'?'#eff6ff':'#d1fae5';
       var aiBadgeColor=aiStatus==='EXEMPT'?'#92400e':aiStatus==='UNCERTAIN'?'#1e40af':'#065f46';
       var aiBadgeBorder=aiStatus==='EXEMPT'?'#fcd34d':aiStatus==='UNCERTAIN'?'#93c5fd':'#6ee7b7';
       var aiReason=li.taxabilityReason||'';
       var lineIsExempt=aiStatus==='EXEMPT';
-      c+='<div style="margin-bottom:10px;border:1px solid '+(lineIsExempt?'#fcd34d':'#d1fae5')+';border-radius:6px;overflow:hidden;">';
-      // Line header
-      c+='<div style="padding:6px 10px;background:'+rowBg+';display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">';
-      c+='<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
+      c+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 10px;background:'+rowBg+';border:1px solid '+(lineIsExempt?'#fcd34d':'#d1fae5')+';border-radius:4px;margin-bottom:3px;flex-wrap:wrap;gap:4px;">';
+      c+='<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;">';
       c+='<span style="font-size:12px;font-weight:600;color:#065f46;">'+escHtml(li.description||'Line '+(idx+1))+'</span>';
-      if(aiStatus){
-        c+='<span style="font-size:10px;font-weight:700;background:'+aiBadgeBg+';color:'+aiBadgeColor+';border:1px solid '+aiBadgeBorder+';padding:1px 7px;border-radius:10px;white-space:nowrap;cursor:default;" title="'+escHtml(aiReason)+'">'+escHtml(aiLabel)+'</span>';
-      }
+      if(aiStatus){c+='<span style="font-size:10px;font-weight:700;background:'+aiBadgeBg+';color:'+aiBadgeColor+';border:1px solid '+aiBadgeBorder+';padding:1px 6px;border-radius:10px;white-space:nowrap;cursor:default;flex-shrink:0;" title="'+escHtml(aiReason)+'">'+escHtml(aiStatus+' (AI)')+'</span>';}
       c+='</div>';
-      c+='<span style="font-size:11px;color:#374151;">';
-      c+='Net: <strong>$'+money(li.netAmount)+'</strong>';
-      if(li.freightShare>0)c+=' &nbsp;&middot;&nbsp;Freight: <strong>$'+money(li.freightShare)+'</strong>';
-      c+=' &nbsp;&middot;&nbsp;Line Tax: <strong style="color:'+(lineIsExempt?'#92400e':'#065f46')+';font-style:'+(lineIsExempt?'italic':'normal')+';">$'+money(li.totalTax)+'</strong>';
-      if(lineIsExempt)c+=' <span style="font-size:10px;color:#92400e;">(exempt)</span>';
-      c+='</span>';
+      c+='<div style="display:flex;align-items:center;gap:8px;white-space:nowrap;flex-shrink:0;">';
+      c+='<span style="font-size:11px;color:#374151;">Net: <strong>$'+money(li.netAmount)+'</strong>';
+      if(li.freightShare>0)c+=' &nbsp;Fr: <strong>$'+money(li.freightShare)+'</strong>';
+      c+=' &nbsp;Tax: <strong style="color:'+(lineIsExempt?'#92400e':'#065f46')+';">$'+money(li.totalTax)+'</strong></span>';
+      c+='<span class="link" style="font-size:11px;" onclick="openSTZLineDetails('+idx+')">&#9656; Details</span>';
       c+='</div>';
-      // EXEMPT rationale banner
-      if(lineIsExempt&&aiReason){
-        c+='<div style="padding:4px 10px;background:#fef9c3;border-bottom:1px solid #fde68a;font-size:10px;color:#78350f;">';
-        c+='<strong>Exempt rationale (AI):</strong> '+escHtml(aiReason);
-        c+='</div>';
-      }
-      // Jurisdiction table (Vertex O-Series taxes[] shape)
-      c+='<table style="width:100%;border-collapse:collapse;font-size:11px;">';
-      c+='<tr style="background:#ecfdf5;">'
-        +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Jurisdiction Type</th>'
-        +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Value</th>'
-        +'<th style="padding:4px 8px;text-align:right;font-weight:600;">Effective Rate</th>'
-        +'<th style="padding:4px 8px;text-align:right;font-weight:600;">Taxable</th>'
-        +'<th style="padding:4px 8px;text-align:right;font-weight:600;">Calculated Tax</th>'
-        +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Taxability (AI)</th>'
-        +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Result</th>'
-        +'<th style="padding:4px 8px;text-align:left;font-weight:600;">Situs</th>'
-        +'</tr>';
-      (li.taxes||[]).forEach(function(t,ti){
-        var tbg=ti%2===1?'background:#f9fafb;':'';
-        c+='<tr style="'+tbg+'">'
-          +'<td style="padding:4px 8px;font-family:monospace;color:#1d4ed8;font-size:10px;">'+escHtml(t.jurisdiction.jurisdictionType)+'</td>'
-          +'<td style="padding:4px 8px;">'+escHtml(t.jurisdiction.value)+'</td>'
-          +'<td style="padding:4px 8px;text-align:right;">'+(t.effectiveRate*100).toFixed(3)+'%</td>'
-          +'<td style="padding:4px 8px;text-align:right;">$'+money(t.taxable)+'</td>'
-          +'<td style="padding:4px 8px;text-align:right;font-weight:600;'+(lineIsExempt?'color:#92400e;':'')+'">$'+money(t.calculatedTax)+'</td>'
-          +'<td style="padding:4px 8px;">'
-          +(aiStatus?'<span style="font-size:10px;font-weight:700;background:'+aiBadgeBg+';color:'+aiBadgeColor+';border:1px solid '+aiBadgeBorder+';padding:1px 6px;border-radius:4px;white-space:nowrap;cursor:default;" title="'+escHtml(aiReason)+'">'+escHtml(aiLabel)+'</span>':'<span style="color:#9ca3af;font-size:10px;">&#8212;</span>')
-          +'</td>'
-          +'<td style="padding:4px 8px;font-size:10px;color:'+(lineIsExempt?'#92400e':'#065f46')+';">'+escHtml(t.taxResult)+'</td>'
-          +'<td style="padding:4px 8px;font-size:10px;color:#6b7280;">'+escHtml(t.situs)+'</td>'
-          +'</tr>';
-      });
-      c+='</table>';
       c+='</div>';
     });
+    c+='</div>';
     // ── Document totals ───────────────────────────────────────────────────
-    c+='<div style="border:1px solid #a7f3d0;border-radius:6px;padding:10px 12px;background:#f0fdf4;margin-top:4px;margin-bottom:10px;font-size:12px;">';
+    c+='<div style="border:1px solid #a7f3d0;border-radius:6px;padding:10px 12px;background:#f0fdf4;margin-bottom:10px;font-size:12px;">';
     c+='<div style="font-weight:700;color:#065f46;margin-bottom:6px;">Document Totals</div>';
     c+='<div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="color:#374151;">Sub Total</span><span>$'+money(alt.subTotal)+'</span></div>';
     c+='<div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span style="color:#374151;">Total Tax</span><span style="font-weight:700;color:#065f46;">$'+money(alt.totalTax)+'</span></div>';
     c+='<div style="display:flex;justify-content:space-between;border-top:1px solid #a7f3d0;padding-top:6px;margin-top:3px;"><span style="font-weight:700;">Total</span><span style="font-weight:700;">$'+money(alt.total)+'</span></div>';
-    c+='</div></div></details>';
+    c+='</div>';
   } else if(!avail){
     var msg=alt.note||'No rate data for this jurisdiction.';
     c+='<div style="background:#f3f4f6;border-radius:6px;padding:10px 12px;font-size:12px;color:#6b7280;margin-bottom:10px;">'+escHtml(msg)+'</div>';

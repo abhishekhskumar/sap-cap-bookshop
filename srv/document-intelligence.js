@@ -2789,13 +2789,6 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
   _determineManualAction(result, checks, fields) {
     const reasons = [];
 
-    // Low-confidence fields
-    (fields || []).forEach(f => {
-      if (f.confidence != null && +f.confidence < 75) {
-        reasons.push(`Low confidence on "${f.fieldName}": ${f.confidence}%`);
-      }
-    });
-
     // Failed error-severity consistency checks
     (checks || []).forEach(c => {
       if (!c.passed && c.severity === 'error') {

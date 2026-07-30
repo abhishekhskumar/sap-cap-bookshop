@@ -2796,16 +2796,6 @@ function _teSalestaxzipCard(alt,vendorTax){
     +(alt.rateKey?' <span style="font-weight:400;color:#6b7280;">'+escHtml(alt.rateSource==='api'?'ZIP ':'key: ')+'<code>'+escHtml(alt.rateKey)+'</code></span>':'')
     +(avail?' <span style="font-weight:400;font-size:10px;color:#0891b2;">via '+sourceLabel+'</span>':'')
     +'</div>';
-  // ── AI Taxability Disclaimer (unmissable) ─────────────────────────────────
-  c+='<div style="background:#fef3c7;border:2px solid #f59e0b;border-radius:6px;padding:10px 14px;margin-bottom:14px;">';
-  c+='<div style="display:flex;align-items:flex-start;gap:8px;">';
-  c+='<span style="font-size:18px;line-height:1.2;flex-shrink:0;" aria-hidden="true">&#9888;</span>';
-  c+='<div>';
-  c+='<div style="font-weight:700;font-size:12px;color:#92400e;margin-bottom:3px;letter-spacing:0.01em;">AI-Generated Taxability &#8212; NOT Authoritative Tax Law</div>';
-  c+='<div style="font-size:11px;color:#78350f;line-height:1.5;">Taxability determinations are AI-generated from commodity/jurisdiction reasoning &#8212; <strong>NOT authoritative tax law</strong>. For correct, audit-grade taxability, refer to <strong>Vertex</strong> (integration pending). AI may be wrong on exempt items and jurisdiction-specific rules. <strong>UNCERTAIN</strong> is expected and correct for many item types; it does not mean TAXABLE.</div>';
-  c+='</div>';
-  c+='</div>';
-  c+='</div>';
   // ── Jurisdiction Summary — Vertex-shaped document view ───────────────────
   if(avail&&alt.jurisdictions&&alt.jurisdictions.length){
     var _jTaxable=alt.docTaxable!=null?alt.docTaxable:alt.subTotal;
@@ -3205,13 +3195,115 @@ function renderTaxEngine(data){
   var _ftColor=_ftTol?'#166534':_ftUnder?'#92400e':'#991b1b';
   var _ftTrue=(_ftBase!=null&&_ftE!=null)?+(_ftBase+_ftE).toFixed(2):null;
 
-  // ── Block 2: TAX DETERMINATION (engine-dependent) ─────────────────────────
-  html+='<div style="margin:10px 16px 0;border:2px solid #2563eb;border-radius:8px;overflow:hidden;">';
+  // ── NEW Block 2: VERDICT ────────────────────────────────────────────────────
+  if(stxAvail&&stxRes.lineItems)_stzLineItems=stxRes.lineItems;
+  var stxLineItems=stxAvail&&stxRes.lineItems?stxRes.lineItems:[];
+  var _exceptionLines=stxLineItems.filter(function(li){return li.taxabilityAI==='EXEMPT'||li.taxabilityAI==='UNCERTAIN';});
+  var _exemptCount2=stxLineItems.filter(function(li){return li.taxabilityAI==='EXEMPT';}).length;
+  var _uncertCount2=stxLineItems.filter(function(li){return li.taxabilityAI==='UNCERTAIN';}).length;
+  var _agreeCount=stxLineItems.length-_exceptionLines.length;
+
+  var _vLabel,_vColor,_vBg,_vBorder;
+  if(!taxIsExplicit||!stxAvail||_ftZero){
+    _vLabel='Awaiting Vertex';_vColor='#6b7280';_vBg='#f9fafb';_vBorder='#e5e7eb';
+  }else if(_ftTol){
+    _vLabel='Accurately charged';_vColor='#166534';_vBg='#f0fdf4';_vBorder='#86efac';
+  }else if(_ftUnder){
+    _vLabel='Undercharged';_vColor='#92400e';_vBg='#fffbeb';_vBorder='#fcd34d';
+  }else{
+    _vLabel='Overcharged';_vColor='#991b1b';_vBg='#fef2f2';_vBorder='#fca5a5';
+  }
+
+  var _trustParts=['Rate-only estimate (SalesTaxZip)'];
+  var _aiParts2=[];
+  if(_exemptCount2>0)_aiParts2.push(_exemptCount2+' exempt');
+  if(_uncertCount2>0)_aiParts2.push(_uncertCount2+' uncertain');
+  if(_aiParts2.length>0)_trustParts.push(_aiParts2.join(', ')+' (AI)');
+  _trustParts.push('not audit-grade');
+  _trustParts.push('Vertex pending');
+
+  html+='<div style="margin:10px 16px 0;border:2px solid '+_vBorder+';border-radius:8px;overflow:hidden;">';
+  html+='<div style="padding:14px 20px 10px;background:'+_vBg+';">';
+  html+='<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">';
+  html+='<span style="font-size:22px;font-weight:800;color:'+_vColor+';letter-spacing:-0.3px;">'+_vLabel+'</span>';
+  if(taxIsExplicit&&stxAvail&&!_ftZero){
+    html+='<span style="font-size:13px;color:#6b7280;">vendor $'+money(_ftV)+' &nbsp;&#183;&nbsp; SalesTaxZip $'+money(_ftE)
+      +(_ftAbsD!=null&&_ftAbsD>TAX_TOLERANCE?' &nbsp;&#183;&nbsp; gap <strong style="color:'+_vColor+';">'
+        +(_ftD>0?'+':'&#8722;')+'$'+money(_ftAbsD)+'</strong>':'')
+      +'</span>';
+  }else if(!taxIsExplicit){
+    html+='<span style="font-size:12px;color:#9ca3af;">vendor tax not separately stated on invoice</span>';
+  }else if(!stxAvail){
+    html+='<span style="font-size:12px;color:#9ca3af;">'+(_noZip?'no delivery ZIP &mdash; enter address above':'no rate data for this jurisdiction')+'</span>';
+  }
+  html+='</div>';
+  html+='<div style="font-size:11px;color:#6b7280;margin-top:5px;">'+_trustParts.join(' &nbsp;&#183;&nbsp; ')+'</div>';
+  html+='</div>';
+
+  if(stxLineItems.length>0){
+    html+='<div style="border-top:1px solid '+_vBorder+';padding:8px 20px 10px;background:#fff;">';
+    if(_exceptionLines.length>0){
+      html+='<div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Items to review</div>';
+      _exceptionLines.forEach(function(li){
+        var _li_idx=stxLineItems.indexOf(li);
+        var _isExempt=li.taxabilityAI==='EXEMPT';
+        var _bBg=_isExempt?'#fef3c7':'#eff6ff';
+        var _bClr=_isExempt?'#92400e':'#1e40af';
+        var _bBrd=_isExempt?'#fcd34d':'#93c5fd';
+        var _rsn=li.taxabilityReason||'';
+        html+='<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f3f4f6;gap:8px;">';
+        html+='<div style="display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;">';
+        html+='<span style="font-size:12px;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+escHtml(li.description||'Line '+(_li_idx+1))+'</span>';
+        html+='<span style="font-size:10px;font-weight:700;background:'+_bBg+';color:'+_bClr+';border:1px solid '+_bBrd+';padding:1px 6px;border-radius:10px;white-space:nowrap;flex-shrink:0;">'+escHtml(li.taxabilityAI)+' (AI)</span>';
+        html+='</div>';
+        html+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;white-space:nowrap;">';
+        if(_rsn)html+='<span style="font-size:10px;color:#9ca3af;" title="'+escHtml(_rsn)+'">'+escHtml(_rsn.length>45?_rsn.slice(0,45)+'…':_rsn)+'</span>';
+        html+='<span style="font-size:11px;color:#374151;">Tax: <strong style="color:'+(_isExempt?'#92400e':'#374151')+';">$'+money(li.totalTax)+'</strong></span>';
+        html+='<span class="link" style="font-size:11px;" onclick="openSTZLineDetails('+_li_idx+')">Details &#8594;</span>';
+        html+='</div>';
+        html+='</div>';
+      });
+    }
+    if(_agreeCount>0){
+      html+='<div style="display:flex;align-items:center;justify-content:space-between;'
+        +(_exceptionLines.length>0?'margin-top:8px;padding-top:6px;':'')
+        +'">';
+      html+='<span style="font-size:12px;color:#6b7280;">'+_agreeCount+' line'+(_agreeCount!==1?'s':'')+' taxable &nbsp;<span style="color:#059669;font-weight:700;">&#10003;</span></span>';
+      html+='<button onclick="var p=document.getElementById(\'teAllLinesPanel\');if(p)p.style.display=p.style.display===\'none\'?\'block\':\'none\';" '
+        +'style="font-size:11px;background:none;border:none;color:#2563eb;cursor:pointer;padding:0;font-weight:600;">view all &#8595;</button>';
+      html+='</div>';
+      html+='<div id="teAllLinesPanel" style="display:none;margin-top:8px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">';
+      stxLineItems.forEach(function(li,_idx2){
+        var _aiS=li.taxabilityAI||null;
+        var _rBg=_idx2%2===1?'#fafafa':'#fff';
+        var _b2Bg=_aiS==='EXEMPT'?'#fef3c7':_aiS==='UNCERTAIN'?'#eff6ff':'#d1fae5';
+        var _b2Clr=_aiS==='EXEMPT'?'#92400e':_aiS==='UNCERTAIN'?'#1e40af':'#065f46';
+        html+='<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 10px;background:'+_rBg+';border-bottom:1px solid #f3f4f6;gap:8px;">';
+        html+='<div style="display:flex;align-items:center;gap:6px;">';
+        html+='<span style="font-size:11px;color:#374151;">'+escHtml(li.description||'Line '+(_idx2+1))+'</span>';
+        if(_aiS)html+='<span style="font-size:10px;font-weight:700;background:'+_b2Bg+';color:'+_b2Clr+';padding:1px 5px;border-radius:8px;">'+escHtml(_aiS)+' (AI)</span>';
+        html+='</div>';
+        html+='<div style="display:flex;align-items:center;gap:8px;white-space:nowrap;">';
+        html+='<span style="font-size:11px;color:#6b7280;">Net: $'+money(li.netAmount)+' &nbsp;Tax: <strong>$'+money(li.totalTax)+'</strong></span>';
+        html+='<span class="link" style="font-size:11px;" onclick="openSTZLineDetails('+_idx2+')">Details &#8594;</span>';
+        html+='</div>';
+        html+='</div>';
+      });
+      html+='</div>';
+    }
+    html+='</div>';
+  }
+  html+='</div>'; // verdict block
+
+  // ── Engine comparison (on demand) ─────────────────────────────────────────
+  html+='<details style="margin:8px 16px 0;">';
+  html+='<summary style="padding:7px 0;font-size:12px;font-weight:700;color:#374151;cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;">'
+    +'<span style="color:#9ca3af;font-size:10px;">&#9654;</span> Engine comparison</summary>';
+  html+='<div style="margin-top:6px;border:2px solid #2563eb;border-radius:8px;overflow:hidden;">';
   html+='<div style="padding:8px 14px;background:#eff6ff;border-bottom:1px solid #bfdbfe;display:flex;justify-content:space-between;align-items:center;">';
   html+='<span style="font-weight:700;font-size:13px;color:#1e3a8a;">Tax Determination &mdash; Engine-Dependent</span>';
   html+='<span style="font-size:10px;font-weight:700;background:#2563eb;color:#fff;padding:2px 10px;border-radius:8px;letter-spacing:.3px;">SWAP ADAPTER TO CHANGE ENGINE</span>';
   html+='</div>';
-  // Engine roster table
   html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
   html+='<thead><tr style="background:#eff6ff;">'
     +'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#374151;">Engine</th>'
@@ -3219,28 +3311,24 @@ function renderTaxEngine(data){
     +(hasVendorTax?'<th style="padding:8px 12px;text-align:right;font-weight:600;color:#374151;">vs Vendor</th>':'')
     +'<th style="padding:8px 12px;text-align:left;font-weight:600;color:#374151;">Status</th>'
     +'</tr></thead><tbody>';
-  // Vertex
   html+='<tr style="border-top:1px solid #e5e7eb;">'
     +'<td style="padding:8px 12px;font-weight:600;color:#6366f1;">Vertex O-Series <span style="font-size:10px;font-weight:400;color:#9ca3af;">(production)</span></td>'
     +'<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>'
     +(hasVendorTax?'<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>':'')
     +'<td style="padding:8px 12px;"><span style="font-size:10px;font-weight:700;background:#6366f1;color:#fff;padding:2px 8px;border-radius:8px;">VERDICT IN PRODUCTION</span></td>'
     +'</tr>';
-  // Avalara
   html+='<tr style="border-top:1px solid #e5e7eb;background:#fafafa;">'
     +'<td style="padding:8px 12px;font-weight:600;color:#0891b2;">Avalara AvaTax <span style="font-size:10px;font-weight:400;color:#9ca3af;">(pluggable)</span></td>'
     +'<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>'
     +(hasVendorTax?'<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>':'')
     +'<td style="padding:8px 12px;"><span style="font-size:10px;font-weight:700;background:#e5e7eb;color:#374151;padding:2px 8px;border-radius:8px;">PLUGGABLE STUB</span></td>'
     +'</tr>';
-  // ONESOURCE
   html+='<tr style="border-top:1px solid #e5e7eb;">'
     +'<td style="padding:8px 12px;font-weight:600;color:#7c3aed;">ONESOURCE <span style="font-size:10px;font-weight:400;color:#9ca3af;">(pluggable)</span></td>'
     +'<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>'
     +(hasVendorTax?'<td style="padding:8px 12px;text-align:right;color:#9ca3af;font-style:italic;">—</td>':'')
     +'<td style="padding:8px 12px;"><span style="font-size:10px;font-weight:700;background:#e5e7eb;color:#374151;padding:2px 8px;border-radius:8px;">PLUGGABLE STUB</span></td>'
     +'</tr>';
-  // SalesTaxZip
   html+='<tr style="border-top:1px solid #e5e7eb;background:#fafafa;">'
     +'<td style="padding:8px 12px;font-weight:600;color:#059669;">SalesTaxZip <span style="font-size:10px;font-weight:400;color:#9ca3af;">(live demo)</span></td>';
   if(stxAvail){
@@ -3263,7 +3351,6 @@ function renderTaxEngine(data){
   html+='</tr>';
   html+='</tbody></table>';
 
-  // ── Manual address reference — links to canonical form in General Information ─
   if(_noZip){
     var _teRefLabel=_noAddrSentinel?'No valid delivery address found':'Incomplete delivery address (no ZIP)';
     html+='<div style="padding:10px 14px;background:#fffbeb;border-top:1px solid #fcd34d;font-size:12px;color:#92400e;">'
@@ -3272,42 +3359,56 @@ function renderTaxEngine(data){
       +'</div>';
   }
 
-  // ── Folded flow-through verdict (unique: directional verdict + gross math) ─
   var _ftBg=_ftZero?'#f9fafb':_ftTol?'#f0fdf4':_ftUnder?'#fffbeb':'#fef2f2';
-  html+='<div style="padding:10px 14px;background:'+_ftBg+';border-top:1px solid #bfdbfe;">';
+  html+='<div style="padding:8px 14px;background:'+_ftBg+';border-top:1px solid #bfdbfe;">';
   if(!taxIsExplicit){
-    html+='<div style="font-size:12px;color:#6b7280;">&#9888; Vendor tax not separately stated &mdash; charge verdict unavailable. (Vendor tax is never derived from gross &#8722; base.)</div>';
+    html+='<div style="font-size:11px;color:#6b7280;">&#9888; Vendor tax not separately stated &mdash; charge verdict unavailable. (Vendor tax is never derived from gross &#8722; base.)</div>';
   }else if(!stxAvail){
     if(_noZip){
-      html+='<div style="font-size:12px;color:#92400e;">&#9888; <strong>Manual Action Required</strong> &mdash; charge verdict unavailable until a complete delivery address is entered above.</div>';
+      html+='<div style="font-size:11px;color:#92400e;">&#9888; <strong>Manual Action Required</strong> &mdash; charge verdict unavailable until a complete delivery address is entered above.</div>';
     }else{
-      html+='<div style="font-size:12px;color:#6b7280;">&#9888; No engine rate data for this jurisdiction &mdash; charge verdict unavailable. Requires Vertex or add the ZIP to <code>srv/data/tax-rates.json</code>.</div>';
+      html+='<div style="font-size:11px;color:#6b7280;">&#9888; No engine rate data for this jurisdiction &mdash; charge verdict unavailable.</div>';
     }
   }else if(_ftZero){
-    html+='<div style="font-size:12px;color:#6b7280;">&#8212; Charge-status not evaluated &mdash; a tax value is zero (spec §14: threshold skipped when either tax = $0). Verdict requires Vertex.</div>';
-  }else if(_ftTol){
-    html+='<div style="font-size:13px;font-weight:600;color:#166534;">SalesTaxZip rate &#215; full base = $'+money(_ftE)+' &mdash; matches vendor tax within $'+money(TAX_TOLERANCE)+' (illustrative only). Authoritative verdict requires Vertex.</div>';
-  }else if(_ftUnder){
-    html+='<div style="font-size:13px;font-weight:600;color:#92400e;">&#9650; SalesTaxZip rate &#215; full base = $'+money(_ftE)+' vs vendor $'+money(_ftV)+' (gap: $'+money(_ftAbsD)+').</div>';
-    html+='<div style="font-size:11px;color:#92400e;margin-top:3px;">SalesTaxZip returns the jurisdiction <strong>rate only</strong> &mdash; it has no commodity or exemption logic, so it applies the full rate to the entire base and overstates tax whenever any line is exempt (services, resale, etc.). The vendor\'s lower tax likely reflects correct exemptions applied. Determining which lines are taxable requires a commercial tax engine (Vertex) that maps UNSPSC codes to taxability per jurisdiction. <strong>This gap is why production uses Vertex.</strong></div>';
-  }else{
-    html+='<div style="font-size:13px;font-weight:600;color:#991b1b;">&#9651; SalesTaxZip rate &#215; full base = $'+money(_ftE)+' vs vendor $'+money(_ftV)+' (gap: &#8722;$'+money(_ftAbsD)+').</div>';
-    html+='<div style="font-size:11px;color:#991b1b;margin-top:3px;">SalesTaxZip returns the jurisdiction <strong>rate only</strong> &mdash; it has no commodity or exemption logic. A vendor-charged amount above this estimate may reflect freight, item-level taxability differences, or a different rate interpretation. Authoritative taxability determination requires Vertex, which maps UNSPSC codes to per-jurisdiction taxability rules.</div>';
-  }
-  if(taxIsExplicit&&stxAvail&&!_ftZero&&srcGross!=null){
-    html+='<div style="font-size:11px;color:#6b7280;margin-top:4px;">';
-    html+='Invoice gross <strong>$'+money(srcGross)+'</strong>; SalesTaxZip illustrative total (rate &#215; full base, assumes all taxable): $'+money(_ftBase)+' + $'+money(_ftE)+' = <strong>$'+money(_ftTrue)+'</strong>';
+    html+='<div style="font-size:11px;color:#6b7280;">&#8212; Charge-status not evaluated &mdash; a tax value is zero (spec §14). Verdict requires Vertex.</div>';
+  }else if(taxIsExplicit&&stxAvail&&!_ftZero&&srcGross!=null){
+    html+='<div style="font-size:11px;color:#6b7280;">';
+    html+='Invoice gross <strong>$'+money(srcGross)+'</strong>; SalesTaxZip illustrative total (rate &#215; full base): $'+money(_ftBase)+' + $'+money(_ftE)+' = <strong>$'+money(_ftTrue)+'</strong>';
     if(!_ftTol)html+=' (<strong style="color:'+_ftColor+';">'+_ftSign+'$'+money(_ftAbsD)+'</strong> vs invoice gross)';
-    html+='. Illustrative rate ceiling, not a taxability determination &mdash; authoritative result requires Vertex.';
+    html+='. Not a taxability determination &mdash; authoritative result requires Vertex.';
     html+='</div>';
   }
   html+='</div>';
 
-  // ONE consolidated disclaimer
   html+='<div style="padding:8px 14px;background:#fef9c3;border-top:1px solid #fde68a;font-size:11px;color:#78350f;line-height:1.5;">';
   html+='<strong>Note:</strong> Vertex, Avalara, and ONESOURCE are not connected in this POC (production/pluggable stubs). SalesTaxZip provides live illustrative rate estimates; ZIP-based rates diverge from enterprise engines. Authoritative charge verdict requires Vertex. The same extraction payload feeds any connected engine.';
   html+='</div>';
-  html+='</div>'; // block 2
+  html+='</div>'; // engine roster
+
+  html+='<div style="padding:10px 16px 14px;">';
+  html+='<div style="font-weight:700;font-size:12px;color:#374151;margin-bottom:8px;">Adapter detail</div>';
+  var engines=[
+    {key:'vertex',    label:'Vertex',        sub:'production',  color:'#6366f1'},
+    {key:'avalara',   label:'Avalara AvaTax',sub:'pluggable',   color:'#0891b2'},
+    {key:'onesource', label:'ONESOURCE',     sub:'pluggable',   color:'#7c3aed'},
+    {key:'salestaxzip',label:'SalesTaxZip',  sub:'live (demo)', color:'#059669'}
+  ];
+  html+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">';
+  engines.forEach(function(e){
+    html+='<button id="teBtn-'+e.key+'" onclick="teSelect(\''+e.key+'\')" '
+      +'style="font-size:12px;font-weight:700;padding:6px 16px;border-radius:20px;border:2px solid '+e.color+';'
+      +'background:#fff;color:'+e.color+';cursor:pointer;">'
+      +escHtml(e.label)
+      +' <span style="font-weight:400;font-size:10px;opacity:0.75;">('+e.sub+')</span>'
+      +'</button>';
+  });
+  html+='</div>';
+  engines.forEach(function(e){
+    html+='<div id="teCard-'+e.key+'" style="display:none;"></div>';
+  });
+  html+='</div>';
+
+  html+='</details>'; // engine comparison
 
   // ── Block 3: PAYLOAD DETAIL + PROVENANCE ──────────────────────────────────
   html+='<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Payload Detail &mdash; engine-agnostic input (UNSPSC, provenance)</summary>';
@@ -3316,11 +3417,9 @@ function renderTaxEngine(data){
   html+='<span style="font-weight:700;font-size:12.5px;color:#1e3a8a;">Payload Detail &mdash; engine-agnostic input</span>';
   html+='<span style="font-size:11px;color:#1d4ed8;background:#dbeafe;padding:2px 10px;border-radius:8px;font-weight:700;">Same payload &#8595; feeds every engine</span>';
   html+='</div>';
-  // Chips: invoiceMode only — base/freight/place-of-use live in Block 1
   html+='<div style="display:flex;flex-wrap:wrap;border-bottom:1px solid #bfdbfe;font-size:12px;">';
   html+=_teChip('Mode',escHtml(tp.invoiceMode||''));
   html+='</div>';
-  // Freight taxability inputs (note H — unique: app does not decide taxability)
   html+='<div style="padding:7px 14px;background:#ecfdf5;border-bottom:1px solid #a7f3d0;font-size:11.5px;color:#374151;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">';
   html+='<span style="font-weight:700;color:#065f46;white-space:nowrap;">Freight taxability inputs</span>';
   html+='<span style="font-size:10.5px;color:#6b7280;">(inputs for the tax engine &mdash; the app does not decide freight taxability)</span>';
@@ -3328,7 +3427,6 @@ function renderTaxEngine(data){
   html+='<span style="color:#d1d5db;">&middot;</span>';
   html+='<span>FOB terms: <strong>'+(_fobT?escHtml(_fobT):'<span style="color:#9ca3af;font-weight:400;">not stated</span>')+'</strong></span>';
   html+='</div>';
-  // Per-line table (description / UNSPSC / net / freightShare / taxableTotal)
   if(li_items.length){
     html+='<table style="width:100%;border-collapse:collapse;font-size:12px;">';
     html+='<thead><tr style="background:#eff6ff;">'
@@ -3349,12 +3447,10 @@ function renderTaxEngine(data){
         +'</tr>';
     });
     html+='</tbody></table>';
-    // Note G — unique: freight as distinct component
     html+='<div style="padding:6px 14px;font-size:11px;color:#1d4ed8;background:#eff6ff;border-top:1px solid #bfdbfe;">'
       +'&#9432; Freight passed as a distinct component (freightShare per line) &mdash; taxability determined per-jurisdiction by the tax engine.'
       +'</div>';
   }
-  // Source Provenance §21 — folded into Block 3
   var _provObj=src._provenance||{};
   var _provRows=[
     {label:'Invoice Net Total',    key:'invoiceNetTotal'},
@@ -3386,7 +3482,6 @@ function renderTaxEngine(data){
         +'</tr>';
     });
     html+='</tbody></table>';
-    // Note I — unique: provenance legend
     html+='<div style="padding:7px 14px;background:#faf5ff;border-top:1px solid #ede9fe;font-size:11px;color:#6b7280;">'
       +'&#9432; EXTRACTED = read directly from the document &nbsp;&middot;&nbsp; INFERRED = calculated by the app (freight distribution, derived totals)'
       +'</div>';
@@ -3395,32 +3490,6 @@ function renderTaxEngine(data){
   html+='</div>'; // block 3
   html+='</details>';
 
-  // ── Block 4: ENGINE DETAIL (selected adapter breakdown) ───────────────────
-  html+='<div style="margin:12px 16px 8px;">';
-  html+='<div style="font-weight:700;font-size:13px;color:#111827;margin-bottom:10px;">Engine Detail &mdash; same payload, four adapters</div>';
-  var engines=[
-    {key:'vertex',    label:'Vertex',        sub:'production',  color:'#6366f1'},
-    {key:'avalara',   label:'Avalara AvaTax',sub:'pluggable',   color:'#0891b2'},
-    {key:'onesource', label:'ONESOURCE',     sub:'pluggable',   color:'#7c3aed'},
-    {key:'salestaxzip',label:'SalesTaxZip',  sub:'live (demo)', color:'#059669'}
-  ];
-  html+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">';
-  engines.forEach(function(e){
-    html+='<button id="teBtn-'+e.key+'" onclick="teSelect(\''+e.key+'\')" '
-      +'style="font-size:12px;font-weight:700;padding:6px 16px;border-radius:20px;border:2px solid '+e.color+';'
-      +'background:#fff;color:'+e.color+';cursor:pointer;">'
-      +escHtml(e.label)
-      +' <span style="font-weight:400;font-size:10px;opacity:0.75;">('+e.sub+')</span>'
-      +'</button>';
-  });
-  html+='</div>';
-
-  // Empty output containers — teSelect fills them on demand
-  engines.forEach(function(e){
-    html+='<div id="teCard-'+e.key+'" style="display:none;"></div>';
-  });
-
-  html+='</div>'; // block 4
   el.innerHTML=html;
   teSelect('salestaxzip'); // default: load SalesTaxZip immediately
 }

@@ -640,6 +640,7 @@ async function runDocAI(){
 
 async function runClaude(){
   if(claudeRan && claudeResult){ _showCached('claude', claudeResult); return; }
+  if(!docaiResult){_renderStatusAll('<div class="status-msg error">&#9888; Run Doc AI extraction first (Step 1) before sending to Claude.</div>');return;}
   document.getElementById('claudeBtn').disabled=true;
   _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Step 2: Sending to Claude for full audit...</div>');
   try{

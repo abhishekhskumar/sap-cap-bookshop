@@ -268,11 +268,17 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const startTime = Date.now();
 
     // ── Parse Doc AI result passed from client (Doc AI already ran in extractDocAI) ──
+    // JSON.parse(null) and JSON.parse("null") both return null without throwing, so the try/catch
+    // below is not sufficient — guard explicitly after parsing.
     let docAIParsed;
     try {
       docAIParsed = JSON.parse(docAIResultStr);
     } catch (err) {
       return req.error(400, 'docAIResult is missing or invalid JSON');
+    }
+    if (!docAIParsed || typeof docAIParsed !== 'object') {
+      LOG.warn(`processInvoice ${documentId}: docAIResult resolved to null — extractDocAI may not have completed or returned an error`);
+      return req.error(400, `processInvoice: docAIResult is null for ${documentId} — run extractDocAI successfully before calling processInvoice`);
     }
     const keepLines          = docAIParsed.keepLines || [];
     const docAISuppressedLines = docAIParsed.suppressedLines || [];

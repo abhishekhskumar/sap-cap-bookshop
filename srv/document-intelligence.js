@@ -2836,7 +2836,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     // Parse city/state/postal from a US address string when sub-fields are not separately extracted
     const parseAddrParts = addr => {
       if (!addr) return {};
-      const m = addr.match(/\b([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\b/);
+      const m = addr.match(/\b([A-Z]{2})[,\s]+(\d{5}(?:-\d{4})?)\b/);
       if (!m) return {};
       const state = m[1], postal = m[2];
       const before = addr.slice(0, m.index).replace(/,\s*$/, '').trim();

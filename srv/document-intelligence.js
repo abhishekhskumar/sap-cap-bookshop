@@ -224,6 +224,16 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       consistencyChecks, fields
     );
     const shippingTaxedByVendor = this._resolveShippingTaxed(suppressedLines, [], []);
+    const _docaiFreightLines = suppressedLines.filter(li => li.isFreight);
+    const freightTaxabilityPrediction = await this._determineFreightTaxability(
+      _docaiFreightLines,
+      { state: resolved.shipToState, city: resolved.shipToCity },
+      docAIFreightTotal > 0,
+      fobTerms
+    );
+    const freightReconciliation = this._buildFreightReconciliation(
+      shippingTaxedByVendor, freightTaxabilityPrediction, docAIFreightTotal, taxEngineResults
+    );
 
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
@@ -238,7 +248,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
       apcReconciliation,
-      consistencyChecks, manualAction, shippingTaxedByVendor,
+      consistencyChecks, manualAction, shippingTaxedByVendor, freightReconciliation,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: lineItems, claudeLines: null, visionLines: null, claudeRan: false, visionRan: false }),
       generalInfo, docAIHeader, keepLines, fullText,
       _provenance: {
@@ -553,6 +563,19 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       claudeSuppressedItems,
       []
     );
+    const _claudeAllFreightLines = [
+      ...(docAISuppressedLines || []).filter(li => li.isFreight),
+      ...claudeSuppressedItems.filter(li => li.isFreight)
+    ];
+    const freightTaxabilityPrediction = await this._determineFreightTaxability(
+      _claudeAllFreightLines,
+      { state: resolved.shipToState, city: resolved.shipToCity },
+      invoiceFreightTotal > 0,
+      fobTerms
+    );
+    const freightReconciliation = this._buildFreightReconciliation(
+      shippingTaxedByVendor, freightTaxabilityPrediction, invoiceFreightTotal, taxEngineResults
+    );
 
     return JSON.stringify({
       documentId,
@@ -562,7 +585,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
       lineItemCorrections: intelligence.lineItemCorrections || [],
       consistencyChecks,
-      manualAction, shippingTaxedByVendor,
+      manualAction, shippingTaxedByVendor, freightReconciliation,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: keepLines, claudeLines: claudeLineItems, visionLines: null, claudeRan: true, visionRan: false }),
       freightTotal: intelligence.freightTotal || 0,
       summary: intelligence.summary || '',
@@ -898,6 +921,16 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       _claudeFreightLines,
       visionSuppressedLines
     );
+    const _visionAllFreightLines = [..._docaiFreightLines, ..._claudeFreightLines, ...visionSuppressedLines].filter(li => li.isFreight);
+    const freightTaxabilityPrediction = await this._determineFreightTaxability(
+      _visionAllFreightLines,
+      { state: _getVF('shipToState'), city: _getVF('shipToCity') },
+      _visionPayloadFreight > 0,
+      null  // FOB terms not available in Vision path
+    );
+    const freightReconciliation = this._buildFreightReconciliation(
+      shippingTaxedByVendor, freightTaxabilityPrediction, _visionPayloadFreight, taxEngineResults
+    );
 
     return JSON.stringify({
       documentId,
@@ -916,9 +949,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       vendorTaxAmount,
       invoiceGrossTotal,
       invoiceTotalAmount: invoiceGrossTotal,
-      invoiceFreightTotal: 0,
+      invoiceFreightTotal: _visionPayloadFreight || 0,
       apcReconciliation: null,
-      generalInfo: [], shippingTaxedByVendor,
+      generalInfo: [], shippingTaxedByVendor, freightReconciliation,
       simplifiedTax: taxCalc,
       taxPayload, taxEngineResults,
       reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex', chargeabilityStatus: 'Pending Vertex' },
@@ -1945,6 +1978,175 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
       LOG.warn('_determineTaxability failed — skipping: ' + err.message);
       return lineItems;
     }
+  }
+
+  // AI freight taxability prediction — UNCERTAIN-leaning.
+  // Freight taxability is the most state-specific, structure-dependent call; this leans hard toward UNCERTAIN.
+  // Returns { taxability, taxabilityReason, source, separatelyStated, fobTerms } or null if no freight lines.
+  async _determineFreightTaxability(freightLines, jurisdiction, freightSeparatelyStated, fobTerms) {
+    const freight = (freightLines || []).filter(li => li.isFreight && (parseFloat(li.amount || li.netAmount || 0) > 0));
+    if (!freight.length) return null;
+
+    const authUrl       = process.env.AI_CORE_AUTH_URL;
+    const clientId      = process.env.AI_CORE_CLIENT_ID;
+    const clientSecret  = process.env.AI_CORE_CLIENT_SECRET;
+    const deploymentUrl = process.env.AI_CORE_DEPLOYMENT_URL;
+    const resourceGroup = process.env.AI_CORE_RESOURCE_GROUP || 'use-tax';
+    const modelName     = process.env.AI_CORE_MODEL || 'anthropic--claude-4.5-sonnet';
+
+    if (!authUrl || !clientId || !deploymentUrl) {
+      return { taxability: 'UNCERTAIN', taxabilityReason: 'AI Core not configured — defaulting to UNCERTAIN', source: 'AI-fallback', separatelyStated: freightSeparatelyStated, fobTerms: fobTerms || null };
+    }
+
+    const state = (jurisdiction.state || '').trim().toUpperCase();
+    const city  = (jurisdiction.city  || '').trim();
+
+    try {
+      const tokenRes = await fetch(authUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'client_credentials', client_id: clientId, client_secret: clientSecret })
+      });
+      if (!tokenRes.ok) throw new Error(`Token failed: ${tokenRes.status}`);
+      const { access_token } = await tokenRes.json();
+
+      const freightDesc = freight.map(li => `"${li.description || 'Freight'}" ($${parseFloat(li.amount || li.netAmount || 0).toFixed(2)})`).join(', ');
+      const separatedNote = freightSeparatelyStated
+        ? 'Yes — freight is separately stated as a distinct line item on the invoice'
+        : 'No — freight appears as a bundled or header amount';
+      const fobNote = fobTerms ? `FOB terms: ${fobTerms}` : 'FOB terms: not specified on invoice';
+
+      const prompt = `You are a sales and use tax analyst. Predict whether freight/shipping charges on this invoice are subject to sales tax under the general rules for ${state}${city ? ' (' + city + ')' : ''}.
+
+CRITICAL RULES — READ CAREFULLY:
+- Default to "UNCERTAIN" in almost all cases. Freight taxability is the most state-specific, structure-dependent call in sales tax — more so than goods or services.
+- Return "TAXABLE" ONLY when: (1) the state clearly taxes delivery charges as a general rule AND (2) freight is separately stated AND (3) no structural ambiguity remains (no S&H bundling, no FOB-origin argument).
+- Return "EXEMPT" ONLY when: the state has a well-established exemption for separately-stated delivery charges that is broadly settled law — not an obscure ruling.
+- If you have any doubt at all, return "UNCERTAIN". This is an internal AI estimate used for preliminary review — not authoritative tax advice.
+- Common reasons to return UNCERTAIN: shipping-and-handling (S&H) bundles (service vs. freight), state rules unclear or recently changed, FOB-origin vs. destination argument possible, combined freight+other charges, state with mixed treatment by jurisdiction.
+
+Freight details for this invoice:
+- Freight charge(s): ${freightDesc}
+- Separately stated on invoice: ${separatedNote}
+- ${fobNote}
+- Jurisdiction: ${state}${city ? ', ' + city : ''}
+
+Return ONLY a JSON object (no markdown, no code fences, no explanation outside the JSON):
+{"taxability":"TAXABLE"|"EXEMPT"|"UNCERTAIN","taxabilityReason":"one sentence — identify the key factor and acknowledge uncertainty where present"}`;
+
+      const orchBody = {
+        orchestration_config: {
+          module_configurations: {
+            templating_module_config: { template: [{ role: 'user', content: '{{?input}}' }] },
+            llm_module_config: { model_name: modelName, model_params: { max_tokens: 256, temperature: 0 } }
+          }
+        },
+        input_params: { input: prompt }
+      };
+
+      const response = await fetch(deploymentUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${access_token}`,
+          'Content-Type': 'application/json',
+          'AI-Resource-Group': resourceGroup
+        },
+        body: JSON.stringify(orchBody)
+      });
+      if (!response.ok) throw new Error(`AI Core call failed: ${response.status}`);
+
+      const data = await response.json();
+      const content = data.orchestration_result?.choices?.[0]?.message?.content || '';
+      const cleaned = content.replace(/```json|```/g, '').trim();
+      const det = JSON.parse(cleaned);
+
+      const taxability = ['TAXABLE', 'EXEMPT', 'UNCERTAIN'].includes(det.taxability) ? det.taxability : 'UNCERTAIN';
+      return {
+        taxability,
+        taxabilityReason: det.taxabilityReason || '',
+        source: 'AI',
+        separatelyStated: freightSeparatelyStated,
+        fobTerms: fobTerms || null
+      };
+    } catch (err) {
+      cds.log('intelligence').warn('_determineFreightTaxability failed: ' + err.message);
+      return { taxability: 'UNCERTAIN', taxabilityReason: 'AI freight taxability prediction unavailable — defaulting to UNCERTAIN', source: 'AI-fallback', separatelyStated: freightSeparatelyStated, fobTerms: fobTerms || null };
+    }
+  }
+
+  // Builds the freight reconciliation object:
+  // vendorFreightTax (factual) vs estimatedFreightTax (STZ rate × freight, gated by AI taxability) → variance → verdict.
+  _buildFreightReconciliation(shippingTaxedByVendor, freightTaxabilityPrediction, invoiceFreightTotal, taxEngineResults) {
+    const stzResult = taxEngineResults && taxEngineResults.salestaxzip;
+    const stzAvail  = stzResult && stzResult.available && stzResult.combinedRate != null;
+
+    const freightAmt    = +(parseFloat(invoiceFreightTotal) || 0).toFixed(2);
+    const combinedRate  = stzAvail ? stzResult.combinedRate : null;
+    const rateKey       = stzAvail ? (stzResult.rateKey || null) : null;
+
+    // Estimated freight tax — gated by AI taxability prediction (UNCERTAIN → conservative: apply rate)
+    let estimatedFreightTax = null;
+    if (stzAvail && freightAmt > 0 && freightTaxabilityPrediction) {
+      estimatedFreightTax = freightTaxabilityPrediction.taxability === 'EXEMPT'
+        ? 0
+        : +(freightAmt * combinedRate / 100).toFixed(2);
+    }
+
+    // Vendor actual freight tax amount — factual from invoice (null if amount not extractable)
+    const vendorFreightTax = (shippingTaxedByVendor && shippingTaxedByVendor.state === 'YES')
+      ? shippingTaxedByVendor.amount  // may be null even when state=YES (amount not extracted)
+      : null;
+
+    // Variance (vendor - estimated) and verdict
+    const FREIGHT_TAX_TOLERANCE = 0.25;
+    let variance = null;
+    let verdict = 'UNAVAILABLE';
+
+    const stvState = shippingTaxedByVendor ? shippingTaxedByVendor.state : null;
+
+    if (stvState === 'NO_SHIPPING_LINE' || freightAmt === 0) {
+      verdict = 'NO_SHIPPING_LINE';
+    } else if (!stzAvail) {
+      verdict = 'NO_RATE';
+    } else if (stvState === 'NO') {
+      // Vendor charged $0 freight tax — compare against estimate
+      variance = estimatedFreightTax != null ? +(0 - estimatedFreightTax).toFixed(2) : null;
+      verdict  = estimatedFreightTax != null
+        ? (estimatedFreightTax <= FREIGHT_TAX_TOLERANCE ? 'ACCURATELY_TAXED' : 'UNDER_TAXED')
+        : 'UNAVAILABLE';
+    } else if (stvState === 'YES') {
+      if (vendorFreightTax == null) {
+        // State YES but amount not extracted — can confirm vendor taxed freight but can't reconcile
+        verdict = 'VENDOR_AMOUNT_UNKNOWN';
+      } else if (estimatedFreightTax == null) {
+        verdict = 'NO_RATE';
+      } else {
+        variance = +(vendorFreightTax - estimatedFreightTax).toFixed(2);
+        const absD = Math.abs(variance);
+        verdict = absD <= FREIGHT_TAX_TOLERANCE ? 'ACCURATELY_TAXED'
+                : variance > 0                  ? 'OVER_TAXED'
+                :                                 'UNDER_TAXED';
+      }
+    } else if (stvState === 'UNCERTAIN') {
+      verdict = 'VENDOR_UNCERTAIN';
+    }
+
+    return {
+      vendorFreightAmount:        freightAmt,
+      vendorFreightTaxState:      stvState,
+      vendorFreightTax,
+      freightTaxabilityPrediction: freightTaxabilityPrediction || null,
+      estimatedFreightTax,
+      rateUsed:    combinedRate,
+      rateKey,
+      rateSource:  stzAvail ? 'SalesTaxZip' : null,
+      variance,
+      verdict,
+      tolerance:   FREIGHT_TAX_TOLERANCE,
+      note: 'Freight tax reconciliation — illustrative: STZ rate + AI freight-taxability prediction (UNCERTAIN-leaning). ' +
+            'Vendor freight tax: factual from invoice. Estimated freight tax: single destination-ZIP rate — situs not modeled. ' +
+            'Vertex-authoritative pending. Non-authoritative AI estimate — not compliance-grade.'
+    };
   }
 
   // Extracts FOB / shipping terms from invoice full text via regex.

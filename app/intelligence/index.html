@@ -1734,6 +1734,8 @@ function renderGeneral(data){
   // Compute self-balance from best available source (same precedence as tax engine gate)
   var _triageSrc=visionResult||claudeResult||docaiResult;
   var _triageSB=_computeSelfBalance(_triageSrc);
+  var nLayers=[d_run,c_run,v_run].filter(Boolean).length;
+  var _sbPasses=!_triageSB||_triageSB.passes;
   if(bannerEl) bannerEl.innerHTML=_buildTriageBanner(triageMap,allNames,d_run,c_run,v_run,_triageSB);
   var dot=function(run){return run
     ?'<span style="display:block;color:#107e3e;font-size:10px;font-weight:400;margin-top:2px;">&#9679; run</span>'

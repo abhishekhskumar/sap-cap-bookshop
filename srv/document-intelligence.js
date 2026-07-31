@@ -2279,6 +2279,10 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     }
 
     // FD fields 33–40: jurisdiction breakdown per tier (State / County / City / District)
+    // accrualShare = tier's proportional slice of the accrual (= taxAmountDifference, not totalTax).
+    // Proportioning: tier_accrual = (tier_taxAmount / totalTax) × accrual.
+    // This makes tier accrual shares sum to the accrual amount, not to totalTax.
+    const totalTax = cr.estimatedTax || 0;
     const jurisdictionBreakdown = (stzAvail && Array.isArray(stz.jurisdictions) && stz.jurisdictions.length > 0)
       ? stz.jurisdictions.map(j => ({
           tier: j.type,           // 'STATE' | 'COUNTY' | 'CITY' | 'DISTRICT'
@@ -2286,7 +2290,9 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
           rate: j.rate,
           taxableAmount: j.taxableAmount,
           taxAmount: j.taxAmount,
-          accrualShare: accrualStatus === 'ACCRUAL_REQUIRED' ? j.taxAmount : 0
+          accrualShare: (accrualStatus === 'ACCRUAL_REQUIRED' && totalTax > 0)
+            ? +(j.taxAmount / totalTax * proposedAccrualAmount).toFixed(2)
+            : 0
         }))
       : [];
 

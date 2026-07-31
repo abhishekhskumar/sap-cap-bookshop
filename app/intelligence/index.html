@@ -318,7 +318,7 @@
           <div id="genInfoTable"></div>
         </div>
         <div class="card" id="fieldVerifCard" style="display:none;">
-          <div class="card-title">Three-Layer Field Comparison <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
+          <div class="card-title">Field Extraction &amp; Cross-Layer Validation <span class="pill live">LIVE</span> <span id="genStat" style="font-size:11px;color:#888;margin-left:8px;font-weight:400;"></span></div>
           <div id="triageBanner" style="margin-bottom:8px;"></div>
           <div id="genKv"><div class="placeholder">Run Doc AI extraction to populate the comparison table</div></div>
         </div>
@@ -1019,7 +1019,7 @@ function _fieldTriageStatus(df, cf, vf, d_run, c_run, v_run, fieldName){
   return 'AUTO_APPROVE';
 }
 
-function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
+function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run,selfBalance){
   if(!allNames.length)return '';
   _gapFillFields=new Set(); // reset before each run
 
@@ -1157,16 +1157,25 @@ function _buildTriageBanner(triageMap,allNames,d_run,c_run,v_run){
   var _taxCritReview=_reviewList.filter(function(rv){return triageMap[rv.name]&&triageMap[rv.name].taxCritical;}).length;
   var _firstReviewField=_reviewList.length?_reviewList[0].name:'';
 
-  // REQUIRED: Three-state banner — do NOT collapse to a review-count-only check.
-  // Single-layer (Doc AI only) must always show amber "not yet verified", regardless of nR.
-  // Only 2+ layers with nR===0 may show green "ready".
+  // Three-state banner: single-layer behavior is conditional on self-balance.
+  // Self-balances (or not applicable) → green/neutral; Doc AI reliable, escalation optional.
+  // Does not self-balance             → amber escalation; run Claude before tax calc.
+  // 2+ layers with nR===0            → green "ready".
   var nLayers=[d_run,c_run,v_run].filter(Boolean).length;
+  var _sbPasses=!selfBalance||selfBalance.passes; // null = not applicable → treat as clean
   var bBg,bBord,_statusHtml,_actionHtml;
-  if(nLayers===1){
+  if(nLayers===1&&_sbPasses){
+    bBg='#f0fdf4';bBord='#a7f3d0';
+    _statusHtml='<div style="font-size:13px;line-height:1.6;">'
+      +'<strong style="color:#065f46;">Doc AI extraction &mdash; self-balances, no discrepancy detected.</strong>'
+      +' <span style="color:#065f46;opacity:.75;">Additional layers (Claude / Vision) available if needed.</span>'
+      +'</div>';
+    _actionHtml='';
+  }else if(nLayers===1&&!_sbPasses){
     bBg='#fefce8';bBord='#fde68a';
     _statusHtml='<div style="font-size:13px;line-height:1.6;">'
-      +'<strong style="color:#92400e;">Doc AI extraction only &mdash; not yet verified.</strong>'
-      +' <span style="color:#78350f;opacity:.75;">Run Claude to cross-check these values before tax calculation.</span>'
+      +'<strong style="color:#92400e;">Doc AI extraction has a discrepancy &mdash; does not self-balance.</strong>'
+      +' <span style="color:#78350f;opacity:.75;">Run Claude to cross-check and correct before tax calculation.</span>'
       +'</div>';
     _actionHtml='';
   } else if(nR>0){
@@ -1722,7 +1731,10 @@ function renderGeneral(data){
 
   // Banner + roll-up (injected above the table via a container div)
   var bannerEl=document.getElementById('triageBanner');
-  if(bannerEl) bannerEl.innerHTML=_buildTriageBanner(triageMap,allNames,d_run,c_run,v_run);
+  // Compute self-balance from best available source (same precedence as tax engine gate)
+  var _triageSrc=visionResult||claudeResult||docaiResult;
+  var _triageSB=_computeSelfBalance(_triageSrc);
+  if(bannerEl) bannerEl.innerHTML=_buildTriageBanner(triageMap,allNames,d_run,c_run,v_run,_triageSB);
   var dot=function(run){return run
     ?'<span style="display:block;color:#107e3e;font-size:10px;font-weight:400;margin-top:2px;">&#9679; run</span>'
     :'<span style="display:block;color:#bbb;font-size:10px;font-weight:400;margin-top:2px;">&#9675; not run</span>';};
@@ -1937,6 +1949,12 @@ function renderGeneral(data){
       +(_gsLayers.length?' &nbsp;&middot;&nbsp; '+escHtml(_gsLayers.join(' + ')):'');
   }
   genKv.innerHTML=html;
+  // Single-layer + discrepancy: expand <details> so escalation prompt is immediately visible
+  var _nLayers=[d_run,c_run,v_run].filter(Boolean).length;
+  if(_nLayers===1&&_triageSB&&!_triageSB.passes){
+    var _detEl=genKv.querySelector('details');
+    if(_detEl)_detEl.open=true;
+  }
 }
 
 function renderRecon(data){

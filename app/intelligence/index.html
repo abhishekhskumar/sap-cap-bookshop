@@ -1564,11 +1564,19 @@ function renderGeneral(data){
         }
         // Rate metrics row
         var _arRateHtml='';
-        if(_ar.systemRate!=null||_ar.taxRateDifference!=null){
-          _arRateHtml='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;padding:3px 0 6px;">';
+        if(_ar.systemRate!=null||_ar.invoiceEffectiveRate!=null||_ar.taxAmountDifference!=null){
+          _arRateHtml='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;padding:3px 0 4px;">';
           if(_ar.systemRate!=null) _arRateHtml+='<span><b>System rate (STZ):</b> '+parseFloat(_ar.systemRate).toFixed(4)+'%</span>';
-          if(_ar.invoiceEffectiveRate!=null) _arRateHtml+='<span><b>Invoice rate:</b> '+parseFloat(_ar.invoiceEffectiveRate).toFixed(4)+'%</span>';
-          if(_ar.taxRateDifference!=null){var _rdSign=_ar.taxRateDifference>0?'+':'';_arRateHtml+='<span><b>Rate diff:</b> '+_rdSign+parseFloat(_ar.taxRateDifference).toFixed(4)+'%</span>';}
+          if(_ar.invoiceEffectiveRate!=null){
+            var _invRateBase=_ar.stzTaxableBase!=null?(' on $'+money(_ar.stzTaxableBase)+' taxable'):'';
+            _arRateHtml+='<span><b>Invoice rate:</b> '+parseFloat(_ar.invoiceEffectiveRate).toFixed(4)+'%'+escHtml(_invRateBase)+'</span>';
+          }
+          if(_ar.taxRateDifference!=null){
+            var _rdSign=_ar.taxRateDifference>0?'+':'';
+            _arRateHtml+='<span><b>Rate diff:</b> '+_rdSign+parseFloat(_ar.taxRateDifference).toFixed(4)+'%</span>';
+          }else if(_ar.rateComparisonNote){
+            _arRateHtml+='<span style="color:#92400e;font-style:italic;"><b>Rate diff:</b> '+escHtml(_ar.rateComparisonNote)+'</span>';
+          }
           if(_ar.taxAmountDifference!=null){var _adSign=_ar.taxAmountDifference>0?'+':'−';_arRateHtml+='<span><b>Tax gap:</b> '+_adSign+'$'+money(Math.abs(_ar.taxAmountDifference))+'</span>';}
           _arRateHtml+='</div>';
         }
@@ -2066,16 +2074,15 @@ function renderRecon(data){
     stvDiv.innerHTML=html;
   })();
 
-  // Derive tax rate for a result object
+  // FD field 44 — Invoice Tax Rate: single source is server-computed invoiceEffectiveRate
+  // (vendorTax / STZ taxable base, exempt lines excluded). Claude's invoiceTaxRate is
+  // dropped — the prompt only has a placeholder "0", no computation rule. The old fallback
+  // (vendorTax / invoiceNetTotal) used the full base including exempt lines → false variance.
   var _taxRate=function(r){
     if(!r)return null;
-    var rc=r.reconciliation;
-    var rate=rc&&rc.invoiceTaxRate!=null?rc.invoiceTaxRate:null;
-    if(rate==null&&r.vendorTaxAmount!=null&&r.invoiceNetTotal){
-      var net=parseFloat(r.invoiceNetTotal)||0;
-      if(net>0)rate=+(parseFloat(r.vendorTaxAmount)/net*100).toFixed(2);
-    }
-    return rate;
+    var ar=r.accrualResult;
+    if(ar&&ar.invoiceEffectiveRate!=null)return ar.invoiceEffectiveRate;
+    return null;
   };
 
   var TH='padding:8px 12px;background:#f4f6f9;font-size:11px;font-weight:700;text-align:right;border-left:1px solid #eaecef;border-bottom:2px solid #d8dde6;';

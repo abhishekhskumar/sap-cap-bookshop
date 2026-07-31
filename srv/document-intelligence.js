@@ -2296,21 +2296,42 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         }))
       : [];
 
-    // FD field 45: Tax Rate Difference = system combined rate (%) − invoice effective rate (%)
+    // FD field 44: Invoice Tax Rate — denominator must match the system-rate base.
+    // The system rate (STZ combinedRate) applies to taxable lines only; exempt lines are zeroed
+    // in STZ's per-line calculation. stz.jurisdictions[i].taxableAmount is the sum of non-exempt
+    // taxable amounts — all non-zero tiers share the same base, so take the first non-zero one.
+    // Using invoiceNetTotal (full base) would produce a false rate when exempt lines exist.
     const systemRate = stzAvail ? (stz.combinedRate || null) : null;
-    const invoiceEffectiveRate = (cr.vendorTax != null && invoiceNetTotal > 0)
-      ? +((cr.vendorTax / invoiceNetTotal) * 100).toFixed(4)
+    const stzTaxableBase = (stzAvail && Array.isArray(stz.jurisdictions) && stz.jurisdictions.length > 0)
+      ? (stz.jurisdictions.find(j => (j.taxableAmount || 0) > 0) || stz.jurisdictions[0]).taxableAmount
       : null;
-    const taxRateDifference = (systemRate != null && invoiceEffectiveRate != null)
+    // Exempt lines exist when STZ's taxable base is materially below the full invoice base
+    const exemptLinesPresent = stzTaxableBase != null && invoiceNetTotal > 0
+      && (invoiceNetTotal - stzTaxableBase) > 0.01;
+    // Invoice effective rate on the taxable-only base (same denominator as system rate)
+    const invoiceEffectiveRate = cr.vendorTax === 0
+      ? 0
+      : (cr.vendorTax != null && stzTaxableBase != null && stzTaxableBase > 0)
+        ? +((cr.vendorTax / stzTaxableBase) * 100).toFixed(4)
+        : null;
+    // FD field 45: Rate difference only valid when no exempt lines —
+    // if exempt lines exist we cannot verify the vendor's taxable base, making comparison unreliable
+    const taxRateDifference = (!exemptLinesPresent && systemRate != null && invoiceEffectiveRate != null)
       ? +((systemRate - invoiceEffectiveRate).toFixed(4))
+      : null;
+    const rateComparisonNote = exemptLinesPresent
+      ? 'not comparable — exempt lines present; vendor taxable base unknown'
       : null;
 
     // Audit trail: taxable base source, taxability determination method, rate source
     const auditTrail = {
       taxableBase: {
-        amount: stzAvail ? (stz.docTaxable || stz.subTotal || null) : null,
+        amount: stzTaxableBase,     // taxable-only base (exempt lines excluded); null when STZ unavailable
+        fullBase: invoiceNetTotal,  // full invoice base (all kept lines incl. exempt) — for reference
         source: 'Document AI extraction + Claude reconciliation',
-        detail: 'sum of invoice line amounts including distributed freight'
+        detail: exemptLinesPresent
+          ? 'taxable-only base (exempt lines excluded by GenAI classification)'
+          : 'sum of invoice line amounts including distributed freight'
       },
       taxabilityDetermination: {
         method: 'AI-predicted per line (GenAI)',
@@ -2333,10 +2354,14 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       totalVertexTaxAmount: cr.estimatedTax,
       // FD field 43: Tax Amount – Invoice (vendor-charged)
       taxAmountInvoice: cr.vendorTax,
-      // FD field 45: Tax Rate Difference
-      taxRateDifference,
-      systemRate,
+      // FD field 44: Invoice Tax Rate (vendorTax / taxable base — exempt lines excluded)
       invoiceEffectiveRate,
+      stzTaxableBase,           // the denominator used; null when STZ unavailable
+      exemptLinesPresent,       // true when GenAI exempted ≥1 line (bases diverge)
+      // FD field 45: Tax Rate Difference (null when exempt lines present — not comparable)
+      taxRateDifference,
+      rateComparisonNote,       // explanation when taxRateDifference is suppressed
+      systemRate,
       // FD field 46: Tax Amount Difference (= proposed accrual basis)
       taxAmountDifference: cr.taxAmountDifference,
       // FD field 47: Status (ACCRUAL_REQUIRED / NO_ACCRUAL / UNAVAILABLE)

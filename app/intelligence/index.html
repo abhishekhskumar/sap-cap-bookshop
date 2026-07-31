@@ -311,6 +311,7 @@
         <div class="sec-title">GENERAL INFORMATION</div>
         <div id="chargeVerdictBanner"></div>
         <div id="chargeStatusBanner"></div>
+        <div id="accrualBanner"></div>
         <div id="manualAddressEntry"></div>
         <div class="card" id="generalInfoCard" style="display:none;">
           <div class="card-title">Invoice vs. Asset Record (ZA02) <span class="pill live">LIVE</span> <span id="genInfoStat" style="font-size:11px;color:#888;margin-left:8px;"></span></div>
@@ -1510,6 +1511,96 @@ function renderGeneral(data){
   }
   var csb=document.getElementById('chargeStatusBanner');
   if(csb) csb.innerHTML='';
+  // ── Self-Assessed Use Tax Accrual (FD fields 41–50) ───────────
+  var _ab=document.getElementById('accrualBanner');
+  if(_ab){
+    if(!docaiRan&&!claudeRan&&!visionRan){
+      _ab.innerHTML='';
+    }else{
+      var _ar=data.accrualResult||null;
+      if(!_ar||_ar.accrualStatus==='UNAVAILABLE'){
+        _ab.innerHTML='';
+      }else{
+        var _arStatus=_ar.accrualStatus;
+        var _arAmt=_ar.proposedAccrualAmount;
+        var _arGL=_ar.glAccount||'714000';
+        var _arJur=_ar.jurisdictionBreakdown||[];
+        var _arAT=_ar.auditTrail||{};
+        var _arBg,_arBdr,_arClr,_arHeadline;
+        if(_arStatus==='ACCRUAL_REQUIRED'){
+          _arBg='#fff7ed';_arBdr='#fb923c';_arClr='#7c2d12';
+          _arHeadline='Proposed use-tax accrual: $'+money(_arAmt)+' &rarr; G/L '+escHtml(_arGL)+' &mdash; illustrative';
+        }else{
+          _arBg='#f0fdf4';_arBdr='#86efac';_arClr='#14532d';
+          _arHeadline='No accrual required &mdash; '+escHtml(_ar.chargeabilityStatusLabel||'');
+        }
+        // Jurisdiction breakdown table
+        var _arJurHtml='';
+        if(_arJur.length>0){
+          _arJurHtml='<table style="width:100%;border-collapse:collapse;font-size:11px;">'
+            +'<thead><tr style="background:#f9fafb;">'
+            +'<th style="padding:3px 8px;text-align:left;color:#6b7280;font-weight:600;">Tier</th>'
+            +'<th style="padding:3px 8px;text-align:left;color:#6b7280;font-weight:600;">Jurisdiction</th>'
+            +'<th style="padding:3px 8px;text-align:right;color:#6b7280;font-weight:600;">Rate %</th>'
+            +'<th style="padding:3px 8px;text-align:right;color:#6b7280;font-weight:600;">Taxable Base</th>'
+            +'<th style="padding:3px 8px;text-align:right;color:#6b7280;font-weight:600;">Tax Amount</th>'
+            +(_arStatus==='ACCRUAL_REQUIRED'?'<th style="padding:3px 8px;text-align:right;color:#6b7280;font-weight:600;">Accrual Share</th>':'')
+            +'</tr></thead><tbody>';
+          _arJur.forEach(function(j){
+            _arJurHtml+='<tr style="border-top:1px solid #f3f4f6;">'
+              +'<td style="padding:3px 8px;font-weight:600;color:#374151;">'+escHtml(j.tier)+'</td>'
+              +'<td style="padding:3px 8px;color:#374151;">'+escHtml(j.name||'—')+'</td>'
+              +'<td style="padding:3px 8px;text-align:right;color:#374151;">'+(j.rate!=null?parseFloat(j.rate).toFixed(4):'—')+'</td>'
+              +'<td style="padding:3px 8px;text-align:right;color:#374151;">$'+money(j.taxableAmount)+'</td>'
+              +'<td style="padding:3px 8px;text-align:right;color:#374151;">$'+money(j.taxAmount)+'</td>'
+              +(_arStatus==='ACCRUAL_REQUIRED'?'<td style="padding:3px 8px;text-align:right;font-weight:700;color:#ea580c;">$'+money(j.accrualShare)+'</td>':'')
+              +'</tr>';
+          });
+          _arJurHtml+='</tbody></table>';
+          if(_arStatus==='ACCRUAL_REQUIRED'){
+            var _arJurParts=_arJur.filter(function(j){return(j.accrualShare||0)>0;}).map(function(j){return escHtml(j.tier)+' $'+money(j.accrualShare);});
+            _arJurHtml+='<div style="font-size:11px;color:#7c2d12;font-weight:600;padding:5px 8px;text-align:right;">Accrual = $'+money(_arAmt)+(_arJurParts.length?' = '+_arJurParts.join(' + '):'')+'</div>';
+          }
+        }
+        // Rate metrics row
+        var _arRateHtml='';
+        if(_ar.systemRate!=null||_ar.taxRateDifference!=null){
+          _arRateHtml='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;padding:3px 0 6px;">';
+          if(_ar.systemRate!=null) _arRateHtml+='<span><b>System rate (STZ):</b> '+parseFloat(_ar.systemRate).toFixed(4)+'%</span>';
+          if(_ar.invoiceEffectiveRate!=null) _arRateHtml+='<span><b>Invoice rate:</b> '+parseFloat(_ar.invoiceEffectiveRate).toFixed(4)+'%</span>';
+          if(_ar.taxRateDifference!=null){var _rdSign=_ar.taxRateDifference>0?'+':'';_arRateHtml+='<span><b>Rate diff:</b> '+_rdSign+parseFloat(_ar.taxRateDifference).toFixed(4)+'%</span>';}
+          if(_ar.taxAmountDifference!=null){var _adSign=_ar.taxAmountDifference>0?'+':'−';_arRateHtml+='<span><b>Tax gap:</b> '+_adSign+'$'+money(Math.abs(_ar.taxAmountDifference))+'</span>';}
+          _arRateHtml+='</div>';
+        }
+        // Audit trail details
+        var _arATHtml='';
+        if(_arAT.taxableBase||_arAT.taxabilityDetermination||_arAT.rateSource){
+          _arATHtml='<div style="font-size:11px;color:#374151;line-height:1.7;">';
+          if(_arAT.taxableBase&&_arAT.taxableBase.amount!=null) _arATHtml+='<div><b>Taxable base:</b> $'+money(_arAT.taxableBase.amount)+' &mdash; '+escHtml(_arAT.taxableBase.detail||'')+'</div>';
+          if(_arAT.taxabilityDetermination) _arATHtml+='<div><b>Taxability:</b> '+escHtml(_arAT.taxabilityDetermination.method||'')+' &mdash; '+escHtml(_arAT.taxabilityDetermination.note||'')+'</div>';
+          if(_arAT.rateSource){
+            _arATHtml+='<div><b>Rate source:</b> '+escHtml(_arAT.rateSource.engine||'')+' ('+escHtml(_arAT.rateSource.source||'')+')';
+            if(_arAT.rateSource.rateKey) _arATHtml+=' &mdash; key: '+escHtml(_arAT.rateSource.rateKey);
+            _arATHtml+='</div>';
+            if(_arAT.rateSource.tiers) _arATHtml+='<div style="color:#6b7280;">'+escHtml(_arAT.rateSource.tiers)+'</div>';
+          }
+          if(_arAT.vertexPending) _arATHtml+='<div style="color:#7c3aed;font-weight:600;margin-top:4px;">&#9432; Vertex authoritative pending &mdash; these figures are STZ+AI illustrative stand-in</div>';
+          _arATHtml+='</div>';
+        }
+        _ab.innerHTML='<div style="margin-bottom:10px;border:1.5px solid '+_arBdr+';border-radius:8px;overflow:hidden;">'
+          +'<div style="padding:5px 14px;background:'+_arBg+';border-bottom:1px solid '+_arBdr+';font-size:10px;font-weight:700;color:'+_arClr+';text-transform:uppercase;letter-spacing:.08em;">Self-Assessed Use Tax Accrual &mdash; FD Fields 41&ndash;50</div>'
+          +'<div style="padding:10px 14px 8px;background:'+_arBg+';">'
+          +'<div style="font-size:13px;font-weight:700;color:'+_arClr+';margin-bottom:5px;">'+_arHeadline+'</div>'
+          +_arRateHtml
+          +'<div style="font-size:10px;color:#6b7280;font-style:italic;">'+escHtml(_ar.illustrativeLabel||'')+'</div>'
+          +'</div>'
+          +(_arJurHtml?'<details><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;border-top:1px solid '+_arBdr+';">Jurisdiction breakdown &mdash; State / County / City / District</summary><div style="padding:4px 14px 10px;">'+_arJurHtml+'</div></details>':'')
+          +(_arATHtml?'<details><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;border-top:1px solid '+_arBdr+';">Audit trail &mdash; accrual provenance</summary><div style="padding:8px 14px 10px;">'+_arATHtml+'</div></details>':'')
+          +'<div style="padding:5px 14px 7px;border-top:1px solid '+_arBdr+';background:#f9fafb;font-size:10px;color:#6b7280;">'+escHtml(_ar.note||'')+' &mdash; G/L account: '+escHtml(_arGL)+'</div>'
+          +'</div>';
+      }
+    }
+  }
   // ── Canonical manual-address entry form ────────────────────────
   var giMae=document.getElementById('manualAddressEntry');
   if(giMae){

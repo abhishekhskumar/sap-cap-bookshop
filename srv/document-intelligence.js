@@ -236,6 +236,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null);
     const taxabilityResult    = this._buildTaxabilityStatus(apcEnd, manualAction);
+    const accrualResult       = this._buildAccrualResult(chargeabilityResult, taxEngineResults, invoiceNetTotal);
 
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
@@ -250,7 +251,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       resolvedFrom: resolved.resolvedFrom,
       resolvedFromCaption: resolved.resolvedFromCaption,
       apcReconciliation,
-      consistencyChecks, manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult,
+      consistencyChecks, manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult, accrualResult,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: lineItems, claudeLines: null, visionLines: null, claudeRan: false, visionRan: false }),
       generalInfo, docAIHeader, keepLines, fullText,
       _provenance: {
@@ -586,6 +587,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     );
     const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null);
     const taxabilityResult    = this._buildTaxabilityStatus(apcEnd, manualAction);
+    const accrualResult       = this._buildAccrualResult(chargeabilityResult, taxEngineResults, invoiceNetTotal);
     reconciliation.chargeabilityStatus = chargeabilityResult.chargeabilityStatus;
     reconciliation.taxAmountDifference = chargeabilityResult.taxAmountDifference;
 
@@ -597,7 +599,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
       lineItemCorrections: intelligence.lineItemCorrections || [],
       consistencyChecks,
-      manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult,
+      manualAction, shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult, accrualResult,
       fieldComparison: this._buildFieldComparison({ invoiceMode: routedTo, fields, visionFields: null, docaiLines: keepLines, claudeLines: claudeLineItems, visionLines: null, claudeRan: true, visionRan: false }),
       freightTotal: intelligence.freightTotal || 0,
       summary: intelligence.summary || '',
@@ -947,6 +949,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const _visionApcEnd = prevResult && prevResult.apcReconciliation && prevResult.apcReconciliation.apcEnd != null
       ? prevResult.apcReconciliation.apcEnd : null;
     const taxabilityResult = this._buildTaxabilityStatus(_visionApcEnd, null);
+    const accrualResult    = this._buildAccrualResult(chargeabilityResult, taxEngineResults, invoiceNetTotal);
 
     return JSON.stringify({
       documentId,
@@ -967,7 +970,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceTotalAmount: invoiceGrossTotal,
       invoiceFreightTotal: _visionPayloadFreight || 0,
       apcReconciliation: null,
-      generalInfo: [], shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult,
+      generalInfo: [], shippingTaxedByVendor, freightReconciliation, chargeabilityResult, taxabilityResult, accrualResult,
       simplifiedTax: taxCalc,
       taxPayload, taxEngineResults,
       reconciliation: { vendorTaxAmount, vertexTaxRate: null, vertexTaxAmount: null, taxabilityStatus: 'Pending Vertex',
@@ -2231,6 +2234,119 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       tolerance: TOLERANCE,
       illustrative: true,
       note: 'reconciliation verdict (Vertex pending) — SalesTaxZip+AI stand-in; authoritative when Vertex connects'
+    };
+  }
+
+  // FD fields 41–50: Self-Assessed Use Tax Accrual
+  // Formalizes Tax Amount Difference as the proposed accrual — not a new calculation.
+  // UNDERCHARGED → accrue the difference to G/L 714000.
+  // OVERCHARGED / ACCURATELY_CHARGED → $0 with reason noted.
+  // Always illustrative while STZ+GenAI stands in for Vertex.
+  _buildAccrualResult(chargeabilityResult, taxEngineResults, invoiceNetTotal) {
+    const GL_ACCOUNT = '714000';
+    const cr = chargeabilityResult;
+    const stz = taxEngineResults && taxEngineResults.salestaxzip;
+    const stzAvail = !!(stz && stz.available);
+    const ILLUSTRATIVE_LABEL = 'Proposed accrual (illustrative — STZ+AI estimate, Vertex authoritative pending)';
+
+    if (!cr || cr.chargeabilityStatus === 'UNAVAILABLE' || cr.chargeabilityStatus === 'VENDOR_TAX_UNKNOWN') {
+      return {
+        accrualStatus: 'UNAVAILABLE',
+        proposedAccrualAmount: null,
+        glAccount: GL_ACCOUNT,
+        jurisdictionBreakdown: [],
+        illustrative: true,
+        illustrativeLabel: ILLUSTRATIVE_LABEL,
+        note: cr ? cr.note : 'Charge status unavailable — accrual cannot be determined'
+      };
+    }
+
+    const status = cr.chargeabilityStatus;
+    let proposedAccrualAmount, accrualStatus, accrualNote;
+
+    if (status === 'UNDERCHARGED') {
+      proposedAccrualAmount = cr.taxAmountDifference; // positive; this IS the accrual
+      accrualStatus = 'ACCRUAL_REQUIRED';
+      accrualNote = 'Vendor undercharged; use-tax difference accrued to G/L ' + GL_ACCOUNT;
+    } else if (status === 'OVERCHARGED') {
+      proposedAccrualAmount = 0;
+      accrualStatus = 'NO_ACCRUAL';
+      accrualNote = 'Vendor overcharged by $' + Math.abs(cr.taxAmountDifference).toFixed(2) + '; no accrual — overpayment noted';
+    } else {
+      proposedAccrualAmount = 0;
+      accrualStatus = 'NO_ACCRUAL';
+      accrualNote = 'Accurately charged within $' + (cr.tolerance || 1).toFixed(2) + ' tolerance; no accrual required';
+    }
+
+    // FD fields 33–40: jurisdiction breakdown per tier (State / County / City / District)
+    const jurisdictionBreakdown = (stzAvail && Array.isArray(stz.jurisdictions) && stz.jurisdictions.length > 0)
+      ? stz.jurisdictions.map(j => ({
+          tier: j.type,           // 'STATE' | 'COUNTY' | 'CITY' | 'DISTRICT'
+          name: j.name,
+          rate: j.rate,
+          taxableAmount: j.taxableAmount,
+          taxAmount: j.taxAmount,
+          accrualShare: accrualStatus === 'ACCRUAL_REQUIRED' ? j.taxAmount : 0
+        }))
+      : [];
+
+    // FD field 45: Tax Rate Difference = system combined rate (%) − invoice effective rate (%)
+    const systemRate = stzAvail ? (stz.combinedRate || null) : null;
+    const invoiceEffectiveRate = (cr.vendorTax != null && invoiceNetTotal > 0)
+      ? +((cr.vendorTax / invoiceNetTotal) * 100).toFixed(4)
+      : null;
+    const taxRateDifference = (systemRate != null && invoiceEffectiveRate != null)
+      ? +((systemRate - invoiceEffectiveRate).toFixed(4))
+      : null;
+
+    // Audit trail: taxable base source, taxability determination method, rate source
+    const auditTrail = {
+      taxableBase: {
+        amount: stzAvail ? (stz.docTaxable || stz.subTotal || null) : null,
+        source: 'Document AI extraction + Claude reconciliation',
+        detail: 'sum of invoice line amounts including distributed freight'
+      },
+      taxabilityDetermination: {
+        method: 'AI-predicted per line (GenAI)',
+        note: 'GenAI classifies each line TAXABLE / EXEMPT / UNCERTAIN; exempt lines zero-rated in STZ calculation'
+      },
+      rateSource: {
+        engine: 'SalesTaxZip',
+        source: stzAvail ? (stz.rateSource || 'api') : null,
+        rateKey: stzAvail ? (stz.rateKey || null) : null,
+        combinedRate: systemRate,
+        tiers: stzAvail && Array.isArray(stz.jurisdictions)
+          ? stz.jurisdictions.map(j => j.type + ': ' + (j.name || '') + ' @ ' + j.rate + '%').join(', ')
+          : null
+      },
+      vertexPending: true
+    };
+
+    return {
+      // FD field 41: Total Vertex Tax Amount (stand-in: STZ+GenAI estimate)
+      totalVertexTaxAmount: cr.estimatedTax,
+      // FD field 43: Tax Amount – Invoice (vendor-charged)
+      taxAmountInvoice: cr.vendorTax,
+      // FD field 45: Tax Rate Difference
+      taxRateDifference,
+      systemRate,
+      invoiceEffectiveRate,
+      // FD field 46: Tax Amount Difference (= proposed accrual basis)
+      taxAmountDifference: cr.taxAmountDifference,
+      // FD field 47: Status (ACCRUAL_REQUIRED / NO_ACCRUAL / UNAVAILABLE)
+      accrualStatus,
+      chargeabilityStatus: status,
+      chargeabilityStatusLabel: cr.chargeabilityStatusLabel,
+      // Proposed accrual: UNDERCHARGED → taxAmountDifference; else $0
+      proposedAccrualAmount,
+      // FD fields 33–40: per-tier jurisdiction breakdown
+      jurisdictionBreakdown,
+      // FD field 50: G/L account tag
+      glAccount: GL_ACCOUNT,
+      auditTrail,
+      illustrative: true,
+      illustrativeLabel: ILLUSTRATIVE_LABEL,
+      note: accrualNote
     };
   }
 

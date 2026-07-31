@@ -13,6 +13,7 @@ const vertexAdapter      = require('./adapters/vertex-adapter');
 const avalaraAdapter     = require('./adapters/avalara-adapter');
 const oneSourceAdapter   = require('./adapters/onesource-adapter');
 const salesTaxZipAdapter = require('./adapters/alternative-adapter');
+const vendorStore        = require('./adapters/vendor-store');
 
 const TAX_CRITICAL_FIELDS = new Set([
   'shipToAddress','shipToCity','shipToState','shipToPostalCode',
@@ -238,8 +239,19 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const taxabilityResult    = this._buildTaxabilityStatus(apcEnd, manualAction);
     const accrualResult       = this._buildAccrualResult(chargeabilityResult, taxEngineResults, invoiceNetTotal);
 
+    const canonicalVendor = this._buildCanonicalVendorKey(asset, inv.vendorName);
+    try {
+      vendorStore.upsertResult(this._buildPersistenceRecord({
+        stage: 'docai', documentId, invoiceMode: routedTo, ...canonicalVendor,
+        fields, lineItems, lineItemCorrections: [],
+        chargeabilityResult, accrualResult, freightReconciliation,
+        invoiceNetTotal, invoiceGrossTotal, vendorTaxAmount, resolved
+      }));
+    } catch (e) { LOG.warn('vendor-store write failed (docai):', e.message); }
+
     return JSON.stringify({
       stage: 'docai', documentId, invoiceMode: routedTo,
+      ...canonicalVendor,
       fields, lineItems, suppressedLines: suppressedLines.map(function(li){ return Object.assign({}, li, { suppressedBy: 'docai' }); }),
       invoiceNetTotal, invoiceFreightTotal: docAIFreightTotal,
       vendorTaxAmount: vendorTaxAmount ?? null,
@@ -591,9 +603,20 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     reconciliation.chargeabilityStatus = chargeabilityResult.chargeabilityStatus;
     reconciliation.taxAmountDifference = chargeabilityResult.taxAmountDifference;
 
+    const canonicalVendor = this._buildCanonicalVendorKey(asset, inv.vendorName);
+    try {
+      vendorStore.upsertResult(this._buildPersistenceRecord({
+        stage: 'processInvoice', documentId, invoiceMode: routedTo, ...canonicalVendor,
+        fields, lineItems: claudeLineItems, lineItemCorrections: intelligence.lineItemCorrections || [],
+        chargeabilityResult, accrualResult, freightReconciliation,
+        invoiceNetTotal, invoiceGrossTotal, vendorTaxAmount, resolved
+      }));
+    } catch (e) { LOG.warn('vendor-store write failed (processInvoice):', e.message); }
+
     return JSON.stringify({
       documentId,
       schemaType: routedTo,
+      ...canonicalVendor,
       fields,
       lineItems: claudeLineItems,
       suppressedLines: [...(docAISuppressedLines || []), ...claudeSuppressedItems],
@@ -951,10 +974,24 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const taxabilityResult = this._buildTaxabilityStatus(_visionApcEnd, null);
     const accrualResult    = this._buildAccrualResult(chargeabilityResult, taxEngineResults, invoiceNetTotal);
 
+    const _visionAsset = this._lookupAssetReport(documentId);
+    const canonicalVendor = this._buildCanonicalVendorKey(_visionAsset, _getVF('vendorName'));
+    const _visionResolved = { shipToState: _getVF('shipToState'), shipToCity: _getVF('shipToCity'), shipToPostalCode: _getVF('shipToPostalCode') };
+    try {
+      vendorStore.upsertResult(this._buildPersistenceRecord({
+        stage: 'vision', documentId, invoiceMode: mode, ...canonicalVendor,
+        fields, lineItems,
+        lineItemCorrections: [...(intelligence.lineItemCorrections || []), ..._visionAmtCorrections],
+        chargeabilityResult, accrualResult, freightReconciliation,
+        invoiceNetTotal, invoiceGrossTotal, vendorTaxAmount, resolved: _visionResolved
+      }));
+    } catch (e) { LOG.warn('vendor-store write failed (vision):', e.message); }
+
     return JSON.stringify({
       documentId,
       schemaType: mode,
       invoiceMode: mode,
+      ...canonicalVendor,
       fields,
       lineItems,
       suppressedLines: mergedSuppressedLines,
@@ -3067,6 +3104,100 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       pageTypeUsed: activeType,
       consolidatedFrom: eligible.length,
       grossAmount
+    };
+  }
+
+  // ── Vendor canonicalization ──────────────────────────────────────────────────
+  // SAP supplierName (from asset-report) is the primary identity.
+  // Normalize: uppercase, strip legal suffixes (LLC/INC/…) and punctuation → compact key.
+  // "DWP AV LLC" and "DWP-AV LLC" both normalize to "DWPAV".
+  _buildCanonicalVendorKey(asset, rawVendorName) {
+    const _norm = name => String(name || '').toUpperCase()
+      .replace(/[^A-Z0-9 ]/g, ' ')
+      .replace(/\b(LLC|INC|CORP|LTD|LLP|PLLC|PC|PA|CO)\b/g, '')
+      .replace(/\s+/g, '')
+      .trim() || 'UNKNOWN';
+
+    const sapName = asset && asset.record && asset.record.supplierName
+      ? asset.record.supplierName.trim() : null;
+
+    if (sapName) {
+      return { canonicalVendorKey: _norm(sapName), canonicalVendorName: sapName, vendorKeySource: 'asset', vendorKeyNote: null };
+    }
+    const invoiceName = String(rawVendorName || '').trim();
+    return {
+      canonicalVendorKey: _norm(invoiceName),
+      canonicalVendorName: invoiceName || null,
+      vendorKeySource: 'unverified-invoice',
+      vendorKeyNote: 'No SAP asset record — vendor identity unverified; name from invoice extraction only'
+    };
+  }
+
+  // ── Persistence record assembly ───────────────────────────────────────────────
+  // Extracts the signals needed for vendor-intelligence aggregation from a processed
+  // invoice result. Schema mirrors the vendor-store structure for easy HANA swap.
+  _buildPersistenceRecord({ stage, documentId, invoiceMode, canonicalVendorKey, canonicalVendorName,
+      vendorKeySource, vendorKeyNote, fields, lineItems, lineItemCorrections,
+      chargeabilityResult, accrualResult, freightReconciliation,
+      invoiceNetTotal, invoiceGrossTotal, vendorTaxAmount, resolved }) {
+    const getF = name => {
+      const f = (fields || []).find(x => x.fieldName === name);
+      return f ? (f.correctValue || f.docAIValue || null) : null;
+    };
+    const headerCorrected = (fields || []).filter(f => f.verdict === 'CORRECTED').map(f => f.fieldName);
+    const headerFlagged   = (fields || []).filter(f => f.verdict === 'FLAGGED').map(f => f.fieldName);
+    const lines = lineItems || [];
+    const taxabilityFlags = {
+      totalLines:     lines.length,
+      taxableLines:   lines.filter(l => l.taxability === 'TAXABLE').length,
+      exemptLines:    lines.filter(l => l.taxability === 'EXEMPT').length,
+      uncertainLines: lines.filter(l => l.taxability === 'UNCERTAIN').length
+    };
+    const cr = chargeabilityResult || {};
+    const ar = accrualResult       || {};
+    const fr = freightReconciliation || {};
+    return {
+      documentId,
+      canonicalVendorKey,
+      canonicalVendorName,
+      vendorKeySource,
+      vendorKeyNote: vendorKeyNote || null,
+      processedAt: new Date().toISOString(),
+      stage,
+      invoiceNumber: getF('invoiceNumber'),
+      documentDate:  getF('documentDate'),
+      invoiceMode,
+      jurisdiction: {
+        state:      (resolved && resolved.shipToState)      || getF('shipToState')      || null,
+        postalCode: (resolved && resolved.shipToPostalCode) || getF('shipToPostalCode') || null,
+        city:       (resolved && resolved.shipToCity)       || getF('shipToCity')       || null
+      },
+      financials: {
+        invoiceNetTotal:       invoiceNetTotal              ?? null,
+        invoiceGrossTotal:     invoiceGrossTotal            ?? null,
+        vendorTaxAmount:       vendorTaxAmount              ?? null,
+        proposedAccrualAmount: ar.proposedAccrualAmount     ?? null,
+        taxAmountDifference:   cr.taxAmountDifference       ?? null
+      },
+      taxOutcome: {
+        chargeabilityStatus:  cr.chargeabilityStatus  || null,
+        accrualStatus:        ar.accrualStatus         || null,
+        systemRate:           ar.systemRate            ?? null,
+        invoiceEffectiveRate: ar.invoiceEffectiveRate  ?? null,
+        taxRateDifference:    ar.taxRateDifference     ?? null,
+        exemptLinesPresent:   ar.exemptLinesPresent    ?? false
+      },
+      corrections: {
+        headerFieldsCorrected:   headerCorrected.length,
+        headerFieldsFlagged:     headerFlagged.length,
+        correctedFieldNames:     headerCorrected,
+        flaggedFieldNames:       headerFlagged,
+        lineItemCorrectionCount: (lineItemCorrections || []).length,
+        correctionActions:       [...new Set((lineItemCorrections || []).map(c => c.action))]
+      },
+      taxabilityFlags,
+      freightVerdict:       fr.freightVerdict        || null,
+      freightTaxedByVendor: fr.shippingTaxedByVendor ?? null
     };
   }
 

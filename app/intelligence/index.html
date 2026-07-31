@@ -1766,9 +1766,17 @@ function renderGeneral(data){
   // all-agree → entire table collapsed; discrepancies → matching rows hidden, toggle available.
   var html;
   if(_attentionCount===0){
-    // All layers agree — collapse table so analyst sees "OK" at a glance; can expand if curious
+    // Collapse table; label matches which layers actually ran (never claims "layers agree" when only Doc AI ran)
+    var _summaryLabel;
+    if(nLayers===1&&_sbPasses){
+      _summaryLabel='Doc AI extraction &mdash; view all '+allNames.length+' fields';
+    }else if(nLayers===1&&!_sbPasses){
+      _summaryLabel='Doc AI extraction &mdash; discrepancy, view fields';
+    }else{
+      _summaryLabel='Layers agree &#10003; &mdash; view all '+allNames.length+' fields';
+    }
     html='<details><summary style="cursor:pointer;padding:6px 2px;font-size:12px;color:#374151;user-select:none;">'
-      +'Three-layer comparison &mdash; layers agree &#10003; <span style="color:#6b7280;font-weight:400;">(click to view all '+allNames.length+' fields)</span>'
+      +_summaryLabel
       +'</summary><div>';
   } else {
     // Discrepancies present — show only rows needing attention; "Show all fields" reveals matching rows on demand

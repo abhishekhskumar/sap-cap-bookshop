@@ -96,7 +96,19 @@ sap.ui.define([], function () {
      * Fetch a raw invoice file as base64.
      * @param {{ fileName: string }} p
      */
-    getInvoiceFile: (p) => _call("getInvoiceFile", p),
+    getInvoiceFile: function (params) {
+  return fetch("/api/intelligence/getInvoiceFile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params || {})
+  }).then(function (res) {
+    if (!res.ok) { throw new Error("getInvoiceFile HTTP " + res.status); }
+    return res.json();
+  }).then(function (env) {
+    // Backend returns raw base64 string as env.value — return it AS-IS, no JSON.parse
+    return (env && typeof env.value === "string") ? env.value : env;
+  });
+},
 
     /**
      * Call a specific tax engine adapter.

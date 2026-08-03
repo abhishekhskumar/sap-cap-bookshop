@@ -17,14 +17,26 @@
           </List>
         </VBox>
         <VBox class="sapUiMediumMargin">
-          <ObjectHeader title="{/selected/supplierName}" number="{/selected/scnid}"/>
-          <Label text="File Name"/>
-          <Text text="{/selected/fileName}"/>
-          <Label text="Supplier" class="sapUiSmallMarginTop"/>
-          <Text text="{/selected/supplierName}"/>
-          <Label text="Has Asset Data" class="sapUiSmallMarginTop"/>
-          <Text text="{/selected/hasAssetData}"/>
-        </VBox>
+  <ObjectHeader title="{/selected/supplierName}" number="{/selected/scnid}"/>
+
+  <BusyIndicator visible="{/extracting}" class="sapUiMediumMargin"/>
+
+  <VBox visible="{= !!${/extracted} }">
+    <Title text="General Information" class="sapUiSmallMarginTop"/>
+    <Label text="Vendor Name"/>
+    <Text text="{/extracted/vendorName}"/>
+    <Label text="Invoice Number" class="sapUiSmallMarginTop"/>
+    <Text text="{/extracted/invoiceNumber}"/>
+    <Label text="Document Date" class="sapUiSmallMarginTop"/>
+    <Text text="{/extracted/documentDate}"/>
+    <Label text="Ship To" class="sapUiSmallMarginTop"/>
+    <Text text="{/extracted/shipToCity} {/extracted/shipToState} {/extracted/shipToPostalCode}"/>
+    <Label text="Gross Amount" class="sapUiSmallMarginTop"/>
+    <Text text="{/extracted/grossAmount}"/>
+    <Label text="Tax Amount" class="sapUiSmallMarginTop"/>
+    <Text text="{/extracted/taxAmount}"/>
+  </VBox>
+</VBox>
       </l:Splitter>
     </content>
   </Page>

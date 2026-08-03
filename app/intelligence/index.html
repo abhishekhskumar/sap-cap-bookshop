@@ -405,6 +405,7 @@
 <script>
 var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[], _reconciledTaxPayload=null, _reconciledCalcResult=null, _stzLineItems=[];
 var _taxCalcRunning=false;
+var taxCalcRan=false; var taxCalcResult=null;
 var _lineViewMode='compare';
 var _statusDocAI=null, _statusClaude=null, _statusVision=null;
 var allInvoices=[], filterAssetOnly=true;
@@ -656,7 +657,7 @@ function _showCached(layer, data) {
   renderAll(data);
 }
 function reRunDocAI(){docaiRan=false;docaiResult=null;_statusDocAI=null;document.getElementById('docaiBtn').textContent='1. Run Doc AI Extraction';runDocAI();}
-function reRunClaude(){claudeRan=false;claudeResult=null;_statusClaude=null;document.getElementById('claudeBtn').textContent='2. Send to Claude for Audit';runClaude();}
+function reRunClaude(){claudeRan=false;claudeResult=null;taxCalcRan=false;taxCalcResult=null;_statusClaude=null;document.getElementById('claudeBtn').textContent='2. Send to Claude for Audit';runClaude();}
 function reRunVision(){visionRan=false;visionResult=null;_statusVision=null;document.getElementById('visionBtn').innerHTML='3. Audit with Claude Vision <span style="font-size:11px;font-weight:400;">(beta)</span>';runVision();}
 
 async function runDocAI(){
@@ -721,13 +722,12 @@ async function _runAutoTaxCalc(){
       body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),docAIResult:JSON.stringify(docaiResult),skipAudit:true})});
     var text=await response.text(); var data;
     try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
-    claudeResult=data; lastResult=data; claudeRan=true;
+    claudeResult=data; taxCalcResult=data; lastResult=data; taxCalcRan=true;
     _taxCalcRunning=false;
     var s=data.stats||{};
     _statusClaude='&#x2705; Tax calc complete (self-balanced &mdash; extraction audit skipped) &mdash; '+(s.verified||0)+' fields verified';
     _renderStatusAll();
-    _markButtonRun('claudeBtn','2. Send to Claude for Audit');
-    viewMode='claude';
+    document.getElementById('claudeBtn').disabled=false;
     renderAll(data);
   }catch(err){
     _taxCalcRunning=false;
@@ -1424,7 +1424,7 @@ function _chargeStatusBanner(vendorTax,stx){
   }
   // ─── Cross-layer tax agreement (extends R7 source-pick with validation) ───
   var TAX_TOLERANCE=0.01;
-  var _txRan=[docaiResult,claudeResult,visionResult].filter(Boolean);
+  var _txRan=[docaiRan&&docaiResult,claudeRan&&claudeResult,visionRan&&visionResult].filter(Boolean);
   var _txAllAgree=_txRan.length>0&&_txRan.every(function(r){
     return r.vendorTaxAmount!=null&&+r.vendorTaxAmount!==0&&Math.abs(+r.vendorTaxAmount-vendorTax)<=TAX_TOLERANCE;
   });
@@ -1521,7 +1521,7 @@ function renderGeneral(data){
             +'<div style="font-size:11px;color:#92400e;font-weight:600;">&#9888; Rate-only estimate, no exemption logic &mdash; likely overstates tax on exempt lines. Illustrative, not authoritative.</div>'
             +'</div>';
         }
-      } else if (docaiRan && !claudeRan && !visionRan) {
+      } else if (docaiRan && !claudeRan && !taxCalcRan && !visionRan) {
         var _sb2=_computeSelfBalance(docaiResult||data);
         if(_sb2&&_sb2.passes===false){
           // Doc AI doesn't self-balance — Claude extraction audit required before tax calculation.
@@ -3376,7 +3376,7 @@ function renderTaxEngine(data){
   var _teLayerDefs=[
     {key:'reconciled',label:'Reconciled Best',color:'#374151',ran:!!(docaiRan||claudeRan||visionRan),hasPayload:!!_reconciledTaxPayload},
     {key:'docai', label:'Doc AI', color:'#107e3e', ran:docaiRan, hasPayload:!!(docaiResult&&docaiResult.taxPayload)},
-    {key:'claude',label:'Claude', color:'#3452d1', ran:claudeRan, hasPayload:!!(claudeResult&&claudeResult.taxPayload)},
+    {key:'claude',label:(taxCalcRan&&!claudeRan)?'Tax Calc':'Claude', color:'#3452d1', ran:claudeRan||taxCalcRan, hasPayload:!!(claudeResult&&claudeResult.taxPayload)},
     {key:'vision',label:'Vision', color:'#9d174d', ran:visionRan, hasPayload:!!(visionResult&&visionResult.taxPayload)}
   ];
   var _teActiveLabel={'docai':'Doc AI','claude':'Claude','vision':'Vision','reconciled':'Reconciled Best'}[teLayerView]||teLayerView;

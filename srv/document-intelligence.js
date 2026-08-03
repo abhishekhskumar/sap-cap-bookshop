@@ -3021,14 +3021,21 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     // Parse city/state/postal from a US address string when sub-fields are not separately extracted
     const parseAddrParts = addr => {
       if (!addr) return {};
-      const m = addr.match(/\b([A-Z]{2})[,\s]+(\d{5}(?:-\d{4})?)\b/);
+      // Use the first match whose 2-letter code is a real US state abbreviation,
+      // falling back to the last match — prevents "AP 13737" (attention + street number) false hits.
+      const US_STATES = new Set(['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
+        'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND',
+        'OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC','PR','GU','VI','AS','MP']);
+      const allMatches = [...addr.matchAll(/\b([A-Z]{2})[,\s]+(\d{5}(?:-\d{4})?)\b/g)];
+      const m = allMatches.find(x => US_STATES.has(x[1])) || allMatches[allMatches.length - 1];
       if (!m) return {};
       const state = m[1], postal = m[2];
       const before = addr.slice(0, m.index).replace(/,\s*$/, '').trim();
       const words = before.split(/[\s,]+/).filter(Boolean);
       const cityWords = [];
       for (let i = words.length - 1; i >= 0 && cityWords.length < 3; i--) {
-        if (/^\d/.test(words[i])) break;
+        // stop at digit-leading tokens (street numbers) or alphanumeric suite tokens like "B2", "A1"
+        if (/^\d/.test(words[i]) || /^[A-Z][0-9]/.test(words[i])) break;
         cityWords.unshift(words[i]);
       }
       return { city: cityWords.join(' ') || null, state, postal };
@@ -3045,9 +3052,9 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     for (const name of order) {
       const b = blocks[name];
 
-      // Fill in city/state/postal from addr string when sub-fields are null
+      // Fill in city/state/postal from addr string when any sub-field is missing
       let city = b.city, state = b.state, postal = b.postal;
-      if ((!city || !postal) && b.addr) {
+      if ((!city || !state || !postal) && b.addr) {
         const parsed = parseAddrParts(b.addr);
         city   = city   || parsed.city   || null;
         state  = state  || parsed.state  || null;

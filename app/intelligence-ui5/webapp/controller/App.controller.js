@@ -54,7 +54,10 @@ sap.ui.define([
       } else {
         oBinding.filter([]);
       }
-    }
+    },
 
+    onOpenVendors: function () {
+      this.getOwnerComponent().getRouter().navTo("vendors");
+    }
   });
 });

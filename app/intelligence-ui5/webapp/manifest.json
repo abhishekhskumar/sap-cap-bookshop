@@ -1,4 +1,5 @@
 {
+  "$schema": "https://sap.github.io/ui5-tooling/schema/ui5.yaml.json",
   "_version": "1.59.0",
   "sap.app": {
     "id": "com.sap.usetax.intelligenceui5",
@@ -8,16 +9,6 @@
     "description": "{{appDescription}}",
     "applicationVersion": {
       "version": "0.0.1"
-    },
-    "dataSources": {
-      "DocumentIntelligenceService": {
-        "uri": "/api/intelligence/",
-        "type": "OData",
-        "settings": {
-          "odataVersion": "4.0",
-          "localUri": "localService/metadata.xml"
-        }
-      }
     }
   },
   "sap.ui": {
@@ -52,22 +43,45 @@
         "settings": {
           "bundleName": "com.sap.usetax.intelligenceui5.i18n.i18n"
         }
+      }
+    },
+    "routing": {
+      "config": {
+        "routerClass": "sap.m.routing.Router",
+        "viewType": "XML",
+        "viewPath": "com.sap.usetax.intelligenceui5.view",
+        "controlId": "appRoot",
+        "controlAggregation": "pages",
+        "async": true
       },
-      "intelligence": {
-        "dataSource": "DocumentIntelligenceService",
-        "preload": false,
-        "settings": {
-          "synchronizationMode": "None",
-          "operationMode": "Server",
-          "autoExpandSelect": true
+      "routes": [
+        {
+          "name": "main",
+          "pattern": "",
+          "target": "main"
+        },
+        {
+          "name": "vendors",
+          "pattern": "vendors",
+          "target": "vendors"
+        }
+      ],
+      "targets": {
+        "main": {
+          "viewName": "App",
+          "viewLevel": 1
+        },
+        "vendors": {
+          "viewName": "Vendors",
+          "viewLevel": 2
         }
       }
     },
     "rootView": {
-      "viewName": "com.sap.usetax.intelligenceui5.view.App",
+      "viewName": "com.sap.usetax.intelligenceui5.view.Root",
       "type": "XML",
       "async": true,
-      "id": "app"
+      "id": "rootView"
     }
   }
 }

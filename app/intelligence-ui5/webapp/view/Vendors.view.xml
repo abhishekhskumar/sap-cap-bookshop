@@ -1,0 +1,31 @@
+<mvc:View
+  xmlns:mvc="sap.ui.core.mvc"
+  xmlns="sap.m"
+  controllerName="com.sap.usetax.intelligenceui5.controller.Vendors"
+  displayBlock="true">
+  <Page title="Vendor Risk Dashboard" showNavButton="true" navButtonPress="onNavBack">
+    <content>
+      <Table
+        id="vendorTable"
+        items="{/vendors}"
+        busy="{/busy}">
+        <columns>
+          <Column><Text text="Vendor"/></Column>
+          <Column><Text text="Invoices"/></Column>
+          <Column><Text text="Undercharged"/></Column>
+          <Column><Text text="Accrual Exposure"/></Column>
+        </columns>
+        <items>
+          <ColumnListItem>
+            <cells>
+              <Text text="{canonicalVendorName}"/>
+              <Text text="{invoiceCount}"/>
+              <Text text="{underchargedCount}"/>
+              <ObjectNumber number="{totalAccrualExposure}" unit="USD"/>
+            </cells>
+          </ColumnListItem>
+        </items>
+      </Table>
+    </content>
+  </Page>
+</mvc:View>

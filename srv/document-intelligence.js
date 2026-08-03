@@ -3036,6 +3036,10 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       for (let i = words.length - 1; i >= 0 && cityWords.length < 3; i--) {
         // stop at digit-leading tokens (street numbers) or alphanumeric suite tokens like "B2", "A1"
         if (/^\d/.test(words[i]) || /^[A-Z][0-9]/.test(words[i])) break;
+        // "CITY" appearing before already-collected city words is an address label (e.g. "GEEK SQUAD CITY BROOKS"),
+        // not part of the city name — stop to avoid "SQUAD CITY BROOKS" instead of "BROOKS".
+        // When "CITY" appears first (no words collected yet), it may be part of the name (e.g. "OKLAHOMA CITY"), so continue.
+        if (words[i] === 'CITY' && cityWords.length > 0) break;
         cityWords.unshift(words[i]);
       }
       return { city: cityWords.join(' ') || null, state, postal };

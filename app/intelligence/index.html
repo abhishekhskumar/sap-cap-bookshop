@@ -1376,14 +1376,15 @@ function _chargeStatusBanner(vendorTax,stx){
   // Shows the extracted vendor-charged tax as a fact — NO verdict derived from SalesTaxZip.
   // Verdict (Under/Over/Accurately Charged) is determined only by the authoritative engine (Vertex).
   if(vendorTax==null){
-    var _ran=[docaiResult,claudeResult,visionResult].filter(Boolean);
+    // Gate by ran flags — a layer that didn't run is not a dissenting vote
+    var _ran=[docaiRan&&docaiResult,claudeRan&&claudeResult,visionRan&&visionResult].filter(Boolean);
     var _allAgreeNoTax=_ran.length>0&&_ran.every(function(r){return !r.vendorTaxAmount||+r.vendorTaxAmount===0;});
     var _anyHasTax=_ran.some(function(r){return r.vendorTaxAmount!=null&&+r.vendorTaxAmount!==0;});
     if(_allAgreeNoTax){
       var _ntl=[];
-      if(docaiResult&&(!docaiResult.vendorTaxAmount||+docaiResult.vendorTaxAmount===0))_ntl.push('Doc AI');
-      if(claudeResult&&(!claudeResult.vendorTaxAmount||+claudeResult.vendorTaxAmount===0))_ntl.push('Claude');
-      if(visionResult&&(!visionResult.vendorTaxAmount||+visionResult.vendorTaxAmount===0))_ntl.push('Vision');
+      if(docaiRan&&docaiResult&&(!docaiResult.vendorTaxAmount||+docaiResult.vendorTaxAmount===0))_ntl.push('Doc AI');
+      if(claudeRan&&claudeResult&&(!claudeResult.vendorTaxAmount||+claudeResult.vendorTaxAmount===0))_ntl.push('Claude');
+      if(visionRan&&visionResult&&(!visionResult.vendorTaxAmount||+visionResult.vendorTaxAmount===0))_ntl.push('Vision');
       var _corrobLine;
       if(_ntl.length===1){
         _corrobLine=_ntl[0]+' found no separately-stated tax on this invoice.';
@@ -1431,11 +1432,11 @@ function _chargeStatusBanner(vendorTax,stx){
   var _taxCorrobLine='';
   if(_txRan.length>0){
     if(_txAllAgree){
-      // Name only the layers that ran — same honesty rule as the no-tax finding
+      // Name only the layers that actually ran (gated by ran flags, not result presence)
       var _txNames=[];
-      if(docaiResult)_txNames.push('Doc AI');
-      if(claudeResult)_txNames.push('Claude');
-      if(visionResult)_txNames.push('Vision');
+      if(docaiRan&&docaiResult)_txNames.push('Doc AI');
+      if(claudeRan&&claudeResult)_txNames.push('Claude');
+      if(visionRan&&visionResult)_txNames.push('Vision');
       var _txAgreeMsg;
       if(_txNames.length===1){
         _txAgreeMsg=_txNames[0]+' reports vendor tax <strong>$'+money(vendorTax)+'</strong>.';
@@ -1445,16 +1446,18 @@ function _chargeStatusBanner(vendorTax,stx){
         _txAgreeMsg='&#10003; All three layers agree &mdash; Doc AI &nbsp;&middot;&nbsp; Claude &nbsp;&middot;&nbsp; Vision &mdash; vendor tax <strong>$'+money(vendorTax)+'</strong>.';
       }
       _taxCorrobLine='<div style="font-size:12px;color:#0369a1;margin-bottom:4px;">'+_txAgreeMsg+'</div>';
-    }else{
-      // Layers ran but disagree — show all three (including not-run) so the picture is complete
-      var _txLv=function(r,label){
-        if(!r)return label+': <em style="color:#9ca3af;">not run</em>';
+    }else if(_txRan.length>=2){
+      // Disagree only fires when 2+ layers actually ran and produced different values.
+      // A layer that didn't run is not a dissenting vote — "didn't run" ≠ "disagrees".
+      var _txLv=function(r,ran,label){
+        if(!ran||!r)return '';
         var v=r.vendorTaxAmount;
         return label+': '+(v!=null&&+v!==0?'<strong>$'+money(+v)+'</strong>':'<em style="color:#9ca3af;">none</em>');
       };
+      var _txParts=[_txLv(docaiResult,docaiRan,'Doc AI'),_txLv(claudeResult,claudeRan,'Claude'),_txLv(visionResult,visionRan,'Vision')].filter(Boolean);
       _taxCorrobLine='<div style="font-size:12px;color:#92400e;margin-bottom:4px;">'
         +'&#9888; Layers disagree on vendor tax &mdash; '
-        +_txLv(docaiResult,'Doc AI')+'&nbsp;&middot;&nbsp;'+_txLv(claudeResult,'Claude')+'&nbsp;&middot;&nbsp;'+_txLv(visionResult,'Vision')
+        +_txParts.join('&nbsp;&middot;&nbsp;')
         +' &mdash; review recommended.</div>';
     }
   }

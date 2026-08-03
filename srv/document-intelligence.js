@@ -536,15 +536,29 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const docAICostPerDoc = 0.02;
     const claudeCostPerDoc = claudeTriggered ? 0.015 : 0;
 
-    // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
-    claudeLineItems = await this._classifyLineItemsUNSPSC(claudeLineItems);
-    // AI taxability determination per line + jurisdiction — provisional, NOT authoritative tax law
+    // Pre-compute inputs needed by both parallel Claude calls
+    const fobTerms = this._extractFobTerms(fullText);
+    const _claudeAllFreightLines = [
+      ...(docAISuppressedLines || []).filter(li => li.isFreight),
+      ...claudeSuppressedItems.filter(li => li.isFreight)
+    ];
+    // UNSPSC and freight taxability are independent — run in parallel to save one round-trip
+    const [_enrichedLineItems, freightTaxabilityPrediction] = await Promise.all([
+      this._classifyLineItemsUNSPSC(claudeLineItems),
+      this._determineFreightTaxability(
+        _claudeAllFreightLines,
+        { state: resolved.shipToState, city: resolved.shipToCity },
+        invoiceFreightTotal > 0,
+        fobTerms
+      )
+    ]);
+    claudeLineItems = _enrichedLineItems;
+    // Taxability prompt includes UNSPSC codes — must run after UNSPSC completes
     claudeLineItems = await this._determineTaxability(claudeLineItems, { state: resolved.shipToState, city: resolved.shipToCity });
     // Simplified destination-based tax calc — additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(claudeLineItems, resolved.shipToState, resolved.shipToCity);
     claudeLineItems = taxCalc.lineItems;
     // Pluggable tax-engine adapter pattern
-    const fobTerms = this._extractFobTerms(fullText);
     const taxPayload = this._buildTaxPayload(claudeLineItems,
       { state: resolved.shipToState, city: resolved.shipToCity, postalCode: resolved.shipToPostalCode },
       routedTo,
@@ -573,16 +587,6 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       docAISuppressedLines || [],
       claudeSuppressedItems,
       []
-    );
-    const _claudeAllFreightLines = [
-      ...(docAISuppressedLines || []).filter(li => li.isFreight),
-      ...claudeSuppressedItems.filter(li => li.isFreight)
-    ];
-    const freightTaxabilityPrediction = await this._determineFreightTaxability(
-      _claudeAllFreightLines,
-      { state: resolved.shipToState, city: resolved.shipToCity },
-      invoiceFreightTotal > 0,
-      fobTerms
     );
     const freightReconciliation = this._buildFreightReconciliation(
       shippingTaxedByVendor, freightTaxabilityPrediction, invoiceFreightTotal, taxEngineResults

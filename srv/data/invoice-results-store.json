@@ -1,9 +1,1085 @@
 {
-  "byVendor": {},
-  "byInvoice": {},
+  "byVendor": {
+    "DWPAV": [
+      {
+        "documentId": "8505865270.pdf",
+        "canonicalVendorKey": "DWPAV",
+        "canonicalVendorName": "DWP AV LLC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-07-31T12:46:25.803Z",
+        "stage": "docai",
+        "invoiceNumber": "2441-F",
+        "documentDate": "2025-08-08",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": "TN",
+          "postalCode": "37777",
+          "city": "Louisville"
+        },
+        "financials": {
+          "invoiceNetTotal": 186799.87,
+          "invoiceGrossTotal": 197467.19,
+          "vendorTaxAmount": 10667.32,
+          "proposedAccrualAmount": 2555.48,
+          "taxAmountDifference": 2555.48
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "UNDERCHARGED",
+          "accrualStatus": "ACCRUAL_REQUIRED",
+          "systemRate": 9.75,
+          "invoiceEffectiveRate": 7.8657,
+          "taxRateDifference": null,
+          "exemptLinesPresent": true
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 6,
+          "taxableLines": 1,
+          "exemptLines": 2,
+          "uncertainLines": 3
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      },
+      {
+        "documentId": "8505879206.pdf",
+        "canonicalVendorKey": "DWPAV",
+        "canonicalVendorName": "DWP AV LLC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-08-03T04:12:10.006Z",
+        "stage": "docai",
+        "invoiceNumber": "2446-F",
+        "documentDate": "2025-08-21",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": "WA",
+          "postalCode": "98101",
+          "city": "Seattle"
+        },
+        "financials": {
+          "invoiceNetTotal": 15976,
+          "invoiceGrossTotal": 17037.98,
+          "vendorTaxAmount": 1061.98,
+          "proposedAccrualAmount": 388.61,
+          "taxAmountDifference": 388.61
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "UNDERCHARGED",
+          "accrualStatus": "ACCRUAL_REQUIRED",
+          "systemRate": 10.55,
+          "invoiceEffectiveRate": 7.7237,
+          "taxRateDifference": null,
+          "exemptLinesPresent": true
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 7,
+          "taxableLines": 2,
+          "exemptLines": 2,
+          "uncertainLines": 3
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "NIMBLEPROJECTANDDEVELOPMENT": [
+      {
+        "documentId": "8505428645.pdf",
+        "canonicalVendorKey": "NIMBLEPROJECTANDDEVELOPMENT",
+        "canonicalVendorName": "NIMBLE PROJECT AND DEVELOPMENT",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-07-31T12:17:20.414Z",
+        "stage": "docai",
+        "invoiceNumber": "1276",
+        "documentDate": "2024-10-07",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": null,
+          "postalCode": null,
+          "city": "Charlotte"
+        },
+        "financials": {
+          "invoiceNetTotal": 10120,
+          "invoiceGrossTotal": 10120,
+          "vendorTaxAmount": null,
+          "proposedAccrualAmount": null,
+          "taxAmountDifference": null
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "UNAVAILABLE",
+          "accrualStatus": "UNAVAILABLE",
+          "systemRate": null,
+          "invoiceEffectiveRate": null,
+          "taxRateDifference": null,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 6,
+          "taxableLines": 0,
+          "exemptLines": 6,
+          "uncertainLines": 0
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "DLRGROUP": [
+      {
+        "documentId": "8505666440.pdf",
+        "canonicalVendorKey": "DLRGROUP",
+        "canonicalVendorName": "DLR GROUP INC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-08-03T04:13:48.143Z",
+        "stage": "docai",
+        "invoiceNumber": "0244367",
+        "documentDate": "2025-01-13",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": null,
+          "postalCode": null,
+          "city": "Denver"
+        },
+        "financials": {
+          "invoiceNetTotal": 26911.5,
+          "invoiceGrossTotal": 26911.5,
+          "vendorTaxAmount": null,
+          "proposedAccrualAmount": null,
+          "taxAmountDifference": null
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "UNAVAILABLE",
+          "accrualStatus": "UNAVAILABLE",
+          "systemRate": null,
+          "invoiceEffectiveRate": null,
+          "taxRateDifference": null,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 2,
+          "taxableLines": 0,
+          "exemptLines": 0,
+          "uncertainLines": 2
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      },
+      {
+        "documentId": "8505666445.pdf",
+        "canonicalVendorKey": "DLRGROUP",
+        "canonicalVendorName": "DLR GROUP INC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-07-31T12:54:46.479Z",
+        "stage": "docai",
+        "invoiceNumber": "0245616",
+        "documentDate": "2025-02-12",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": null,
+          "postalCode": null,
+          "city": "Charlotte"
+        },
+        "financials": {
+          "invoiceNetTotal": 6180,
+          "invoiceGrossTotal": 6180,
+          "vendorTaxAmount": null,
+          "proposedAccrualAmount": null,
+          "taxAmountDifference": null
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "UNAVAILABLE",
+          "accrualStatus": "UNAVAILABLE",
+          "systemRate": null,
+          "invoiceEffectiveRate": null,
+          "taxRateDifference": null,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 2,
+          "taxableLines": 1,
+          "exemptLines": 0,
+          "uncertainLines": 1
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "WOODMANCONSTRUCTION": [
+      {
+        "documentId": "8505586491.pdf",
+        "canonicalVendorKey": "WOODMANCONSTRUCTION",
+        "canonicalVendorName": "WOODMAN CONSTRUCTION INC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-07-31T14:36:19.360Z",
+        "stage": "docai",
+        "invoiceNumber": "12736",
+        "documentDate": "2025-01-21",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": null,
+          "postalCode": null,
+          "city": "Redmond"
+        },
+        "financials": {
+          "invoiceNetTotal": 0,
+          "invoiceGrossTotal": 1867.49,
+          "vendorTaxAmount": 1867.49,
+          "proposedAccrualAmount": null,
+          "taxAmountDifference": null
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "UNAVAILABLE",
+          "accrualStatus": "UNAVAILABLE",
+          "systemRate": null,
+          "invoiceEffectiveRate": null,
+          "taxRateDifference": null,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 0,
+          "taxableLines": 0,
+          "exemptLines": 0,
+          "uncertainLines": 0
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "SYSTEMSSOURCE": [
+      {
+        "documentId": "8505389282.pdf",
+        "canonicalVendorKey": "SYSTEMSSOURCE",
+        "canonicalVendorName": "SYSTEMS SOURCE INC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-08-03T04:22:51.655Z",
+        "stage": "docai",
+        "invoiceNumber": "413296-30",
+        "documentDate": "2024-09-05",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": "WA",
+          "postalCode": "98033",
+          "city": "KIRKLAND"
+        },
+        "financials": {
+          "invoiceNetTotal": 37317.51,
+          "invoiceGrossTotal": 37317.51,
+          "vendorTaxAmount": null,
+          "proposedAccrualAmount": null,
+          "taxAmountDifference": null
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "VENDOR_TAX_UNKNOWN",
+          "accrualStatus": "UNAVAILABLE",
+          "systemRate": null,
+          "invoiceEffectiveRate": null,
+          "taxRateDifference": null,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 1,
+          "taxableLines": 0,
+          "exemptLines": 0,
+          "uncertainLines": 1
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "CITYPAINTINGANDWATERPROOFIN": [
+      {
+        "documentId": "8505618781.pdf",
+        "canonicalVendorKey": "CITYPAINTINGANDWATERPROOFIN",
+        "canonicalVendorName": "CITY PAINTING AND WATERPROOFIN",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-08-03T03:56:33.451Z",
+        "stage": "docai",
+        "invoiceNumber": "1855",
+        "documentDate": "2025-02-14",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": "FL",
+          "postalCode": "33131",
+          "city": "Miami"
+        },
+        "financials": {
+          "invoiceNetTotal": 4810,
+          "invoiceGrossTotal": 4810,
+          "vendorTaxAmount": null,
+          "proposedAccrualAmount": null,
+          "taxAmountDifference": null
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "VENDOR_TAX_UNKNOWN",
+          "accrualStatus": "UNAVAILABLE",
+          "systemRate": null,
+          "invoiceEffectiveRate": null,
+          "taxRateDifference": null,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 2,
+          "taxableLines": 1,
+          "exemptLines": 0,
+          "uncertainLines": 1
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "AVISPL": [
+      {
+        "documentId": "8505962125.pdf",
+        "canonicalVendorKey": "AVISPL",
+        "canonicalVendorName": "AVI SPL LLC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-08-03T04:09:56.223Z",
+        "stage": "docai",
+        "invoiceNumber": "2568998",
+        "documentDate": "2025-10-27",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": "TX",
+          "postalCode": "78701-4023",
+          "city": "Austin"
+        },
+        "financials": {
+          "invoiceNetTotal": 47825.98,
+          "invoiceGrossTotal": 51771.62,
+          "vendorTaxAmount": 3945.64,
+          "proposedAccrualAmount": 0,
+          "taxAmountDifference": -0.02
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "ACCURATELY_CHARGED",
+          "accrualStatus": "NO_ACCRUAL",
+          "systemRate": 8.25,
+          "invoiceEffectiveRate": 8.25,
+          "taxRateDifference": 0,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 4,
+          "taxableLines": 0,
+          "exemptLines": 0,
+          "uncertainLines": 4
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "CDWDIRECT": [
+      {
+        "documentId": "8505909866.pdf",
+        "canonicalVendorKey": "CDWDIRECT",
+        "canonicalVendorName": "CDW DIRECT LLC",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-08-03T04:17:41.093Z",
+        "stage": "docai",
+        "invoiceNumber": "AF94H1S",
+        "documentDate": "2025-09-16",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": "NY",
+          "postalCode": "10041-0027",
+          "city": "NEW YORK"
+        },
+        "financials": {
+          "invoiceNetTotal": 9489.16,
+          "invoiceGrossTotal": 10331.33,
+          "vendorTaxAmount": 842.17,
+          "proposedAccrualAmount": 0,
+          "taxAmountDifference": -0.01
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "ACCURATELY_CHARGED",
+          "accrualStatus": "NO_ACCRUAL",
+          "systemRate": 8.875,
+          "invoiceEffectiveRate": 8.8751,
+          "taxRateDifference": -0.0001,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 2,
+          "taxableLines": 1,
+          "exemptLines": 0,
+          "uncertainLines": 1
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ],
+    "A2M4SEENLLLP": [
+      {
+        "documentId": "8505850611.pdf",
+        "canonicalVendorKey": "A2M4SEENLLLP",
+        "canonicalVendorName": "A2M4SEEN LLLP",
+        "vendorKeySource": "asset",
+        "vendorKeyNote": null,
+        "processedAt": "2026-08-03T04:19:58.032Z",
+        "stage": "docai",
+        "invoiceNumber": "53219053",
+        "documentDate": "2025-08-01",
+        "invoiceMode": "non_construction",
+        "jurisdiction": {
+          "state": "CO",
+          "postalCode": "80202",
+          "city": "DENVER"
+        },
+        "financials": {
+          "invoiceNetTotal": 12449.63,
+          "invoiceGrossTotal": 14108.79,
+          "vendorTaxAmount": 1659.16,
+          "proposedAccrualAmount": 0,
+          "taxAmountDifference": -520.02
+        },
+        "taxOutcome": {
+          "chargeabilityStatus": "OVERCHARGED",
+          "accrualStatus": "NO_ACCRUAL",
+          "systemRate": 9.15,
+          "invoiceEffectiveRate": 13.327,
+          "taxRateDifference": -4.177,
+          "exemptLinesPresent": false
+        },
+        "corrections": {
+          "headerFieldsCorrected": 0,
+          "headerFieldsFlagged": 0,
+          "correctedFieldNames": [],
+          "flaggedFieldNames": [],
+          "lineItemCorrectionCount": 0,
+          "correctionActions": []
+        },
+        "taxabilityFlags": {
+          "totalLines": 5,
+          "taxableLines": 2,
+          "exemptLines": 0,
+          "uncertainLines": 3
+        },
+        "freightVerdict": null,
+        "freightTaxedByVendor": null
+      }
+    ]
+  },
+  "byInvoice": {
+    "8505865270.pdf": {
+      "documentId": "8505865270.pdf",
+      "canonicalVendorKey": "DWPAV",
+      "canonicalVendorName": "DWP AV LLC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-07-31T12:46:25.803Z",
+      "stage": "docai",
+      "invoiceNumber": "2441-F",
+      "documentDate": "2025-08-08",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": "TN",
+        "postalCode": "37777",
+        "city": "Louisville"
+      },
+      "financials": {
+        "invoiceNetTotal": 186799.87,
+        "invoiceGrossTotal": 197467.19,
+        "vendorTaxAmount": 10667.32,
+        "proposedAccrualAmount": 2555.48,
+        "taxAmountDifference": 2555.48
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "UNDERCHARGED",
+        "accrualStatus": "ACCRUAL_REQUIRED",
+        "systemRate": 9.75,
+        "invoiceEffectiveRate": 7.8657,
+        "taxRateDifference": null,
+        "exemptLinesPresent": true
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 6,
+        "taxableLines": 1,
+        "exemptLines": 2,
+        "uncertainLines": 3
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505428645.pdf": {
+      "documentId": "8505428645.pdf",
+      "canonicalVendorKey": "NIMBLEPROJECTANDDEVELOPMENT",
+      "canonicalVendorName": "NIMBLE PROJECT AND DEVELOPMENT",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-07-31T12:17:20.414Z",
+      "stage": "docai",
+      "invoiceNumber": "1276",
+      "documentDate": "2024-10-07",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": null,
+        "postalCode": null,
+        "city": "Charlotte"
+      },
+      "financials": {
+        "invoiceNetTotal": 10120,
+        "invoiceGrossTotal": 10120,
+        "vendorTaxAmount": null,
+        "proposedAccrualAmount": null,
+        "taxAmountDifference": null
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "UNAVAILABLE",
+        "accrualStatus": "UNAVAILABLE",
+        "systemRate": null,
+        "invoiceEffectiveRate": null,
+        "taxRateDifference": null,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 6,
+        "taxableLines": 0,
+        "exemptLines": 6,
+        "uncertainLines": 0
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505666440.pdf": {
+      "documentId": "8505666440.pdf",
+      "canonicalVendorKey": "DLRGROUP",
+      "canonicalVendorName": "DLR GROUP INC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-08-03T04:13:48.143Z",
+      "stage": "docai",
+      "invoiceNumber": "0244367",
+      "documentDate": "2025-01-13",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": null,
+        "postalCode": null,
+        "city": "Denver"
+      },
+      "financials": {
+        "invoiceNetTotal": 26911.5,
+        "invoiceGrossTotal": 26911.5,
+        "vendorTaxAmount": null,
+        "proposedAccrualAmount": null,
+        "taxAmountDifference": null
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "UNAVAILABLE",
+        "accrualStatus": "UNAVAILABLE",
+        "systemRate": null,
+        "invoiceEffectiveRate": null,
+        "taxRateDifference": null,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 2,
+        "taxableLines": 0,
+        "exemptLines": 0,
+        "uncertainLines": 2
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505666445.pdf": {
+      "documentId": "8505666445.pdf",
+      "canonicalVendorKey": "DLRGROUP",
+      "canonicalVendorName": "DLR GROUP INC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-07-31T12:54:46.479Z",
+      "stage": "docai",
+      "invoiceNumber": "0245616",
+      "documentDate": "2025-02-12",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": null,
+        "postalCode": null,
+        "city": "Charlotte"
+      },
+      "financials": {
+        "invoiceNetTotal": 6180,
+        "invoiceGrossTotal": 6180,
+        "vendorTaxAmount": null,
+        "proposedAccrualAmount": null,
+        "taxAmountDifference": null
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "UNAVAILABLE",
+        "accrualStatus": "UNAVAILABLE",
+        "systemRate": null,
+        "invoiceEffectiveRate": null,
+        "taxRateDifference": null,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 2,
+        "taxableLines": 1,
+        "exemptLines": 0,
+        "uncertainLines": 1
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505586491.pdf": {
+      "documentId": "8505586491.pdf",
+      "canonicalVendorKey": "WOODMANCONSTRUCTION",
+      "canonicalVendorName": "WOODMAN CONSTRUCTION INC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-07-31T14:36:19.360Z",
+      "stage": "docai",
+      "invoiceNumber": "12736",
+      "documentDate": "2025-01-21",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": null,
+        "postalCode": null,
+        "city": "Redmond"
+      },
+      "financials": {
+        "invoiceNetTotal": 0,
+        "invoiceGrossTotal": 1867.49,
+        "vendorTaxAmount": 1867.49,
+        "proposedAccrualAmount": null,
+        "taxAmountDifference": null
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "UNAVAILABLE",
+        "accrualStatus": "UNAVAILABLE",
+        "systemRate": null,
+        "invoiceEffectiveRate": null,
+        "taxRateDifference": null,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 0,
+        "taxableLines": 0,
+        "exemptLines": 0,
+        "uncertainLines": 0
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505389282.pdf": {
+      "documentId": "8505389282.pdf",
+      "canonicalVendorKey": "SYSTEMSSOURCE",
+      "canonicalVendorName": "SYSTEMS SOURCE INC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-08-03T04:22:51.655Z",
+      "stage": "docai",
+      "invoiceNumber": "413296-30",
+      "documentDate": "2024-09-05",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": "WA",
+        "postalCode": "98033",
+        "city": "KIRKLAND"
+      },
+      "financials": {
+        "invoiceNetTotal": 37317.51,
+        "invoiceGrossTotal": 37317.51,
+        "vendorTaxAmount": null,
+        "proposedAccrualAmount": null,
+        "taxAmountDifference": null
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "VENDOR_TAX_UNKNOWN",
+        "accrualStatus": "UNAVAILABLE",
+        "systemRate": null,
+        "invoiceEffectiveRate": null,
+        "taxRateDifference": null,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 1,
+        "taxableLines": 0,
+        "exemptLines": 0,
+        "uncertainLines": 1
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505618781.pdf": {
+      "documentId": "8505618781.pdf",
+      "canonicalVendorKey": "CITYPAINTINGANDWATERPROOFIN",
+      "canonicalVendorName": "CITY PAINTING AND WATERPROOFIN",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-08-03T03:56:33.451Z",
+      "stage": "docai",
+      "invoiceNumber": "1855",
+      "documentDate": "2025-02-14",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": "FL",
+        "postalCode": "33131",
+        "city": "Miami"
+      },
+      "financials": {
+        "invoiceNetTotal": 4810,
+        "invoiceGrossTotal": 4810,
+        "vendorTaxAmount": null,
+        "proposedAccrualAmount": null,
+        "taxAmountDifference": null
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "VENDOR_TAX_UNKNOWN",
+        "accrualStatus": "UNAVAILABLE",
+        "systemRate": null,
+        "invoiceEffectiveRate": null,
+        "taxRateDifference": null,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 2,
+        "taxableLines": 1,
+        "exemptLines": 0,
+        "uncertainLines": 1
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505962125.pdf": {
+      "documentId": "8505962125.pdf",
+      "canonicalVendorKey": "AVISPL",
+      "canonicalVendorName": "AVI SPL LLC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-08-03T04:09:56.223Z",
+      "stage": "docai",
+      "invoiceNumber": "2568998",
+      "documentDate": "2025-10-27",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": "TX",
+        "postalCode": "78701-4023",
+        "city": "Austin"
+      },
+      "financials": {
+        "invoiceNetTotal": 47825.98,
+        "invoiceGrossTotal": 51771.62,
+        "vendorTaxAmount": 3945.64,
+        "proposedAccrualAmount": 0,
+        "taxAmountDifference": -0.02
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "ACCURATELY_CHARGED",
+        "accrualStatus": "NO_ACCRUAL",
+        "systemRate": 8.25,
+        "invoiceEffectiveRate": 8.25,
+        "taxRateDifference": 0,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 4,
+        "taxableLines": 0,
+        "exemptLines": 0,
+        "uncertainLines": 4
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505879206.pdf": {
+      "documentId": "8505879206.pdf",
+      "canonicalVendorKey": "DWPAV",
+      "canonicalVendorName": "DWP AV LLC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-08-03T04:12:10.006Z",
+      "stage": "docai",
+      "invoiceNumber": "2446-F",
+      "documentDate": "2025-08-21",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": "WA",
+        "postalCode": "98101",
+        "city": "Seattle"
+      },
+      "financials": {
+        "invoiceNetTotal": 15976,
+        "invoiceGrossTotal": 17037.98,
+        "vendorTaxAmount": 1061.98,
+        "proposedAccrualAmount": 388.61,
+        "taxAmountDifference": 388.61
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "UNDERCHARGED",
+        "accrualStatus": "ACCRUAL_REQUIRED",
+        "systemRate": 10.55,
+        "invoiceEffectiveRate": 7.7237,
+        "taxRateDifference": null,
+        "exemptLinesPresent": true
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 7,
+        "taxableLines": 2,
+        "exemptLines": 2,
+        "uncertainLines": 3
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505909866.pdf": {
+      "documentId": "8505909866.pdf",
+      "canonicalVendorKey": "CDWDIRECT",
+      "canonicalVendorName": "CDW DIRECT LLC",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-08-03T04:17:41.093Z",
+      "stage": "docai",
+      "invoiceNumber": "AF94H1S",
+      "documentDate": "2025-09-16",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": "NY",
+        "postalCode": "10041-0027",
+        "city": "NEW YORK"
+      },
+      "financials": {
+        "invoiceNetTotal": 9489.16,
+        "invoiceGrossTotal": 10331.33,
+        "vendorTaxAmount": 842.17,
+        "proposedAccrualAmount": 0,
+        "taxAmountDifference": -0.01
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "ACCURATELY_CHARGED",
+        "accrualStatus": "NO_ACCRUAL",
+        "systemRate": 8.875,
+        "invoiceEffectiveRate": 8.8751,
+        "taxRateDifference": -0.0001,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 2,
+        "taxableLines": 1,
+        "exemptLines": 0,
+        "uncertainLines": 1
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    },
+    "8505850611.pdf": {
+      "documentId": "8505850611.pdf",
+      "canonicalVendorKey": "A2M4SEENLLLP",
+      "canonicalVendorName": "A2M4SEEN LLLP",
+      "vendorKeySource": "asset",
+      "vendorKeyNote": null,
+      "processedAt": "2026-08-03T04:19:58.032Z",
+      "stage": "docai",
+      "invoiceNumber": "53219053",
+      "documentDate": "2025-08-01",
+      "invoiceMode": "non_construction",
+      "jurisdiction": {
+        "state": "CO",
+        "postalCode": "80202",
+        "city": "DENVER"
+      },
+      "financials": {
+        "invoiceNetTotal": 12449.63,
+        "invoiceGrossTotal": 14108.79,
+        "vendorTaxAmount": 1659.16,
+        "proposedAccrualAmount": 0,
+        "taxAmountDifference": -520.02
+      },
+      "taxOutcome": {
+        "chargeabilityStatus": "OVERCHARGED",
+        "accrualStatus": "NO_ACCRUAL",
+        "systemRate": 9.15,
+        "invoiceEffectiveRate": 13.327,
+        "taxRateDifference": -4.177,
+        "exemptLinesPresent": false
+      },
+      "corrections": {
+        "headerFieldsCorrected": 0,
+        "headerFieldsFlagged": 0,
+        "correctedFieldNames": [],
+        "flaggedFieldNames": [],
+        "lineItemCorrectionCount": 0,
+        "correctionActions": []
+      },
+      "taxabilityFlags": {
+        "totalLines": 5,
+        "taxableLines": 2,
+        "exemptLines": 0,
+        "uncertainLines": 3
+      },
+      "freightVerdict": null,
+      "freightTaxedByVendor": null
+    }
+  },
   "meta": {
-    "totalInvoices": 0,
-    "totalVendors": 0,
-    "lastUpdated": null
+    "totalInvoices": 11,
+    "totalVendors": 9,
+    "lastUpdated": "2026-08-03T04:22:51.661Z"
   }
 }

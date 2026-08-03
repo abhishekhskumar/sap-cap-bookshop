@@ -1402,18 +1402,21 @@ function _chargeStatusBanner(vendorTax,stx){
         +'<div style="font-size:11px;color:#4b7c60;">The vendor charged no separately-stated tax on this invoice; use tax may apply. Authoritative verdict requires Vertex.</div>'
         +'</div>';
     }
-    if(_anyHasTax){
-      var _lv=function(r,label){
-        if(!r)return label+': <em style="color:#9ca3af;">not run</em>';
+    if(_anyHasTax&&_ran.length>=2){
+      // Only flag disagreement when 2+ layers actually ran and produced different values.
+      // A layer that didn't run is not a dissenting vote — "didn't run" ≠ "disagrees".
+      var _lv=function(r,ran,label){
+        if(!ran||!r)return '';
         var v=r.vendorTaxAmount;
         return label+': '+(v!=null&&+v!==0?'<strong>$'+money(+v)+'</strong>':'<em style="color:#9ca3af;">none</em>');
       };
+      var _lvParts=[_lv(docaiResult,docaiRan,'Doc AI'),_lv(claudeResult,claudeRan,'Claude'),_lv(visionResult,visionRan,'Vision')].filter(Boolean);
       return '<div style="padding:10px 14px 9px;background:#fffbeb;border-bottom:1px solid #fcd34d;">'
         +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
         +'<span style="font-size:13px;font-weight:700;color:#92400e;">&#9888; Layers disagree on vendor tax &mdash; review recommended</span>'
         +'</div>'
         +'<div style="font-size:12px;color:#78350f;margin-bottom:3px;">'
-        +_lv(docaiResult,'Doc AI')+'&nbsp;&middot;&nbsp;'+_lv(claudeResult,'Claude')+'&nbsp;&middot;&nbsp;'+_lv(visionResult,'Vision')
+        +_lvParts.join('&nbsp;&middot;&nbsp;')
         +'</div>'
         +'<div style="font-size:11px;color:#92400e;">Manual review recommended before determining tax charge status. Authoritative verdict requires Vertex.</div>'
         +'</div>';

@@ -500,6 +500,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const asset = this._lookupAssetReport(documentId);
     const getF = k => { const f = (intelligence.fields || []).find(x => x.fieldName === k); return (f?.correctValue || f?.docAIValue || '').trim(); };
     const resolved = this._resolveShipTo(getF, routedTo);
+    // extractDocAI resolved ship-to via its own _resolveShipTo (possibly from address string
+    // parsing) even when raw docAIHeader sub-fields are empty. Use those pre-resolved values
+    // as fallback so processInvoice matches what extractDocAI already determined.
+    if (!resolved.shipToPostalCode && docAIParsed.shipToPostalCode) resolved.shipToPostalCode = docAIParsed.shipToPostalCode;
+    if (!resolved.shipToCity      && docAIParsed.shipToCity)        resolved.shipToCity        = docAIParsed.shipToCity;
+    if (!resolved.shipToState     && docAIParsed.shipToState)       resolved.shipToState       = docAIParsed.shipToState;
     const inv = {
       vendorName: getF('vendorName'),
       shipToAddress: resolved.shipToAddress,

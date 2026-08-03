@@ -1,0 +1,48 @@
+{
+  "documentId": "8505850611.pdf",
+  "canonicalVendorKey": "A2M4SEENLLLP",
+  "canonicalVendorName": "A2M4SEEN LLLP",
+  "vendorKeySource": "asset",
+  "vendorKeyNote": null,
+  "processedAt": "2026-08-03T04:19:58.032Z",
+  "stage": "docai",
+  "invoiceNumber": "53219053",
+  "documentDate": "2025-08-01",
+  "invoiceMode": "non_construction",
+  "jurisdiction": {
+    "state": "CO",
+    "postalCode": "80202",
+    "city": "DENVER"
+  },
+  "financials": {
+    "invoiceNetTotal": 12449.63,
+    "invoiceGrossTotal": 14108.79,
+    "vendorTaxAmount": 1659.16,
+    "proposedAccrualAmount": 0,
+    "taxAmountDifference": -520.02
+  },
+  "taxOutcome": {
+    "chargeabilityStatus": "OVERCHARGED",
+    "accrualStatus": "NO_ACCRUAL",
+    "systemRate": 9.15,
+    "invoiceEffectiveRate": 13.327,
+    "taxRateDifference": -4.177,
+    "exemptLinesPresent": false
+  },
+  "corrections": {
+    "headerFieldsCorrected": 0,
+    "headerFieldsFlagged": 0,
+    "correctedFieldNames": [],
+    "flaggedFieldNames": [],
+    "lineItemCorrectionCount": 0,
+    "correctionActions": []
+  },
+  "taxabilityFlags": {
+    "totalLines": 5,
+    "taxableLines": 2,
+    "exemptLines": 0,
+    "uncertainLines": 3
+  },
+  "freightVerdict": null,
+  "freightTaxedByVendor": null
+}

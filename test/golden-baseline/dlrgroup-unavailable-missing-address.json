@@ -1,0 +1,48 @@
+{
+  "documentId": "8505666440.pdf",
+  "canonicalVendorKey": "DLRGROUP",
+  "canonicalVendorName": "DLR GROUP INC",
+  "vendorKeySource": "asset",
+  "vendorKeyNote": null,
+  "processedAt": "2026-08-03T04:13:48.143Z",
+  "stage": "docai",
+  "invoiceNumber": "0244367",
+  "documentDate": "2025-01-13",
+  "invoiceMode": "non_construction",
+  "jurisdiction": {
+    "state": null,
+    "postalCode": null,
+    "city": "Denver"
+  },
+  "financials": {
+    "invoiceNetTotal": 26911.5,
+    "invoiceGrossTotal": 26911.5,
+    "vendorTaxAmount": null,
+    "proposedAccrualAmount": null,
+    "taxAmountDifference": null
+  },
+  "taxOutcome": {
+    "chargeabilityStatus": "UNAVAILABLE",
+    "accrualStatus": "UNAVAILABLE",
+    "systemRate": null,
+    "invoiceEffectiveRate": null,
+    "taxRateDifference": null,
+    "exemptLinesPresent": false
+  },
+  "corrections": {
+    "headerFieldsCorrected": 0,
+    "headerFieldsFlagged": 0,
+    "correctedFieldNames": [],
+    "flaggedFieldNames": [],
+    "lineItemCorrectionCount": 0,
+    "correctionActions": []
+  },
+  "taxabilityFlags": {
+    "totalLines": 2,
+    "taxableLines": 0,
+    "exemptLines": 0,
+    "uncertainLines": 2
+  },
+  "freightVerdict": null,
+  "freightTaxedByVendor": null
+}

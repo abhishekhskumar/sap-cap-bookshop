@@ -1,0 +1,48 @@
+{
+  "documentId": "8505865270.pdf",
+  "canonicalVendorKey": "DWPAV",
+  "canonicalVendorName": "DWP AV LLC",
+  "vendorKeySource": "asset",
+  "vendorKeyNote": null,
+  "processedAt": "2026-08-03T06:46:18.056Z",
+  "stage": "docai",
+  "invoiceNumber": "2441-F",
+  "documentDate": "2025-08-08",
+  "invoiceMode": "non_construction",
+  "jurisdiction": {
+    "state": "TN",
+    "postalCode": "37777",
+    "city": "Louisville"
+  },
+  "financials": {
+    "invoiceNetTotal": 186799.87,
+    "invoiceGrossTotal": 197467.19,
+    "vendorTaxAmount": 10667.32,
+    "proposedAccrualAmount": 2555.48,
+    "taxAmountDifference": 2555.48
+  },
+  "taxOutcome": {
+    "chargeabilityStatus": "UNDERCHARGED",
+    "accrualStatus": "ACCRUAL_REQUIRED",
+    "systemRate": 9.75,
+    "invoiceEffectiveRate": 7.8657,
+    "taxRateDifference": null,
+    "exemptLinesPresent": true
+  },
+  "corrections": {
+    "headerFieldsCorrected": 0,
+    "headerFieldsFlagged": 0,
+    "correctedFieldNames": [],
+    "flaggedFieldNames": [],
+    "lineItemCorrectionCount": 0,
+    "correctionActions": []
+  },
+  "taxabilityFlags": {
+    "totalLines": 6,
+    "taxableLines": 1,
+    "exemptLines": 2,
+    "uncertainLines": 3
+  },
+  "freightVerdict": null,
+  "freightTaxedByVendor": null
+}

@@ -1,0 +1,48 @@
+{
+  "documentId": "8505962125.pdf",
+  "canonicalVendorKey": "AVISPL",
+  "canonicalVendorName": "AVI SPL LLC",
+  "vendorKeySource": "asset",
+  "vendorKeyNote": null,
+  "processedAt": "2026-08-03T04:09:56.223Z",
+  "stage": "docai",
+  "invoiceNumber": "2568998",
+  "documentDate": "2025-10-27",
+  "invoiceMode": "non_construction",
+  "jurisdiction": {
+    "state": "TX",
+    "postalCode": "78701-4023",
+    "city": "Austin"
+  },
+  "financials": {
+    "invoiceNetTotal": 47825.98,
+    "invoiceGrossTotal": 51771.62,
+    "vendorTaxAmount": 3945.64,
+    "proposedAccrualAmount": 0,
+    "taxAmountDifference": -0.02
+  },
+  "taxOutcome": {
+    "chargeabilityStatus": "ACCURATELY_CHARGED",
+    "accrualStatus": "NO_ACCRUAL",
+    "systemRate": 8.25,
+    "invoiceEffectiveRate": 8.25,
+    "taxRateDifference": 0,
+    "exemptLinesPresent": false
+  },
+  "corrections": {
+    "headerFieldsCorrected": 0,
+    "headerFieldsFlagged": 0,
+    "correctedFieldNames": [],
+    "flaggedFieldNames": [],
+    "lineItemCorrectionCount": 0,
+    "correctionActions": []
+  },
+  "taxabilityFlags": {
+    "totalLines": 4,
+    "taxableLines": 0,
+    "exemptLines": 0,
+    "uncertainLines": 4
+  },
+  "freightVerdict": null,
+  "freightTaxedByVendor": null
+}

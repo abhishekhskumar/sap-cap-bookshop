@@ -625,6 +625,7 @@ async function runDocAI(){
       body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),schemaType:'auto',invoiceBase64:fileBase64,mediaType:fileMediaType})});
     var text=await response.text(); var data;
     try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
+    console.log('%c[DOCAI] response received','color:blue',data);
     docaiResult=data; lastResult=data; docaiRan=true;
     var mode=data.invoiceMode||'non_construction';
     document.getElementById('modeBadge').innerHTML='<span class="pill '+(mode==='construction'?'construction':'noncon')+'">Auto-classified: '+(mode==='construction'?'CONSTRUCTION':'NON-CONSTRUCTION')+'</span>';
@@ -635,7 +636,7 @@ async function runDocAI(){
     _markButtonRun('docaiBtn','1. Run Doc AI Extraction');
     viewMode='docai';
     renderAll(data);
-  }catch(err){ _renderStatusAll('<div class="status-msg error">❌ '+err.message+'</div>'); }
+  }catch(err){ console.error('[DOCAI] CAUGHT ERROR',err); _renderStatusAll('<div class="status-msg error">❌ '+err.message+'</div>'); }
   docaiBtn.disabled=false;
 }
 
@@ -889,7 +890,7 @@ function setLineView(mode){
   renderLineItems(lastResult||docaiResult||{});
 }
 
-function renderAll(data){ renderGeneral(data); _reconciledTaxPayload=_buildReconciledPayload(); _reconciledCalcResult=null; renderRecon(data); renderLineItems(data); renderChangelog(data); renderIntel(data); renderTaxEngine(data); drawOcrBoxes(pdfCurrentPage); }
+function renderAll(data){ console.log('%c[RENDER] renderAll START','color:green',{fields:(data&&data.fields||[]).length,vendorTax:(data&&data.vendorTaxAmount),stage:(data&&data.stage)}); renderGeneral(data); _reconciledTaxPayload=_buildReconciledPayload(); _reconciledCalcResult=null; renderRecon(data); renderLineItems(data); renderChangelog(data); renderIntel(data); renderTaxEngine(data); drawOcrBoxes(pdfCurrentPage); console.log('%c[RENDER] renderAll END - complete','color:green'); }
 
 // ── Frontend normalize — mirrors srv/eval.js normalize() exactly ──────────
 var _FE_DATE_FIELDS=new Set(['documentDate']);
@@ -4348,6 +4349,7 @@ async function pickInvoice(fileName){
 
 loadInvoiceList();
 _initScrollSpy();
+window.addEventListener('beforeunload',function(e){ console.trace('%c[UNLOAD] page unloading/reloading','color:red'); });
 
 </script>
 </body>

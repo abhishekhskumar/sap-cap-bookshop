@@ -404,6 +404,7 @@
 
 <script>
 var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[], _reconciledTaxPayload=null, _reconciledCalcResult=null, _stzLineItems=[];
+var _taxCalcRunning=false;
 var _lineViewMode='compare';
 var _statusDocAI=null, _statusClaude=null, _statusVision=null;
 var allInvoices=[], filterAssetOnly=true;
@@ -678,6 +679,8 @@ async function runDocAI(){
     _markButtonRun('docaiBtn','1. Run Doc AI Extraction');
     viewMode='docai';
     renderAll(data);
+    var _sb=_computeSelfBalance(data);
+    if(_sb&&_sb.passes){_runAutoTaxCalc();}
   }catch(err){ console.error('[DOCAI] CAUGHT ERROR',err); _renderStatusAll('<div class="status-msg error">❌ '+err.message+'</div>'); }
   docaiBtn.disabled=false;
 }
@@ -706,6 +709,31 @@ async function runClaude(){
     }
   }catch(err){ _renderStatusAll('<div class="status-msg error">❌ '+err.message+'</div>'); }
   document.getElementById('claudeBtn').disabled=false;
+}
+
+async function _runAutoTaxCalc(){
+  _taxCalcRunning=true;
+  document.getElementById('claudeBtn').disabled=true;
+  renderAll(docaiResult);
+  _renderStatusAll('<div class="status-msg loading"><span class="spinner"></span>Step 2 (auto): Self-balance verified &mdash; running SalesTaxZip + taxability on Doc AI extraction...</div>');
+  try{
+    var response=await fetch('/api/intelligence/processInvoice',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({documentId:uploadedFileName||('UI-'+Date.now()),docAIResult:JSON.stringify(docaiResult),skipAudit:true})});
+    var text=await response.text(); var data;
+    try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
+    claudeResult=data; lastResult=data; claudeRan=true;
+    _taxCalcRunning=false;
+    var s=data.stats||{};
+    _statusClaude='&#x2705; Tax calc complete (self-balanced &mdash; extraction audit skipped) &mdash; '+(s.verified||0)+' fields verified';
+    _renderStatusAll();
+    _markButtonRun('claudeBtn','2. Send to Claude for Audit');
+    viewMode='claude';
+    renderAll(data);
+  }catch(err){
+    _taxCalcRunning=false;
+    document.getElementById('claudeBtn').disabled=false;
+    _renderStatusAll('<div class="status-msg error">&#x274C; Auto tax calculation failed: '+err.message+'. Use the Run Claude button to proceed.</div>');
+  }
 }
 
 function auditField(fieldName){if(!fileBase64)return;pendingHighlightField=fieldName;runClaude();}
@@ -1494,13 +1522,31 @@ function renderGeneral(data){
             +'</div>';
         }
       } else if (docaiRan && !claudeRan && !visionRan) {
-        // Stage 1 only — enrichment not yet run. Distinguishes "pending" from genuinely unavailable.
-        _cvRow1='<div style="padding:9px 14px 8px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
-          +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-          +'<span style="font-size:11px;color:#64748b;">&#9711; Pending enrichment &mdash; the illustrative charge verdict requires the Claude audit.</span>'
-          +'<button onclick="runClaude()" style="font-size:11px;padding:3px 12px;background:#354a5f;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">Run Claude audit &rarr;</button>'
-          +'</div>'
-          +'</div>';
+        var _sb2=_computeSelfBalance(docaiResult||data);
+        if(_sb2&&_sb2.passes===false){
+          // Doc AI doesn't self-balance — Claude extraction audit required before tax calculation.
+          _cvRow1='<div style="padding:9px 14px 8px;background:#fff7ed;border-bottom:1px solid #fed7aa;">'
+            +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+            +'<span style="font-size:11px;color:#7c2d12;font-weight:600;">&#9888; Extraction doesn\'t self-balance (off by $'+money(_sb2.delta)+') &mdash; run Claude audit to verify/correct before tax calculation.</span>'
+            +'<button onclick="runClaude()" style="font-size:11px;padding:3px 12px;background:#b45309;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">Run Claude audit &rarr;</button>'
+            +'</div>'
+            +'</div>';
+        }else if(_taxCalcRunning){
+          // Self-balance passed — auto tax calc in progress.
+          _cvRow1='<div style="padding:9px 14px 8px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+            +'<div style="display:flex;align-items:center;gap:8px;">'
+            +'<span class="spinner"></span>'
+            +'<span style="font-size:11px;color:#64748b;">Running SalesTaxZip + taxability automatically (Doc AI self-balances)...</span>'
+            +'</div></div>';
+        }else{
+          // Construction invoice or no extracted gross — self-balance not applicable.
+          _cvRow1='<div style="padding:9px 14px 8px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">'
+            +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+            +'<span style="font-size:11px;color:#64748b;">&#9711; Pending enrichment &mdash; the illustrative charge verdict requires the Claude audit.</span>'
+            +'<button onclick="runClaude()" style="font-size:11px;padding:3px 12px;background:#354a5f;color:#fff;border:none;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">Run Claude audit &rarr;</button>'
+            +'</div>'
+            +'</div>';
+        }
       }
 
       // ── Row 2: Authoritative — always shown when any layer has run ───────

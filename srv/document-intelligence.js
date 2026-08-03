@@ -268,7 +268,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
   }
 
   async _handleProcessInvoice(req) {
-    const { documentId, docAIResult: docAIResultStr } = req.data;
+    const { documentId, docAIResult: docAIResultStr, skipAudit } = req.data;
     const LOG = cds.log('intelligence');
     const startTime = Date.now();
 
@@ -297,7 +297,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const docAILineItems = keepLines; // Claude audits billable lines only
 
     // ── Stage 3: Trigger decision ──────────────────────────────
-    const trigger = this._computeTriggerDecision(docAIHeader);
+    // skipAudit=true: front-end detected self-balance; bypass extraction audit, run STZ+taxability only.
+    const trigger = skipAudit
+      ? { triggered: false, reasons: ['skipAudit — self-balance path; extraction audit bypassed'], taxCriticalChecked: 0 }
+      : this._computeTriggerDecision(docAIHeader);
 
     let intelligence;
     if (!trigger.triggered) {

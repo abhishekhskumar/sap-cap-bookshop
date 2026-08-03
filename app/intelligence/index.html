@@ -361,24 +361,6 @@
 </div>
 
 <script>
-// cds watch writes invoice-results-store.json on every Doc AI run → triggers a
-// server restart → connect-livereload calls location.reload() → page blanks out.
-// Intercept reload() and suppress it while active invoice data is on screen.
-(function(){
-  try{
-    var _origReload=Location.prototype.reload;
-    var _guardedReload=function(){
-      if(window.docaiRan||window.claudeRan||window.visionRan){
-        console.warn('[invoice-ui] Suppressed cds-watch live-reload — active invoice data present.');
-        return;
-      }
-      _origReload.apply(this,arguments);
-    };
-    try{Location.prototype.reload=_guardedReload;}
-    catch(_){Object.defineProperty(Location.prototype,'reload',{value:_guardedReload,writable:true,configurable:true});}
-  }catch(_){}
-})();
-
 var fileBase64=null, fileMediaType=null, uploadedFileName=null, uploadedFile=null, lastResult=null, docaiResult=null, claudeResult=null, visionResult=null, viewMode='docai', pendingHighlightField=null, docaiRan=false, claudeRan=false, visionRan=false, teLayerView=null, _renderedLineItems=[], _reconciledTaxPayload=null, _reconciledCalcResult=null, _stzLineItems=[];
 var _lineViewMode='compare';
 var _statusDocAI=null, _statusClaude=null, _statusVision=null;

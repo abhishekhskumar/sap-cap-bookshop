@@ -1,16 +1,22 @@
 'use strict';
 
 const fs   = require('fs');
+const os   = require('os');
 const path = require('path');
 
-const STORE_PATH = path.join(__dirname, '../data/invoice-results-store.json');
+// Writes go to OS temp so cds watch never sees the file change and does not
+// reload the browser.  On a fresh start the committed seed in srv/data/ is
+// used as the initial dataset; subsequent writes accumulate in the temp file.
+const SEED_PATH  = path.join(__dirname, '../data/invoice-results-store.json');
+const STORE_PATH = path.join(os.tmpdir(), 'cds-invoice-store.json');
 
 function _load() {
-  try {
-    return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
-  } catch (_) {
-    return { byVendor: {}, byInvoice: {}, meta: { totalInvoices: 0, totalVendors: 0, lastUpdated: null } };
+  // Prefer the runtime store (current session results); fall back to the
+  // committed seed so pre-processed demo invoices are available on first boot.
+  for (const p of [STORE_PATH, SEED_PATH]) {
+    try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) {}
   }
+  return { byVendor: {}, byInvoice: {}, meta: { totalInvoices: 0, totalVendors: 0, lastUpdated: null } };
 }
 
 function _save(store) {

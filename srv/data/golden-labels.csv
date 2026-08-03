@@ -1,0 +1,5 @@
+scnid,vendorName,invoiceNumber,documentDate,shipToAddress,shipToCity,shipToState,shipToPostalCode,shipToCounty,projectAddress,contractDetails,grossAmount,netAmount,taxAmount,freight,purchaseOrderNumber,invoiceMode
+8505658824,,PJ100007227,,,Atlanta,GA,,,,Accenture 5555 Triangle Pkwy 2nd Floor Atlanta GA,,17180.30,,,,non-construction
+8505865270,RED THREAD,2441-F,8/8/2025,,Louisville,TN,,Blount,,,197467.19,,10667.32,,,non-construction
+8505912798,,,2025-09-15,,,NY,,,,,26497.40,,,,250723-REVISED,non-construction
+8505XXXXXX,DWP-AV LLC,2443-F,2025-08-20,,Sacramento,CA,95811,,,,100658.24,,,,,non-construction

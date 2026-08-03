@@ -1,0 +1,83 @@
+SELF-BALANCE GATE FIX v2 — 2026-07-24
+=======================================
+
+STEP 1 — DIAGNOSIS
+------------------
+
+(a) Where the $5,000 comes from
+  invoiceFreightTotal = lineFreightTotal + headerFreightAmt  (server combines both sources)
+  - If freight was a LINE (lineAction!='KEEP', shipping keyword): amount → suppressedLines[isFreight=true]
+    → lineFreightTotal → invoiceFreightTotal
+  - If freight was a HEADER (shippingCostHeader field): headerFreightAmt → invoiceFreightTotal
+  Either way, invoiceFreightTotal = $5,000 and is distributed into every KEEP line's itemAmount.
+  taxPayload.totals.net  = Σ(li.itemAmount) = Σ(li.amount + li.distributedFreight) ← freight inside
+  taxPayload.totals.freight = invoiceFreightTotal ← same $5,000 again
+  OLD gate lhs = totals.net + totals.freight + vendorTax = (keepNet + $5k) + $5k + tax → off by exactly $5,000.
+
+(b) Is totals.gross EXTRACTED or DERIVED?
+  DERIVED. Code (srv/document-intelligence.js line 149-150):
+    const invoiceGrossTotal = vendorTaxAmount != null
+      ? +(invoiceNetTotal + vendorTaxAmount).toFixed(2)   // computed
+      : invoiceNetTotal;
+  taxPayload.totals.gross = invoiceGrossTotal  ← never reads docAIHeader.grossAmount from invoice.
+  Comparing lhs against totals.gross is derived-vs-derived (always circular);
+  the only meaningful comparison is against the EXTRACTED grossAmount field.
+
+(c) Is the Index-schema extraction available at gate time?
+  YES. All needed data is in the layer result objects (docaiResult / claudeResult / visionResult):
+    result.lineItems[i].amount       = raw docAI netPrice (no distributed freight)
+    result.invoiceFreightTotal       = lineFreightTotal + headerFreightAmt (all freight, once)
+    result.vendorTaxAmount           = hdrTaxAmt or lineTaxSum (all tax, once)
+    result.fields['grossAmount'].docAIValue = EXTRACTED gross from invoice document
+  No new server data needed. No schema change needed.
+
+
+STEP 2 — BEFORE/AFTER EQUATION
+--------------------------------
+
+BEFORE (double-counts freight; uses derived gross):
+  function _computeSelfBalance(tp, vTax) {           // tp = _reconciledTaxPayload (taxPayload)
+    var net     = tp.totals.net;      // = Σ(li.itemAmount) — freight already baked in
+    var freight = tp.totals.freight;  // = invoiceFreightTotal — same freight again
+    var gross   = tp.totals.gross;    // = invoiceNetTotal + vendorTax — DERIVED, not extracted
+    var lhs = net + freight + tax;    // double-counts freight
+    // delta = |lhs - gross| = invoiceFreightTotal for any freight-bearing invoice → always blocks
+  }
+  call: _computeSelfBalance(_reconciledTaxPayload, (_reconSrc||{}).vendorTaxAmount)
+
+AFTER (no double-count; uses extracted gross):
+  function _computeSelfBalance(r) {                  // r = visionResult||claudeResult||docaiResult
+    extractedGross = parseFloat(r.fields['grossAmount'].docAIValue)  // from invoice document
+    keepNet  = Σ(r.lineItems[i].amount)              // raw netPrice, no distributed freight
+    freight  = parseFloat(r.invoiceFreightTotal)     // combined freight (lines + header), once
+    tax      = parseFloat(r.vendorTaxAmount)         // combined tax (lines + header), once
+    lhs      = keepNet + freight + tax
+    delta    = |lhs - extractedGross|
+  }
+  call: _computeSelfBalance(visionResult||claudeResult||docaiResult)
+
+
+STEP 3 — VERIFICATION (algebraic)
+----------------------------------
+
+Case 1: $5,000-freight invoice (wrongly blocked before)
+  Before: lhs = (keepNet + $5k) + $5k + tax = keepNet + $10k + tax
+          rhs = keepNet + $5k + tax (derived gross)
+          delta = $5,000 → BLOCKED (wrong)
+  After:  lhs = keepNet + $5k + tax
+          rhs = extractedGross ≈ keepNet + $5k + tax
+          delta ≈ $0.00 → PASSES, engine enabled ✓
+
+Case 2: $90,000-line-error invoice (should still block)
+  Genuine discrepancy: Σ(keepLines.amount) does not match extractedGross by ~$89,000
+  After:  lhs = keepNet_wrong + freight + tax
+          rhs = extractedGross
+          delta ≈ $89,000 → STILL BLOCKED ✓
+
+Case 3: Clean DocAI-only invoice
+  DocAI extracted consistent values: keepNet + freight + tax ≈ extractedGross
+  After:  delta ≈ $0.00 → PASSES, engine enabled ✓
+
+Gate clears only when arithmetic reconciles (never by layer-run alone).
+Construction invoices (invoiceMode==='construction'): gate skipped, engine always enabled.
+If grossAmount not extractable (empty field): gate returns null, engine enabled (can't check).

@@ -1,0 +1,10 @@
+{
+  "name": "intelligence-ui5",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Fiori UI5 frontend for DocumentIntelligenceService",
+  "scripts": {
+    "start": "ui5 serve --config ui5.yaml",
+    "build": "ui5 build --config ui5.yaml --clean-dest --dest dist"
+  }
+}

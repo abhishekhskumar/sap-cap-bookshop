@@ -1,0 +1,54 @@
+{
+  "_comment": "PLACEHOLDER RATES — every component rate below is 0.000 until replaced with a verified value. Verify against the authoritative sources for each jurisdiction (state DOR, county assessor, city finance dept) before any production use. This file is used only for the simplified illustrative tax calc in the demo UI.",
+  "_keyFormat": "Two-letter state abbreviation (uppercase) pipe-separated from city name (lowercase). Example: 'NY|new york'. County-level disambiguation when two cities in a state share a name requires ZIP-to-county lookup, which is not implemented here.",
+  "_seededJurisdictions": [
+    "CA/Sacramento (Sacramento County)",
+    "TN/Blount County — keyed by principal cities: Maryville, Alcoa",
+    "NY/New York City (five boroughs, NYC Finance rate)",
+    "GA/Atlanta (Fulton County)",
+    "IL/Chicago (Cook County)"
+  ],
+  "_rateFields": "All rates in percent (%). state + county + city + district = combined rate. Set to 0.000 until verified.",
+
+  "CA|sacramento": {
+    "state": 0.000,
+    "county": 0.000,
+    "city": 0.000,
+    "district": 0.000
+  },
+
+  "TN|maryville": {
+    "state": 0.000,
+    "county": 0.000,
+    "city": 0.000,
+    "district": 0.000
+  },
+
+  "TN|alcoa": {
+    "state": 0.000,
+    "county": 0.000,
+    "city": 0.000,
+    "district": 0.000
+  },
+
+  "NY|new york": {
+    "state": 0.000,
+    "county": 0.000,
+    "city": 0.000,
+    "district": 0.000
+  },
+
+  "GA|atlanta": {
+    "state": 0.000,
+    "county": 0.000,
+    "city": 0.000,
+    "district": 0.000
+  },
+
+  "IL|chicago": {
+    "state": 0.000,
+    "county": 0.000,
+    "city": 0.000,
+    "district": 0.000
+  }
+}

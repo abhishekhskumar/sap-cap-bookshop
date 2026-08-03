@@ -1,0 +1,48 @@
+{
+  "documentId": "8505389282.pdf",
+  "canonicalVendorKey": "SYSTEMSSOURCE",
+  "canonicalVendorName": "SYSTEMS SOURCE INC",
+  "vendorKeySource": "asset",
+  "vendorKeyNote": null,
+  "processedAt": "2026-08-03T04:22:51.655Z",
+  "stage": "docai",
+  "invoiceNumber": "413296-30",
+  "documentDate": "2024-09-05",
+  "invoiceMode": "non_construction",
+  "jurisdiction": {
+    "state": "WA",
+    "postalCode": "98033",
+    "city": "KIRKLAND"
+  },
+  "financials": {
+    "invoiceNetTotal": 37317.51,
+    "invoiceGrossTotal": 37317.51,
+    "vendorTaxAmount": null,
+    "proposedAccrualAmount": null,
+    "taxAmountDifference": null
+  },
+  "taxOutcome": {
+    "chargeabilityStatus": "VENDOR_TAX_UNKNOWN",
+    "accrualStatus": "UNAVAILABLE",
+    "systemRate": null,
+    "invoiceEffectiveRate": null,
+    "taxRateDifference": null,
+    "exemptLinesPresent": false
+  },
+  "corrections": {
+    "headerFieldsCorrected": 0,
+    "headerFieldsFlagged": 0,
+    "correctedFieldNames": [],
+    "flaggedFieldNames": [],
+    "lineItemCorrectionCount": 0,
+    "correctionActions": []
+  },
+  "taxabilityFlags": {
+    "totalLines": 1,
+    "taxableLines": 0,
+    "exemptLines": 0,
+    "uncertainLines": 1
+  },
+  "freightVerdict": null,
+  "freightTaxedByVendor": null
+}

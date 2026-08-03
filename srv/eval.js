@@ -5,10 +5,13 @@ const path = require('path');
 
 // ─── Field weights ─────────────────────────────────────────────────────────────
 const FIELD_WEIGHTS = {
+  shipToAddress:        3,
   shipToCity:           3,
   shipToState:          3,
   shipToPostalCode:     3,
   shipToCounty:         3,
+  projectAddress:       3,
+  contractDetails:      3,
   grossAmount:          3,
   taxAmount:            3,
   netAmount:            3,
@@ -140,6 +143,11 @@ function normalize(fieldName, value) {
       .filter(Boolean)
       .sort()
       .join(' ');
+  }
+
+  if (fieldName === 'invoiceMode') {
+    // Canonicalize: non-construction / non_construction → nonconstruction
+    return v.toLowerCase().replace(/[-_\s]/g, '');
   }
 
   // Default: trim, lowercase, collapse whitespace

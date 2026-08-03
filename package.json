@@ -22,15 +22,11 @@
   },
   "scripts": {
     "start": "cds-serve",
-    "test": "jest --forceExit",
-    "watch-bookshop-ui": "cds watch --open bookshopui/index.html?sap-ui-xx-viewCache=false --livereload false"
+    "test": "jest --forceExit"
   },
   "private": true,
   "workspaces": [
     "app/*"
-  ],
-  "sapux": [
-    "app/bookshop-ui"
   ],
   "cds": {
     "requires": {

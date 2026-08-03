@@ -144,11 +144,17 @@
   .sbs-new{display:inline-block;background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-bottom:2px;}
   /* ── Page-level self-balance gate banner ─────────────────────────────── */
   #gateBlockBanner{position:sticky;top:38px;z-index:19;margin:0 -18px;display:none;}
+  /* ── Vendor Risk Dashboard ───────────────────────────────────────────── */
+  .vr-sort-btn{font-size:12px;padding:4px 14px;border:1px solid #d1d5db;border-radius:20px;background:#fff;color:#374151;cursor:pointer;font-weight:500;transition:all .15s;}
+  .vr-sort-btn:hover{border-color:#354a5f;color:#354a5f;}
+  .vr-sort-btn.vr-sort-active{background:#354a5f;color:#fff;border-color:#354a5f;}
+  .vr-vendor-row{cursor:pointer;transition:background .12s;}
+  .vr-vendor-row:hover td{background:#f0f7ff;}
 </style>
 </head>
 <body>
 <div class="shell"><span>&lsaquo;</span><span class="wz">Build Work Zone</span><span class="app-name">Agentic AI: USE Tax Validation and Reconciliation &#9662;</span><span class="spacer"></span><span class="icons">&#128269; &#128276; &#9671; &#128083;</span><span class="avatar">AK</span></div>
-<div class="subheader"><span class="circle">&lsaquo;</span><h1>Asset Details</h1></div>
+<div class="subheader"><span class="circle">&lsaquo;</span><h1>Asset Details</h1><button onclick="openVendorRisk()" style="margin-left:auto;background:#354a5f;color:#fff;border:none;padding:6px 18px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;letter-spacing:.02em;">&#128202; Vendor Risk Dashboard</button></div>
 <div class="container">
   <div class="left" id="detailsPanel">
     <div class="tab-content">
@@ -358,6 +364,42 @@
 <div id="ocrTooltip"></div>
 <div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
   <div class="modal"><div class="modal-head">Item Details</div><div id="modalBody"></div><div class="modal-foot"><span class="link" onclick="closeModal()">Close</span></div></div>
+</div>
+
+<!-- ── Vendor Risk Dashboard overlay ─────────────────────────────────────── -->
+<div id="vendorRiskOverlay" style="display:none;position:fixed;inset:0;z-index:200;background:#edeff0;overflow-y:auto;">
+  <div style="background:#354a5f;color:#fff;padding:0 20px;height:44px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:201;box-shadow:0 2px 8px rgba(0,0,0,.25);">
+    <button onclick="closeVendorRisk()" style="background:none;border:1px solid rgba(255,255,255,.35);color:#fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-size:12px;">&#8592; Back</button>
+    <span style="font-size:15px;font-weight:600;">Vendor Risk Dashboard</span>
+    <span style="flex:1"></span>
+    <span style="font-size:11px;color:#fbbf24;font-weight:500;">&#9888; Exposure amounts are illustrative &mdash; STZ+AI est., Vertex-authoritative pending</span>
+  </div>
+  <div style="max-width:1100px;margin:0 auto;padding:20px 24px;">
+    <div id="vendorRiskStats" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;"></div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
+      <span style="font-size:12px;color:#6b7280;font-weight:500;">Sort by:</span>
+      <button id="vrSort-exposure" class="vr-sort-btn vr-sort-active" onclick="vrSort('exposure')">Accrual Exposure &#8595;</button>
+      <button id="vrSort-count" class="vr-sort-btn" onclick="vrSort('count')">Invoice Count</button>
+      <button id="vrSort-name" class="vr-sort-btn" onclick="vrSort('name')">Vendor Name</button>
+    </div>
+    <div style="background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
+            <th style="padding:11px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Vendor</th>
+            <th style="padding:11px 8px;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Invoices</th>
+            <th style="padding:11px 8px;text-align:center;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Undercharged</th>
+            <th style="padding:11px 14px 11px 8px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Accrual Exposure <span style="color:#f59e0b;font-size:9px;text-transform:none;letter-spacing:0;font-weight:400;">est.</span></th>
+            <th style="padding:11px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Pattern</th>
+            <th style="padding:11px 12px;"></th>
+          </tr>
+        </thead>
+        <tbody id="vendorRiskBody">
+          <tr><td colspan="6" style="padding:30px;text-align:center;color:#9ca3af;">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -4345,6 +4387,146 @@ async function pickInvoice(fileName){
   }catch(e){
     statusBox.innerHTML='<div class="status-msg error">❌ Failed to load invoice: '+e.message+'</div>';
   }
+}
+
+// ── Vendor Risk Dashboard ─────────────────────────────────────────────────
+var _vrSortField='exposure',_vrSortDir=-1,_vrData=null;
+
+async function openVendorRisk(){
+  document.getElementById('vendorRiskOverlay').style.display='block';
+  document.getElementById('vendorRiskStats').innerHTML='';
+  document.getElementById('vendorRiskBody').innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:#9ca3af;"><span class="spinner" style="display:inline-block;width:14px;height:14px;border:2px solid #9ca3af;border-top-color:transparent;border-radius:50%;animation:spin 0.7s linear infinite;vertical-align:middle;margin-right:8px;"></span>Loading vendor data&hellip;</td></tr>';
+  try{
+    var res=await fetch('/api/intelligence/getVendorSummary',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    var text=await res.text(); var data;
+    try{var p=JSON.parse(text);data=typeof p.value==='string'?JSON.parse(p.value):(p.value||p);}catch(e){data=JSON.parse(text);}
+    _vrData=data;
+    _vrRenderStats(data);
+    _renderVendorRisk(data);
+  }catch(e){
+    document.getElementById('vendorRiskBody').innerHTML='<tr><td colspan="6" style="padding:20px;color:#991b1b;">&#10060; Error loading vendor data: '+escHtml(e.message)+'</td></tr>';
+  }
+}
+
+function closeVendorRisk(){
+  document.getElementById('vendorRiskOverlay').style.display='none';
+}
+
+function vrSort(field){
+  if(_vrSortField===field) _vrSortDir*=-1;
+  else{_vrSortField=field;_vrSortDir=(field==='name'?1:-1);}
+  var labels={exposure:'Accrual Exposure',count:'Invoice Count',name:'Vendor Name'};
+  ['exposure','count','name'].forEach(function(f){
+    var btn=document.getElementById('vrSort-'+f);
+    if(!btn)return;
+    var isActive=f===_vrSortField;
+    btn.className='vr-sort-btn'+(isActive?' vr-sort-active':'');
+    btn.innerHTML=labels[f]+(isActive?(_vrSortDir===-1?' &#8595;':' &#8593;'):'');
+  });
+  if(_vrData)_renderVendorRisk(_vrData);
+}
+
+function _vrRenderStats(data){
+  var v=(data&&data.vendors)||[];
+  var totExp=v.reduce(function(s,x){return s+x.totalAccrualExposure;},0);
+  var totInv=v.reduce(function(s,x){return s+x.invoiceCount;},0);
+  var uVend=v.filter(function(x){return x.breakdown.undercharged>0;}).length;
+  var misAddr=v.reduce(function(s,x){return s+x.missingJurisdictionCount;},0);
+  var el=document.getElementById('vendorRiskStats');
+  if(!el)return;
+  el.innerHTML=
+    _vrStat('Vendors',v.length,'#354a5f',null)+
+    _vrStat('Total Invoices',totInv,'#354a5f',null)+
+    _vrStat('Undercharged Vendors',uVend,uVend>0?'#991b1b':'#065f46',null)+
+    _vrStat('Est. Accrual Exposure','$'+money(totExp),totExp>0?'#991b1b':'#065f46','Illustrative — Vertex pending')+
+    (misAddr>0?_vrStat('Missing Address',misAddr+' invoice'+(misAddr!==1?'s':''),'#92400e',null):'');
+}
+
+function _vrStat(label,value,color,sub){
+  return '<div style="background:#fff;border-radius:8px;padding:12px 18px;min-width:130px;box-shadow:0 1px 3px rgba(0,0,0,.1);">'
+    +'<div style="font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#6b7280;margin-bottom:4px;">'+escHtml(label)+'</div>'
+    +'<div style="font-size:22px;font-weight:700;color:'+color+';">'+escHtml(String(value))+'</div>'
+    +(sub?'<div style="font-size:10px;color:#f59e0b;margin-top:2px;">'+escHtml(sub)+'</div>':'')
+    +'</div>';
+}
+
+function _renderVendorRisk(data){
+  var vendors=(data&&data.vendors)||[];
+  var tbody=document.getElementById('vendorRiskBody');
+  if(!vendors.length){
+    tbody.innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:#9ca3af;">No invoice results in store yet — process some invoices first.</td></tr>';
+    return;
+  }
+  var sorted=vendors.slice().sort(function(a,b){
+    if(_vrSortField==='name') return _vrSortDir*a.canonicalVendorName.localeCompare(b.canonicalVendorName);
+    var av=_vrSortField==='count'?a.invoiceCount:a.totalAccrualExposure;
+    var bv=_vrSortField==='count'?b.invoiceCount:b.totalAccrualExposure;
+    return _vrSortDir*((av||0)-(bv||0));
+  });
+  var html='';
+  sorted.forEach(function(v){
+    var b=v.breakdown||{};
+    var dot=b.undercharged>0&&b.undercharged===v.invoiceCount?'&#128308;':
+            b.accurate>0&&b.accurate===v.invoiceCount?'&#128994;':
+            b.overcharged>0&&b.overcharged===v.invoiceCount?'&#128993;':
+            (b.unavailable+b.vendorTaxUnknown)===v.invoiceCount?'&#9898;':'&#128993;';
+    var exp=v.totalAccrualExposure>0?'$'+money(v.totalAccrualExposure):'—';
+    var uRate=b.undercharged>0?(b.undercharged+' of '+v.invoiceCount):'—';
+    var key=escHtml(v.canonicalVendorKey);
+    html+='<tr class="vr-vendor-row" onclick="vrToggle(\''+key+'\')" data-key="'+key+'" style="border-top:1px solid #f0f4f8;">';
+    html+='<td style="padding:10px 14px;font-weight:600;white-space:nowrap;">'+dot+' '+escHtml(v.canonicalVendorName)+'</td>';
+    html+='<td style="padding:10px 8px;text-align:center;">'+v.invoiceCount+'</td>';
+    html+='<td style="padding:10px 8px;text-align:center;color:'+(b.undercharged>0?'#991b1b':'#9ca3af')+';">'+uRate+'</td>';
+    html+='<td style="padding:10px 14px 10px 8px;text-align:right;font-family:Consolas,monospace;font-weight:700;color:'+(v.totalAccrualExposure>0?'#991b1b':'#9ca3af')+';">'+exp+'</td>';
+    html+='<td style="padding:10px 14px;font-size:12px;color:#6b7280;max-width:280px;">'+escHtml(v.patternNote||'')+'</td>';
+    html+='<td style="padding:10px 12px;text-align:center;font-size:12px;color:#9ca3af;" id="vrChevron-'+key+'">&#9654;</td>';
+    html+='</tr>';
+    html+='<tr id="vrDetail-'+key+'" style="display:none;"><td colspan="6" style="padding:0;">';
+    html+=_vrInvoiceDetail(v);
+    html+='</td></tr>';
+  });
+  tbody.innerHTML=html;
+}
+
+function vrToggle(key){
+  var detail=document.getElementById('vrDetail-'+key);
+  var chevron=document.getElementById('vrChevron-'+key);
+  if(!detail)return;
+  var opening=detail.style.display==='none';
+  document.querySelectorAll('[id^="vrDetail-"]').forEach(function(r){r.style.display='none';});
+  document.querySelectorAll('[id^="vrChevron-"]').forEach(function(c){c.innerHTML='&#9654;';});
+  if(opening){
+    detail.style.display='table-row';
+    if(chevron)chevron.innerHTML='&#9660;';
+  }
+}
+
+function _vrInvoiceDetail(v){
+  var rows='';
+  (v.invoices||[]).forEach(function(inv){
+    var s=inv.chargeabilityStatus||'UNAVAILABLE';
+    var sc={UNDERCHARGED:'#991b1b',OVERCHARGED:'#92400e',ACCURATELY_CHARGED:'#065f46',UNAVAILABLE:'#6b7280',VENDOR_TAX_UNKNOWN:'#6b7280'}[s]||'#374151';
+    var accrual=inv.proposedAccrualAmount!=null?'$'+money(inv.proposedAccrualAmount):'—';
+    var j=inv.jurisdiction||{};
+    var jStr=[j.city,j.state,j.postalCode].filter(Boolean).join(', ')||'No address recorded';
+    rows+='<tr style="border-top:1px solid #f0f4f8;">';
+    rows+='<td style="padding:7px 14px 7px 28px;font-size:12px;">'+escHtml(inv.invoiceNumber||inv.documentId||'—')+'</td>';
+    rows+='<td style="padding:7px 8px;font-size:12px;color:#6b7280;">'+(inv.documentDate||'—')+'</td>';
+    rows+='<td style="padding:7px 8px;font-size:11px;font-weight:700;color:'+sc+';">'+s.replace(/_/g,' ')+'</td>';
+    rows+='<td style="padding:7px 8px;text-align:right;font-family:Consolas,monospace;font-weight:600;color:'+sc+';">'+accrual+'</td>';
+    rows+='<td style="padding:7px 8px 7px 14px;font-size:11px;color:#9ca3af;">'+escHtml(jStr)+'</td>';
+    rows+='<td style="padding:7px 14px;font-size:10px;color:#bbb;text-transform:uppercase;">'+escHtml(inv.stage||'')+'</td>';
+    rows+='</tr>';
+  });
+  return '<table style="width:100%;font-size:12px;border-collapse:collapse;">'
+    +'<thead><tr style="background:#f1f5f9;">'
+    +'<th style="padding:6px 14px 6px 28px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Invoice #</th>'
+    +'<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Date</th>'
+    +'<th style="padding:6px 8px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Chargeability</th>'
+    +'<th style="padding:6px 8px;text-align:right;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Accrual Est.</th>'
+    +'<th style="padding:6px 8px 6px 14px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Jurisdiction</th>'
+    +'<th style="padding:6px 14px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#6b7280;">Stage</th>'
+    +'</tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
 loadInvoiceList();

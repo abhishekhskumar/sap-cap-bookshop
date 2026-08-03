@@ -31,4 +31,6 @@ service DocumentIntelligenceService @(path: '/api/intelligence') {
     taxPayload : LargeString,
     engineName : String
   ) returns String;
+
+  action getVendorSummary() returns String;
 }

@@ -67,6 +67,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     this.on('listInvoices', this._handleListInvoices);
     this.on('getInvoiceFile', this._handleGetInvoiceFile);
     this.on('calculateTaxWithEngine', this._handleCalculateTaxWithEngine);
+    this.on('getVendorSummary',       this._handleGetVendorSummary);
     await super.init();
   }
 
@@ -1097,6 +1098,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     } catch (e) {
       return JSON.stringify({ error: e.message });
     }
+  }
+
+  async _handleGetVendorSummary() {
+    return JSON.stringify(vendorStore.getSummary());
   }
 
   _computeTriggerDecision(docAIHeader) {

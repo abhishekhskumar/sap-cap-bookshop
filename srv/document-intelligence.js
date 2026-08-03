@@ -4,7 +4,13 @@ const fs = require('fs');
 const path = require('path');
 const assetData = require('./data/asset-report.json');
 
-const INVOICE_FOLDER = process.env.INVOICE_FOLDER || 'C:/Users/abhishek.hs.kumar/Accenture/Agentic AI US Use Tax - Internal team - Merged';
+function _resolveInvoiceFolder() {
+  if (process.env.INVOICE_FOLDER) return process.env.INVOICE_FOLDER;
+  const rel = path.join(__dirname, 'data', 'invoices');
+  if (fs.existsSync(rel)) return rel;
+  return 'C:/Users/abhishek.hs.kumar/Accenture/Agentic AI US Use Tax - Internal team - Merged';
+}
+const INVOICE_FOLDER = _resolveInvoiceFolder();
 let scnMapping = {};
 try { scnMapping = require('./data/scn-mapping.json'); } catch (e) { console.log('scn-mapping.json not present'); }
 let taxRates = {};
@@ -1038,6 +1044,15 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     try {
       files = fs.readdirSync(INVOICE_FOLDER);
     } catch (err) {
+      if (err.code === 'ENOENT') {
+        // Folder absent (e.g. BAS / Linux env without local PDF store) —
+        // derive list from committed asset-report.json so the invoice picker works.
+        const results = Object.keys(bySCN).map(function(scnid) {
+          const rec = (bySCN[scnid] || [])[0] || {};
+          return { scnid, fileName: scnid + '.pdf', supplierName: rec.supplierName || '', hasAssetData: true };
+        }).sort(function(a, b) { return a.scnid.localeCompare(b.scnid); });
+        return JSON.stringify(results);
+      }
       return req.error(500, `Cannot read invoice folder: ${err.message}`);
     }
     const results = files

@@ -207,7 +207,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       vertex:      vertexAdapter.calculateTax(taxPayload),
       avalara:     avalaraAdapter.calculateTax(taxPayload),
       onesource:   oneSourceAdapter.calculateTax(taxPayload),
-      salestaxzip: await salesTaxZipAdapter.calculateTax(taxPayload)
+      salestaxzip: null  // deferred to processInvoice — STZ runs once there, not twice
     };
 
     const consistencyChecks = this._runConsistencyChecks({

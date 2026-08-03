@@ -192,10 +192,6 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       apcReconciliation = { status: 'mismatch', label: 'Amounts do not reconcile with APC End', match: false, apcEnd, gross: apcGross, lineSum: apcLineSum, diff: +(apcGross - apcEnd).toFixed(2) };
     }
 
-    // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
-    lineItems = await this._classifyLineItemsUNSPSC(lineItems);
-    // AI taxability determination per line + jurisdiction — provisional, NOT authoritative tax law
-    lineItems = await this._determineTaxability(lineItems, { state: resolved.shipToState, city: resolved.shipToCity });
     // Simplified destination-based tax calc — additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(lineItems, resolved.shipToState, resolved.shipToCity);
     lineItems = taxCalc.lineItems;
@@ -226,15 +222,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       consistencyChecks, fields
     );
     const shippingTaxedByVendor = this._resolveShippingTaxed(suppressedLines, [], []);
-    const _docaiFreightLines = suppressedLines.filter(li => li.isFreight);
-    const freightTaxabilityPrediction = await this._determineFreightTaxability(
-      _docaiFreightLines,
-      { state: resolved.shipToState, city: resolved.shipToCity },
-      docAIFreightTotal > 0,
-      fobTerms
-    );
     const freightReconciliation = this._buildFreightReconciliation(
-      shippingTaxedByVendor, freightTaxabilityPrediction, docAIFreightTotal, taxEngineResults
+      shippingTaxedByVendor, null, docAIFreightTotal, taxEngineResults
     );
     const chargeabilityResult = this._buildChargeabilityStatus(taxEngineResults, vendorTaxAmount ?? null);
     const taxabilityResult    = this._buildTaxabilityStatus(apcEnd, manualAction);

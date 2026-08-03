@@ -1,17 +1,48 @@
 <mvc:View
   xmlns:mvc="sap.ui.core.mvc"
   xmlns="sap.m"
+  xmlns:l="sap.ui.layout"
   controllerName="com.sap.usetax.intelligenceui5.controller.App"
   displayBlock="true">
   <App id="app">
     <pages>
-      <Page title="{i18n>appTitle}" showNavButton="false">
+      <Page title="{i18n>appTitle}">
         <content>
-          <MessagePage
-            showHeader="false"
-            text="{i18n>appTitle}"
-            description="{i18n>shellReadyMessage}"
-            icon="sap-icon://tax-declaration"/>
+          <l:Splitter height="100%">
+
+            <!-- LEFT: search + invoice list -->
+            <VBox width="350px">
+              <SearchField
+                placeholder="Search supplier or file..."
+                liveChange="onSearchInvoices"/>
+              <List
+                id="invoiceList"
+                headerText="Invoices"
+                busy="{/busy}"
+                items="{/invoices}">
+                <StandardListItem
+                  title="{supplierName}"
+                  description="{fileName}"
+                  info="{scnid}"
+                  type="Active"
+                  press="onInvoicePress"/>
+              </List>
+            </VBox>
+
+            <!-- RIGHT: selected invoice details -->
+            <VBox class="sapUiMediumMargin">
+              <ObjectHeader
+                title="{/selected/supplierName}"
+                number="{/selected/scnid}"/>
+              <Label text="File Name"/>
+              <Text text="{/selected/fileName}"/>
+              <Label text="Supplier" class="sapUiSmallMarginTop"/>
+              <Text text="{/selected/supplierName}"/>
+              <Label text="Has Asset Data" class="sapUiSmallMarginTop"/>
+              <Text text="{/selected/hasAssetData}"/>
+            </VBox>
+
+          </l:Splitter>
         </content>
       </Page>
     </pages>

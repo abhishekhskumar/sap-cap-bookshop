@@ -417,6 +417,7 @@ var _benignFields=new Set(), _reviewFieldNames=new Set(), _correctedFieldNames=n
 var _catchCount=0; // line-item CORRECTED_AMOUNT count; set by _buildTriageBanner, read by table renderer
 var _reviewReasonMap={}; // fieldName → reason string, for inline evidence in table
 var _lastHeroN=0, _lastHeroImpact=0, _lastHeroLayerSet=[];
+var _lastReconciliation = null;
 function _humanLayersGlobal(ls){
   if(!ls||!ls.length)return 'intelligence layer';
   if(ls.length===1)return ls[0];
@@ -625,7 +626,18 @@ function _computeSelfBalance(r){
   var freight=parseFloat(r.invoiceFreightTotal||0)||0;
   var tax=r.vendorTaxAmount!=null?parseFloat(String(r.vendorTaxAmount).replace(/[^0-9.\-]/g,''))||0:0;
   var lhs=+(keepNet+freight+tax).toFixed(2);
-  var delta=+Math.abs(lhs-extractedGross).toFixed(2);
+  var gap=+(lhs-extractedGross).toFixed(2);
+  // Discriminator: when gap ≈ freight + tax, grossAmount is a pre-tax/pre-freight subtotal —
+  // the all-in comparison always yields a false failure of exactly (freight + tax).
+  // Re-compare against the taxable base (keepNet + freight). Report NOT_APPLICABLE only if
+  // that also fails to resolve within tolerance.
+  if(+Math.abs(gap-(freight+tax)).toFixed(2)<=SELF_BALANCE_TOLERANCE){
+    var taxableBase=+(keepNet+freight).toFixed(2);
+    var delta2=+Math.abs(taxableBase-extractedGross).toFixed(2);
+    if(delta2>SELF_BALANCE_TOLERANCE)return null; // NOT_APPLICABLE — subtotal field, no comparable all-in total
+    return{passes:true,lhs:taxableBase,gross:extractedGross,delta:delta2};
+  }
+  var delta=+Math.abs(gap).toFixed(2);
   return{passes:delta<=SELF_BALANCE_TOLERANCE,lhs:lhs,gross:extractedGross,delta:delta};
 }
 function disagree(values){
@@ -660,7 +672,6 @@ function _showCached(layer, data) {
 function reRunDocAI(){docaiRan=false;docaiResult=null;_statusDocAI=null;document.getElementById('docaiBtn').textContent='1. Run Doc AI Extraction';runDocAI();}
 function reRunClaude(){claudeRan=false;claudeResult=null;taxCalcRan=false;taxCalcResult=null;_statusClaude=null;document.getElementById('claudeBtn').textContent='2. Send to Claude for Audit';runClaude();}
 function reRunVision(){visionRan=false;visionResult=null;_statusVision=null;document.getElementById('visionBtn').innerHTML='3. Audit with Claude Vision <span style="font-size:11px;font-weight:400;">(beta)</span>';runVision();}
-
 async function runDocAI(){
   if(docaiRan && docaiResult){ _showCached('docai', docaiResult); return; }
   docaiBtn.disabled=true;
@@ -4321,6 +4332,94 @@ function renderIntel(data){
     });
     html+='</div></div>';
   }
+  var _recon = data.reconciliation || _lastReconciliation;
+  if (data.reconciliation) _lastReconciliation = data.reconciliation;
+  console.log('reconciliation:', _recon);
+  if(_recon&&Array.isArray(_recon.checks)){
+    var _rLblMap={
+      extractedLinesReconcileToPrintedTotal:'Extracted Lines vs Printed Total',
+      zeroValueRowRatio:                   'Zero-Value Row Ratio',
+      shipToComponentsCoherent:            'Ship-to Components Coherent',
+      taxCriticalFieldsPresent:            'Tax-Critical Fields Present',
+      taxEngineAvailable:                  'Tax Engine Available'
+    };
+    var _rLayerLabel=function(k){
+      return {vision:'Vision',claude:'Claude',docai:'Doc AI',none:'—'}[k]||escHtml(k||'—');
+    };
+    var _rChecks=_recon.checks.slice().sort(function(a,b){
+      var aSkip=a.passed===null, bSkip=b.passed===null;
+      if(aSkip!==bSkip)return aSkip?1:-1;
+      if(a.passed!==b.passed)return a.passed===true?1:-1;
+      if(a.passed===false&&b.passed===false)
+        return (a.severity==='error'?0:1)-(b.severity==='error'?0:1);
+      return 0;
+    });
+    var _rSl=_recon.suggestedLayers||{};
+    var _rLayers=Object.keys(_rSl).filter(function(k){return _rSl[k]&&_rSl[k].length;});
+    var _rFailedCount=_rChecks.filter(function(c){return c.passed===false;}).length;
+    var _rSummary;
+    if(_rFailedCount===0){
+      _rSummary='All checks passed.';
+    }else if(!_rLayers.length){
+      _rSummary=_rFailedCount+' finding'+(_rFailedCount!==1?'s':'')+' — no automated layer can address them.';
+    }else if(_rLayers.length===1){
+      var _rk=_rLayers[0];var _rn=_rSl[_rk].length;
+      _rSummary=_rn+' finding'+(_rn!==1?'s':'')+' — one '+_rLayerLabel(_rk)
+        +' pass would address all '+(_rn>1?_rn+'.':'it.');
+    }else{
+      var _rTotal=_rLayers.reduce(function(s,k){return s+_rSl[k].length;},0);
+      _rSummary=_rTotal+' finding'+(_rTotal!==1?'s':'')+' across '+_rLayers.length+' layers: '
+        +_rLayers.map(function(k){return _rLayerLabel(k)+' ('+_rSl[k].length+')';}).join(', ')+'.';
+    }
+    html+='<div class="card"><div class="card-title">Reconciliation Checks'
+      +'<span style="font-size:12px;font-weight:400;color:#555;margin-left:10px;">'
+      +escHtml(_rSummary)+'</span>'
+      +'<span style="font-size:11px;font-weight:400;color:#888;margin-left:8px;">'
+      +(_recon.passedCount||0)+'/'+(_recon.totalCount||0)+' passed</span>'
+      +'</div>';
+    html+='<div style="overflow-x:auto;"><table><thead><tr>'
+      +'<th>Check</th><th>Result</th><th>Severity</th><th>Message</th><th>Suggested Fix</th>'
+      +'</tr></thead><tbody>';
+    _rChecks.forEach(function(c){
+      var lbl=_rLblMap[c.name]||escHtml(c.name);
+      var resPill=c.passed===true
+        ?'<span class="pill pass">PASS</span>'
+        :c.passed===false
+          ?'<span class="pill fail">FAIL</span>'
+          :'<span class="pill" style="background:#f3f4f6;color:#6b7280;border:1px solid #d1d5db;">SKIPPED</span>';
+      var sevPill;
+      if(c.passed!==false||!c.severity){
+        sevPill='<span style="color:#888;">—</span>';
+      }else if(c.severity==='error'){
+        sevPill='<span class="pill flagged">error</span>';
+      }else{
+        sevPill='<span class="pill corrected">warning</span>';
+      }
+      var fixCell;
+      if(!c.suggestedLayer||c.suggestedLayer==='none'){
+        fixCell='<span style="color:#888;">—</span>';
+      }else if(c.suggestedLayer==='vision'){
+        fixCell='<span class="pill vision">Vision</span>';
+      }else if(c.suggestedLayer==='claude'){
+        fixCell='<span class="pill" style="background:#eef2ff;color:#3452d1;">Claude</span>';
+      }else if(c.suggestedLayer==='docai'){
+        fixCell='<span class="pill live">Doc AI</span>';
+      }else{
+        fixCell='<span class="pill">'+escHtml(c.suggestedLayer)+'</span>';
+      }
+      var rowBg=c.passed===false
+        ?(c.severity==='error'?'background:#fff5f5;':'background:#fff8f0;')
+        :'';
+      html+='<tr style="'+rowBg+'">'
+        +'<td style="font-weight:600;white-space:nowrap;">'+lbl+'</td>'
+        +'<td>'+resPill+'</td>'
+        +'<td>'+sevPill+'</td>'
+        +'<td style="font-size:12px;color:#444;">'+escHtml(c.message||'—')+'</td>'
+        +'<td>'+fixCell+'</td>'
+        +'</tr>';
+    });
+    html+='</tbody></table></div></div>';
+  }
   html+='<div class="cv-hero"><h2>💰 Cost vs Value</h2><p>Document AI runs on 100% of invoices (cheap, fast). Claude fires only on the risky ~20% that carry tax exposure. You pay the premium engine exactly where error is expensive.</p></div>';
   html+='<div class="card"><div style="padding:14px;"><div class="worlds">';
   html+='<div class="world docai"><h5>SAP Document AI</h5>Fast structured OCR on every invoice. ~80–95% accurate. Scanned docs, tables, high volume.</div>';
@@ -4363,7 +4462,7 @@ function renderIntel(data){
     +'</summary>'
     +_iHeroBody
     +'</details>';
-  document.getElementById('intelContent').innerHTML=_iHero+'<details style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Extraction Intelligence Report</summary>'+html+'</details>';
+  document.getElementById('intelContent').innerHTML=_iHero+'<details open style="border-top:1px solid #e5e7eb;"><summary style="padding:7px 14px 5px;font-size:11px;color:#6b7280;cursor:pointer;font-weight:600;">Extraction Intelligence Report</summary>'+html+'</details>';
   updateROI();
 }
 

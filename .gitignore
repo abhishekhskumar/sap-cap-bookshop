@@ -28,3 +28,6 @@ cds-out.log
 cds-err.log
 cds-watch.log
 *.log
+
+# Local extraction dumps — contain real invoice data
+srv/shape.json

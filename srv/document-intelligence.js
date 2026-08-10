@@ -1,4 +1,4 @@
-require('dotenv').config();
+﻿﻿require('dotenv').config();
 const cds = require('@sap/cds');
 const fs = require('fs');
 const path = require('path');
@@ -20,6 +20,8 @@ const avalaraAdapter     = require('./adapters/avalara-adapter');
 const oneSourceAdapter   = require('./adapters/onesource-adapter');
 const salesTaxZipAdapter = require('./adapters/alternative-adapter');
 const vendorStore        = require('./adapters/vendor-store');
+const { reconcile }      = require('./lib/reconcile');
+const { resolveAmount }  = require('./lib/resolve-amount');
 
 const TAX_CRITICAL_FIELDS = new Set([
   'shipToAddress','shipToCity','shipToState','shipToPostalCode',
@@ -93,6 +95,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
 
     let keepLines = [], suppressedLines = [], docAIHeader = {}, routedTo = schemaType;
     let docAIFreightTotal = 0, docAIInvoiceNetTotal = 0, docAIVendorTax = null;
+    let _docAIAmountSources = [];   // hoisted so _runConsistencyChecks can read it outside the try block
     try {
       const docAI = await this._callDocumentAI(invoiceBase64, mediaType, schemaType);
       keepLines = docAI.keepLines || [];
@@ -102,10 +105,11 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       docAIFreightTotal = docAI.invoiceFreightTotal || 0;
       docAIInvoiceNetTotal = docAI.invoiceNetTotal || 0;
       docAIVendorTax = docAI.vendorTaxAmount ?? null;
+      _docAIAmountSources = docAI.amountSources || [];
     } catch (err) {
       LOG.warn('extractDocAI: Doc AI failed:', err.message);
     }
-    // Normalize to valid binary modes — 'auto' and any unknown value fall through to non_construction.
+    // Normalize to valid binary modes â€” 'auto' and any unknown value fall through to non_construction.
     // Without this, a DOX failure leaves routedTo='auto' which is truthy and bypasses the
     // || 'non_construction' guard in processInvoice, silently using the non-construction chain.
     if (routedTo !== 'construction') routedTo = 'non_construction';
@@ -148,7 +152,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           boundingBox: li.coordinates || null,
           provenance: 'extracted',
           freightProvenance: docAIFreightTotal > 0 ? 'inferred' : 'extracted',
-          freightProvenanceDetail: docAIFreightTotal > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined,
+          freightProvenanceDetail: docAIFreightTotal > 0 ? 'distributed: freightTotal Ã— (lineNet / sumKeepNet)' : undefined,
           itemAmountProvenance: (li.freightAmount || 0) > 0 ? 'inferred' : 'extracted',
           itemAmountProvenanceDetail: (li.freightAmount || 0) > 0 ? 'derived: netAmount + distributedFreight' : undefined
         };
@@ -191,17 +195,17 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     if (apcEnd == null) {
       apcReconciliation = { status: 'no-apc', label: 'APC End not in Asset Report', match: null };
     } else if (apcWithin(apcGross, apcEnd) && apcWithin(apcLineSum, apcGross)) {
-      apcReconciliation = { status: 'all-good', label: 'All Good — line items, gross, and APC End match', match: true, apcEnd, gross: apcGross, lineSum: apcLineSum };
+      apcReconciliation = { status: 'all-good', label: 'All Good â€” line items, gross, and APC End match', match: true, apcEnd, gross: apcGross, lineSum: apcLineSum };
     } else if (apcWithin(apcGross, apcEnd)) {
       apcReconciliation = { status: 'gross-apc-match', label: 'Gross matches APC End', match: true, apcEnd, gross: apcGross, lineSum: apcLineSum };
     } else {
       apcReconciliation = { status: 'mismatch', label: 'Amounts do not reconcile with APC End', match: false, apcEnd, gross: apcGross, lineSum: apcLineSum, diff: +(apcGross - apcEnd).toFixed(2) };
     }
 
-    // Simplified destination-based tax calc — additive, illustrative only
+    // Simplified destination-based tax calc â€” additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(lineItems, resolved.shipToState, resolved.shipToCity);
     lineItems = taxCalc.lineItems;
-    // Pluggable tax-engine adapter pattern — builds engine-agnostic payload, runs both adapters
+    // Pluggable tax-engine adapter pattern â€” builds engine-agnostic payload, runs both adapters
     const fobTerms = this._extractFobTerms(fullText);
     const taxPayload = this._buildTaxPayload(lineItems,
       { state: resolved.shipToState, city: resolved.shipToCity, postalCode: resolved.shipToPostalCode },
@@ -213,7 +217,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       vertex:      vertexAdapter.calculateTax(taxPayload),
       avalara:     avalaraAdapter.calculateTax(taxPayload),
       onesource:   oneSourceAdapter.calculateTax(taxPayload),
-      salestaxzip: null  // deferred to processInvoice — STZ runs once there, not twice
+      salestaxzip: null  // deferred to processInvoice â€” STZ runs once there, not twice
     };
 
     const consistencyChecks = this._runConsistencyChecks({
@@ -221,7 +225,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceGrossTotal, invoiceFreightTotal: docAIFreightTotal,
       purchaseOrderNumber: inv.purchaseOrderNumber,
       shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode,
-      documentId
+      documentId,
+      amountSources: _docAIAmountSources
     });
     const manualAction = this._determineManualAction(
       { documentId, shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode, lineItems },
@@ -245,7 +250,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       }));
     } catch (e) { LOG.warn('vendor-store write failed (docai):', e.message); }
 
-    return JSON.stringify({
+    const result = {
       stage: 'docai', documentId, invoiceMode: routedTo,
       ...canonicalVendor,
       fields, lineItems, suppressedLines: suppressedLines.map(function(li){ return Object.assign({}, li, { suppressedBy: 'docai' }); }),
@@ -272,8 +277,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         invoiceFreightTotal: { provenance: 'extracted' },
         shipToResolution: { provenance: 'inferred', provenanceDetail: resolved.resolvedFromCaption || 'priority-ordered address block selection' }
       },
-      processingTimeMs: Date.now() - startTime
-    });
+      processingTimeMs: Date.now() - startTime,
+      amountSources: _docAIAmountSources
+    };
+    try { result.reconciliation = reconcile(result); }
+    catch (e) { result.reconciliation = { error: e.message, checks: [] }; }
+    return JSON.stringify(result);
   }
 
   async _handleProcessInvoice(req) {
@@ -281,9 +290,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const LOG = cds.log('intelligence');
     const startTime = Date.now();
 
-    // ── Parse Doc AI result passed from client (Doc AI already ran in extractDocAI) ──
+    // â”€â”€ Parse Doc AI result passed from client (Doc AI already ran in extractDocAI) â”€â”€
     // JSON.parse(null) and JSON.parse("null") both return null without throwing, so the try/catch
-    // below is not sufficient — guard explicitly after parsing.
+    // below is not sufficient â€” guard explicitly after parsing.
     let docAIParsed;
     try {
       docAIParsed = JSON.parse(docAIResultStr);
@@ -291,8 +300,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       return req.error(400, 'docAIResult is missing or invalid JSON');
     }
     if (!docAIParsed || typeof docAIParsed !== 'object') {
-      LOG.warn(`processInvoice ${documentId}: docAIResult resolved to null — extractDocAI may not have completed or returned an error`);
-      return req.error(400, `processInvoice: docAIResult is null for ${documentId} — run extractDocAI successfully before calling processInvoice`);
+      LOG.warn(`processInvoice ${documentId}: docAIResult resolved to null â€” extractDocAI may not have completed or returned an error`);
+      return req.error(400, `processInvoice: docAIResult is null for ${documentId} â€” run extractDocAI successfully before calling processInvoice`);
     }
     const keepLines          = docAIParsed.keepLines || [];
     const docAISuppressedLines = docAIParsed.suppressedLines || [];
@@ -301,19 +310,19 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     const docAIFreightTotal  = docAIParsed.invoiceFreightTotal || 0;
     const docAIVendorTax     = docAIParsed.vendorTaxAmount ?? null;
     const fullText           = docAIParsed.fullText || '';
-    LOG.info(`Processing invoice ${documentId} (${routedTo}) — ${Object.keys(docAIHeader).length} header fields, ${keepLines.length} keep lines from client-supplied Doc AI result`);
+    LOG.info(`Processing invoice ${documentId} (${routedTo}) â€” ${Object.keys(docAIHeader).length} header fields, ${keepLines.length} keep lines from client-supplied Doc AI result`);
 
     const docAILineItems = keepLines; // Claude audits billable lines only
 
-    // ── Stage 3: Trigger decision ──────────────────────────────
+    // â”€â”€ Stage 3: Trigger decision â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // skipAudit=true: front-end detected self-balance; bypass extraction audit, run STZ+taxability only.
     const trigger = skipAudit
-      ? { triggered: false, reasons: ['skipAudit — self-balance path; extraction audit bypassed'], taxCriticalChecked: 0 }
+      ? { triggered: false, reasons: ['skipAudit â€” self-balance path; extraction audit bypassed'], taxCriticalChecked: 0 }
       : this._computeTriggerDecision(docAIHeader);
 
     let intelligence;
     if (!trigger.triggered) {
-      LOG.info('Trigger: SKIPPED Claude — Doc AI confident (cost saved)');
+      LOG.info('Trigger: SKIPPED Claude â€” Doc AI confident (cost saved)');
       intelligence = {
         fields: Object.entries(docAIHeader).map(([k, v]) => ({
           fieldName: k,
@@ -321,7 +330,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           correctValue: v.value || '',
           verdict: 'VERIFIED',
           confidence: v.confidence || 0,
-          reason: 'Doc AI high-confidence — auto-verified, Claude not called (cost saved)',
+          reason: 'Doc AI high-confidence â€” auto-verified, Claude not called (cost saved)',
           taxCritical: false,
           page: v.page || 1,
           boundingBox: v.coordinates || null,
@@ -329,14 +338,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         })),
         lineItems: routedTo === 'construction'
           ? [Object.assign(this._consolidateConstruction(keepLines, docAIFreightTotal, docAIHeader), {
-              lineVerdict: 'VERIFIED', lineReason: 'Auto-verified — Doc AI confident', lineConfidence: 95
+              lineVerdict: 'VERIFIED', lineReason: 'Auto-verified â€” Doc AI confident', lineConfidence: 95
             })]
           : keepLines.map(li => ({
               unspsc: '', description: li.description || '',
               amount: li.amount, netAmount: li.amount,
               itemAmount: li.itemAmount != null ? li.itemAmount : (li.amount || 0),
               freightAmount: li.freightAmount || 0,
-              lineVerdict: 'VERIFIED', lineReason: 'Auto-verified — Doc AI confident',
+              lineVerdict: 'VERIFIED', lineReason: 'Auto-verified â€” Doc AI confident',
               lineConfidence: 95, lineAction: li.lineAction || 'KEEP',
               lineType: li.lineType || null, page: li.page || 1,
               provenance: 'extracted', freightProvenance: 'extracted'
@@ -344,7 +353,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         lineItemCorrections: [],
         consistencyChecks: [],
         freightTotal: '',
-        summary: 'All Doc AI tax-critical fields met confidence threshold — Claude audit skipped (cost optimised).',
+        summary: 'All Doc AI tax-critical fields met confidence threshold â€” Claude audit skipped (cost optimised).',
         overallConfidence: 95,
         invoiceMode: routedTo,
         lineItemsTotal: 0
@@ -392,7 +401,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         return Object.assign({}, li, {
           isFreight: true,
           lineVerdict: 'SUPPRESSED',
-          lineReason: li.lineReason || 'Freight/shipping — distributed across line items'
+          lineReason: li.lineReason || 'Freight/shipping â€” distributed across line items'
         });
       }
       return li;
@@ -419,7 +428,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         freightAmount: freight,
         itemAmount: +(net + freight).toFixed(2),
         freightProvenance: _effectiveClaudeFreight > 0 ? 'inferred' : 'extracted',
-        freightProvenanceDetail: _effectiveClaudeFreight > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined,
+        freightProvenanceDetail: _effectiveClaudeFreight > 0 ? 'distributed: freightTotal Ã— (lineNet / sumKeepNet)' : undefined,
         itemAmountProvenance: freight > 0 ? 'inferred' : (li.provenance || 'extracted'),
         itemAmountProvenanceDetail: freight > 0 ? 'derived: netAmount + distributedFreight' : undefined
       });
@@ -478,7 +487,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           fieldName: k, docAIValue: dv, correctValue: dv,
           confidence: docH ? (docH.confidence || 0) : 0,
           verdict: 'VERIFIED',
-          reason: docH ? 'Not escalated to Claude — Doc AI value accepted' : 'Not extracted by Doc AI',
+          reason: docH ? 'Not escalated to Claude â€” Doc AI value accepted' : 'Not extracted by Doc AI',
           taxCritical: TAX_CRITICAL_FIELDS.has(k), routedTo: 'docai',
           boundingBox: docH ? (docH.coordinates || null) : null,
           page: docH ? (docH.page || 1) : 1,
@@ -543,7 +552,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     if (apcEnd == null) {
       apcReconciliation = { status: 'no-apc', label: 'APC End not in Asset Report', match: null };
     } else if (apcWithin(apcGross, apcEnd) && apcWithin(apcLineSum, apcGross)) {
-      apcReconciliation = { status: 'all-good', label: 'All Good — line items, gross, and APC End match', match: true, apcEnd, gross: apcGross, lineSum: apcLineSum };
+      apcReconciliation = { status: 'all-good', label: 'All Good â€” line items, gross, and APC End match', match: true, apcEnd, gross: apcGross, lineSum: apcLineSum };
     } else if (apcWithin(apcGross, apcEnd)) {
       apcReconciliation = { status: 'gross-apc-match', label: 'Gross matches APC End', match: true, apcEnd, gross: apcGross, lineSum: apcLineSum };
     } else {
@@ -560,7 +569,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       ...(docAISuppressedLines || []).filter(li => li.isFreight),
       ...claudeSuppressedItems.filter(li => li.isFreight)
     ];
-    // UNSPSC and freight taxability are independent — run in parallel to save one round-trip
+    // UNSPSC and freight taxability are independent â€” run in parallel to save one round-trip
     const [_enrichedLineItems, freightTaxabilityPrediction] = await Promise.all([
       this._classifyLineItemsUNSPSC(claudeLineItems),
       this._determineFreightTaxability(
@@ -571,9 +580,9 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       )
     ]);
     claudeLineItems = _enrichedLineItems;
-    // Taxability prompt includes UNSPSC codes — must run after UNSPSC completes
+    // Taxability prompt includes UNSPSC codes â€” must run after UNSPSC completes
     claudeLineItems = await this._determineTaxability(claudeLineItems, { state: resolved.shipToState, city: resolved.shipToCity });
-    // Simplified destination-based tax calc — additive, illustrative only
+    // Simplified destination-based tax calc â€” additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(claudeLineItems, resolved.shipToState, resolved.shipToCity);
     claudeLineItems = taxCalc.lineItems;
     // Pluggable tax-engine adapter pattern
@@ -595,7 +604,8 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       invoiceGrossTotal, invoiceFreightTotal,
       purchaseOrderNumber: inv.purchaseOrderNumber,
       shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode,
-      documentId
+      documentId,
+      amountSources: docAIParsed.amountSources || []
     });
     const manualAction = this._determineManualAction(
       { documentId, shipToCity: resolved.shipToCity, shipToPostalCode: resolved.shipToPostalCode, lineItems: claudeLineItems },
@@ -787,13 +797,13 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         visionSuppressedLines.push(Object.assign({}, li, {
           isFreight: isFreightVerified || li.isFreight,
           suppressReason: isFreightVerified
-            ? 'Freight/shipping — distributed across line items'
+            ? 'Freight/shipping â€” distributed across line items'
             : (li.lineReason || 'suppressed by Vision'),
           provenance: 'extracted', suppressedBy: 'vision'
         }));
       } else if (amt === 0) {
         visionSuppressedLines.push(Object.assign({}, li, {
-          suppressReason: 'zero amount — not billable',
+          suppressReason: 'zero amount â€” not billable',
           lineVerdict: 'SUPPRESSED',
           provenance: 'extracted', suppressedBy: 'vision'
         }));
@@ -824,7 +834,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     });
     const mergedSuppressedLines = Array.from(suppMap.values());
 
-    // ── Vision header freight — mirrors Doc AI's headerFreightAmt in _normalizeDocAI ──
+    // â”€â”€ Vision header freight â€” mirrors Doc AI's headerFreightAmt in _normalizeDocAI â”€â”€
     const _visionShippingHdrField = (intelligence.fields || []).find(function(f){ return f.fieldName === 'shippingCostHeader'; });
     const _rawVisionHdrFreight = (_visionShippingHdrField
       ? (_visionShippingHdrField.correctValue || _visionShippingHdrField.docAIValue || '')
@@ -861,7 +871,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       const consolidated = this._consolidateConstruction(constructionKeepLines, visionFreightTotal, visionHeaderProxy);
       lineItems = [Object.assign({}, consolidated, {
         lineVerdict:   'VERIFIED',
-        lineReason:    'Construction invoice — consolidated per FD/CAPM category 5',
+        lineReason:    'Construction invoice â€” consolidated per FD/CAPM category 5',
         lineConfidence: 95,
         provenance:    'extracted',
         freightProvenance: 'extracted'
@@ -871,7 +881,13 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       const visionLineFreightTotal = +(visionSuppressedLines
         .filter(function(li){ return li.isFreight; })
         .reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0)).toFixed(2);
-      const visionFreightTotal = +(visionLineFreightTotal + visionHdrFreightAmt).toFixed(2);
+      // Use resolveAmount so Vision freight follows the same line-items-over-header-field
+      // precedence as DocAI freight.  Both sources represent the same physical charge when
+      // Vision emits a freight line item AND a shippingCostHeader field.
+      const _visionFreightResolved = resolveAmount(visionLineFreightTotal, visionHdrFreightAmt, {
+        label: 'freight', precedence: 'line', documentId
+      });
+      const visionFreightTotal = +_visionFreightResolved.value.toFixed(2);
       _visionPayloadFreight = visionFreightTotal; // carry to _buildTaxPayload totals
       const visionSumKeepNet = visionKeepLines.reduce(function(s, li){ return s + (parseFloat(li.amount) || 0); }, 0);
       let visionFreightAlloc = 0, visionLgIdx = 0, visionLgAmt = -Infinity;
@@ -886,10 +902,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
           netAmount: net, vertexTaxAmount: null, freightTaxAmount: null,
           provenance: 'extracted',
           freightProvenance: visionFreightTotal > 0 ? 'inferred' : 'extracted',
-          freightProvenanceDetail: visionFreightTotal > 0 ? 'distributed: freightTotal × (lineNet / sumKeepNet)' : undefined
+          freightProvenanceDetail: visionFreightTotal > 0 ? 'distributed: freightTotal Ã— (lineNet / sumKeepNet)' : undefined
         });
       });
-      // Rounding remainder → largest line (mirrors Doc AI)
+      // Rounding remainder â†’ largest line (mirrors Doc AI)
       const visionFreightRem = +(visionFreightTotal - visionFreightAlloc).toFixed(2);
       if (visionFreightRem !== 0 && lineItems.length > 0) {
         const lg = lineItems[visionLgIdx];
@@ -897,12 +913,12 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         lg.itemAmount = +((parseFloat(lg.amount) || 0) + lg.freightAmount).toFixed(2);
       }
     }
-    // AI-suggested UNSPSC classification — additive, does not change amounts or verdicts
+    // AI-suggested UNSPSC classification â€” additive, does not change amounts or verdicts
     lineItems = await this._classifyLineItemsUNSPSC(lineItems);
-    // AI taxability determination per line + jurisdiction — provisional, NOT authoritative tax law
+    // AI taxability determination per line + jurisdiction â€” provisional, NOT authoritative tax law
     const _getVF = name => { const f = fields.find(x => x.fieldName === name); return (f && (f.correctValue || f.docAIValue) || '').trim(); };
     lineItems = await this._determineTaxability(lineItems, { state: _getVF('shipToState'), city: _getVF('shipToCity') });
-    // Simplified destination-based tax calc — additive, illustrative only
+    // Simplified destination-based tax calc â€” additive, illustrative only
     const taxCalc = this._computeSimplifiedTax(lineItems, _getVF('shipToState'), _getVF('shipToCity'));
     lineItems = taxCalc.lineItems;
 
@@ -929,15 +945,15 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       ? this._tallyLineItemsDocAIvsVision(docaiLines, lineItems)
       : null;
 
-    LOG.info(`Vision audit complete in ${Date.now() - startTime}ms — ${fields.length} fields, ${lineItems.length} lines${lineItemTally ? ', tally: '+lineItemTally.agreeCount+'/'+lineItemTally.totalLines+' agree' : ''}`);
+    LOG.info(`Vision audit complete in ${Date.now() - startTime}ms â€” ${fields.length} fields, ${lineItems.length} lines${lineItemTally ? ', tally: '+lineItemTally.agreeCount+'/'+lineItemTally.totalLines+' agree' : ''}`);
     LOG.info('VISION_HANDLER_RETURN stats=%j fields=%d lineItems=%d', { total: fields.length, verified, corrected, flagged }, fields.length, lineItems.length);
 
-    // ── Part A: pass through Vision's own lineItemCorrections (e.g. SUPPRESSED_BREAKUP from backup receipts).
-    // ── Part B: reconstruct CORRECTED_AMOUNT entries by comparing Vision keep-line amounts against the
+    // â”€â”€ Part A: pass through Vision's own lineItemCorrections (e.g. SUPPRESSED_BREAKUP from backup receipts).
+    // â”€â”€ Part B: reconstruct CORRECTED_AMOUNT entries by comparing Vision keep-line amounts against the
     //    original Doc AI amounts. Vision's prompt marks corrected lines VERIFIED (no prior to compare),
     //    so detection requires amount comparison, not lineVerdict filter.
     //    Baseline priority: docAILineItems (original Doc AI amounts, carried in Claude's result)
-    //    → keepLines (original amounts, from a DocAI-only prevResult) → lineItems (last resort).
+    //    â†’ keepLines (original amounts, from a DocAI-only prevResult) â†’ lineItems (last resort).
     const _docaiBaseLines = prevResult
       ? (prevResult.docAILineItems || prevResult.keepLines || prevResult.lineItems || [])
       : [];
@@ -949,7 +965,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         const vAmt = parseFloat(vli.amount) || 0;
         const dAmt = parseFloat(dli.amount) || 0;
         if (Math.abs(vAmt - dAmt) < 0.005) return;
-        // Description guard: first significant word (≥3 chars) must match; skips misaligned pairs.
+        // Description guard: first significant word (â‰¥3 chars) must match; skips misaligned pairs.
         const _vW = (vli.description || '').trim().toLowerCase().split(/\s+/).filter(function(w){ return w.length >= 3; })[0] || '';
         const _dW = (dli.description || '').trim().toLowerCase().split(/\s+/).filter(function(w){ return w.length >= 3; })[0] || '';
         if (_vW && _dW && _vW !== _dW) return;
@@ -1045,7 +1061,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       files = fs.readdirSync(INVOICE_FOLDER);
     } catch (err) {
       if (err.code === 'ENOENT') {
-        // Folder absent (e.g. BAS / Linux env without local PDF store) —
+        // Folder absent (e.g. BAS / Linux env without local PDF store) â€”
         // derive list from committed asset-report.json so the invoice picker works.
         const results = Object.keys(bySCN).map(function(scnid) {
           const rec = (bySCN[scnid] || [])[0] || {};
@@ -1174,7 +1190,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     if (!tokenRes.ok) throw new Error(`Doc AI token failed: ${tokenRes.status}`);
     const { access_token } = await tokenRes.json();
 
-    // ── Pass 1: Indexing schema — classify document type ───────
+    // â”€â”€ Pass 1: Indexing schema â€” classify document type â”€â”€â”€â”€â”€â”€â”€
     const indexingSchemaId = process.env.DOC_AI_SCHEMA_INDEXING;
     const pass1 = await this._runDocAIJob(base64, mediaType, indexingSchemaId, access_token, apiUrl);
 
@@ -1186,7 +1202,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     console.log('CLASSIFICATION from index documentType:', indexDocumentType, '-> mode:', invoiceMode);
     LOG.info(`Doc AI routing: classified as ${invoiceMode} (raw documentType: "${indexDocumentType}")`);
 
-    // ── Pass 2: Routed schema — full extraction ─────────────────
+    // â”€â”€ Pass 2: Routed schema â€” full extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     const routedSchemaId = invoiceMode === 'construction'
       ? process.env.DOC_AI_SCHEMA_CONSTRUCTION
       : process.env.DOC_AI_SCHEMA_NON_CONSTRUCTION;
@@ -1277,7 +1293,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       );
       console.log('CLASSIFIED AS:', {lineAction, lineType, isFreight});
       // Anchor the row's bounding box to the materialDescription field's coordinates.
-      // lineAction / lineType / pageType are virtual classification fields — their boxes
+      // lineAction / lineType / pageType are virtual classification fields â€” their boxes
       // are zero-sized {x:0,y:0,w:0,h:0} and must not be used (they'd draw at the origin).
       const descF = fieldArray.find(function(f){ return f.name === 'materialDescription'; });
       const rawCoords = descF && descF.coordinates;
@@ -1302,16 +1318,16 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       };
     }).filter(function(li){ return li.description || li.amount != null; });
 
-    // ── Header-level freight (e.g. shippingCostHeader field) ──
+    // â”€â”€ Header-level freight (e.g. shippingCostHeader field) â”€â”€
     const rawHdrFreight = (headerFields.shippingCostHeader?.value || '').trim();
     const headerFreightAmt = rawHdrFreight && rawHdrFreight !== 'None'
       ? (parseFloat(rawHdrFreight.replace(/[^0-9.\-]/g,'')) || 0) : 0;
 
-    // ── Split on lineAction + secondary freight check on KEEP lines ────────────
+    // â”€â”€ Split on lineAction + secondary freight check on KEEP lines â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     // Freight classification follows the line's SUBJECT, not its financial framing.
-    // "Deposit for Estimated Shipping and Travel" → subject is shipping → isFreight=true,
+    // "Deposit for Estimated Shipping and Travel" â†’ subject is shipping â†’ isFreight=true,
     // even if Doc AI's model marked the line KEEP because of the "Deposit" primary noun.
-    // Regex matches explicit "for [freight subject]" patterns only — avoids over-suppressing
+    // Regex matches explicit "for [freight subject]" patterns only â€” avoids over-suppressing
     // lines where "shipping" appears as an incidental modifier (e.g. "shipping dock install").
     const _DOCAI_FREIGHT_FOR_RE = /\bfor\s+(estimated\s+)?(travel\s+and\s+(shipping|freight)|(shipping|freight)(\s+and\s+travel)?|delivery|handling)\b/i;
 
@@ -1330,10 +1346,10 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         );
         const isFreight = isShipping;
         const suppressReason = isShipping
-          ? 'Freight/shipping — distributed across line items'
+          ? 'Freight/shipping â€” distributed across line items'
           : isTax
-            ? 'Tax line — excluded (handled in tax layer)'
-            : 'PO/PR/reference — not billable';
+            ? 'Tax line â€” excluded (handled in tax layer)'
+            : 'PO/PR/reference â€” not billable';
         // docAITaxAmount > 0 on a freight line is an observable Yes signal (DOX extracted it from the invoice)
         const freightTaxed = isFreight
           ? (li.docAITaxAmount != null && parseFloat(li.docAITaxAmount) > 0 ? true : null)
@@ -1345,7 +1361,7 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
         const d = li.description || '';
         if (_DOCAI_FREIGHT_FOR_RE.test(d)) {
           suppressedLines.push(Object.assign({}, li, {
-            suppressReason: 'Freight/shipping — distributed across line items',
+            suppressReason: 'Freight/shipping â€” distributed across line items',
             isFreight: true, isTax: false,
             freightTaxed: (li.docAITaxAmount != null && parseFloat(li.docAITaxAmount) > 0) ? true : null
           }));
@@ -1355,25 +1371,62 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
       }
     });
 
-    // ── Vendor tax: header taxAmount field first, else sum of suppressed tax lines ──
+    // â”€â”€ Vendor tax: header taxAmount field first, else sum of suppressed tax lines â”€â”€
     const rawHdrTax = (headerFields.taxAmount?.value || headerFields.taxAmountHeader?.value || '').trim();
     const hdrTaxAmt = rawHdrTax && rawHdrTax !== 'None'
       ? (parseFloat(rawHdrTax.replace(/[^0-9.\-]/g,'')) || null) : null;
     const lineTaxSum = suppressedLines
       .filter(function(li){ return li.isTax && li.amount != null; })
       .reduce(function(s, li){ return s + li.amount; }, 0);
-    const vendorTaxAmount = hdrTaxAmt != null ? hdrTaxAmt : (lineTaxSum > 0 ? +lineTaxSum.toFixed(2) : null);
+// Resolve tax from header field and suppressed tax-line sum by precedence.
+    // The header taxAmount is the document's stated total and is authoritative; individual
+    // tax line rows may miss some components.  resolveAmount logs when both are populated
+    // and warns when they disagree materially.  Preserve null when both sources are absent
+    // (null signals "no tax on this invoice" to downstream layers).
+    const _taxResolved = (hdrTaxAmt != null || lineTaxSum > 0)
+      ? resolveAmount(+lineTaxSum.toFixed(2), hdrTaxAmt != null ? hdrTaxAmt : 0, {
+          label: 'tax', precedence: 'header'
+        })
+      : null;
+    const vendorTaxAmount = _taxResolved ? (_taxResolved.value || null) : null;
 
-    // ── Freight total = suppressed line freight + header freight field ──
+    // â”€â”€ Freight total = suppressed line freight + header freight field â”€â”€
     const lineFreightTotal = +(suppressedLines
       .filter(function(li){ return li.isFreight && li.amount != null; })
       .reduce(function(s, li){ return s + li.amount; }, 0)).toFixed(2);
-    const freightTotal = +(lineFreightTotal + headerFreightAmt).toFixed(2);
+// Resolve freight from line-item sum and header field by precedence.
+    // Line items are the atomic source; shippingCostHeader is a document-level aggregate
+    // that also appears on each subaccount page on multi-block invoices.  Summing the two
+    // double-counts (or triple-counts) when they represent the same physical charge.
+    // resolveAmount prefers the line-item sum and warns when the sources disagree.
+    const _freightResolved = resolveAmount(lineFreightTotal, headerFreightAmt, {
+      label: 'freight', precedence: 'line'
+    });
+    const freightTotal = +_freightResolved.value.toFixed(2);
 
-    const sumKeepNet = keepLinesRaw.reduce(function(s, li){ return s + (li.amount || 0); }, 0);
+    // Deduplicate keepLinesRaw before freight allocation.
+    // Doc AI sometimes emits the same row twice â€” once from the line-item table body and
+    // once from a section-level totals row (e.g. an "Equipment Rollup" row that appears in
+    // both the detailed schedule and the G702 summary).  Both instances have lineAction=KEEP
+    // and a non-freight description, so both pass the filter above unchanged.  Without
+    // deduplication _consolidateConstruction sums both, producing 2Ã— the true net.
+    // Key: description + amount + pageType + page â€” first occurrence wins.
+    const _dedupKeys = new Set();
+    const keepLinesDeduped = keepLinesRaw.filter(function(li) {
+      const k = (li.description || '') + '|' + (li.amount != null ? li.amount : '') +
+                '|' + (li.pageType || 'cont') + '|' + (li.page || 0);
+      if (_dedupKeys.has(k)) {
+        console.log('NORMALIZE: deduped duplicate keep line:', li.description, li.amount);
+        return false;
+      }
+      _dedupKeys.add(k);
+      return true;
+    });
+
+    const sumKeepNet = keepLinesDeduped.reduce(function(s, li){ return s + (li.amount || 0); }, 0);
 
     let freightAllocated = 0, largestIdx = 0, largestAmt = -Infinity;
-    const keepLines = keepLinesRaw.map(function(li, idx) {
+    const keepLines = keepLinesDeduped.map(function(li, idx) {
       const net = li.amount || 0;
       if (net > largestAmt) { largestAmt = net; largestIdx = idx; }
       const rawFreight = sumKeepNet > 0 ? freightTotal * (net / sumKeepNet) : 0;
@@ -1396,7 +1449,14 @@ module.exports = class DocumentIntelligenceService extends cds.ApplicationServic
     console.log('NORMALIZE: headerFreight=%d lineFreight=%d freightTotal=%d lineTax=%d vendorTax=%s net=%d',
       headerFreightAmt, lineFreightTotal, freightTotal, lineTaxSum, vendorTaxAmount, invoiceNetTotal);
 
-    return { headerFields, keepLines, suppressedLines, invoiceNetTotal, invoiceFreightTotal, vendorTaxAmount, raw };
+// Collect resolution descriptors for both sources that were populated, so
+    // _runConsistencyChecks and reconcile() can surface any conflict in the UI.
+    const _amountSources = [_freightResolved, _taxResolved].filter(function(r) {
+      return r && r.lineTotal > 0 && r.headerAmt > 0;
+    });
+
+    return { headerFields, keepLines, suppressedLines, invoiceNetTotal, invoiceFreightTotal, vendorTaxAmount, raw,
+             amountSources: _amountSources };
   }
 
   async _auditInvoice(fullText, docAIHeader, docAILineItems, schemaType) {
@@ -1484,7 +1544,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
     if (!tokenRes.ok) throw new Error(`AI Core token failed: ${tokenRes.status}`);
     const { access_token } = await tokenRes.json();
 
-    // Build one image_url content block per page — multi-page invoice support
+    // Build one image_url content block per page â€” multi-page invoice support
     const pageImageBlocks = imagePages.map(b64 => ({
       type: 'image_url',
       image_url: { url: `data:image/png;base64,${b64}` }
@@ -1575,7 +1635,7 @@ Now audit the entire invoice. Return ONLY the JSON described above.`;
   }
 
   _buildVisionPrompt(schemaType) {
-    return `You are auditing an invoice by reading its image directly. You are the primary extraction source — there is no prior OCR output to compare against. Extract and verify the COMPLETE field set from what you see in the image, matching the same coverage as a full Doc AI + Claude text audit.
+    return `You are auditing an invoice by reading its image directly. You are the primary extraction source â€” there is no prior OCR output to compare against. Extract and verify the COMPLETE field set from what you see in the image, matching the same coverage as a full Doc AI + Claude text audit.
 
 For each field:
 1. Extract the value you can read from the image. Set docAIValue = correctValue (you are the sole extractor).
@@ -1584,117 +1644,117 @@ For each field:
 4. routedTo = "claude-vision" on EVERY field without exception.
 5. If a field is genuinely absent from the invoice, output it with correctValue = "" and verdict = FLAGGED.
 
-ADDRESS PRIORITY (determines tax jurisdiction — critical):
-CRITICAL — VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NEVER a valid ship-to, even if it is the only address on the invoice. The supplier address appears in the letterhead, logo block, "From:", "Remit to:", or sender section — this is where the VENDOR is located. For USE tax, ship-to is where ACCENTURE received or used the goods/services. If an address appears alongside or beneath the vendor company name (e.g. top-left letterhead, remit-to box), treat it as the VENDOR address and exclude it from ship-to selection. Detection: if the street/city in a candidate block matches the vendor's letterhead location, reject it.
+ADDRESS PRIORITY (determines tax jurisdiction â€” critical):
+CRITICAL â€” VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NEVER a valid ship-to, even if it is the only address on the invoice. The supplier address appears in the letterhead, logo block, "From:", "Remit to:", or sender section â€” this is where the VENDOR is located. For USE tax, ship-to is where ACCENTURE received or used the goods/services. If an address appears alongside or beneath the vendor company name (e.g. top-left letterhead, remit-to box), treat it as the VENDOR address and exclude it from ship-to selection. Detection: if the street/city in a candidate block matches the vendor's letterhead location, reject it.
 
-EXPLICIT SHIP-TO BLOCK — READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED. Do NOT override an explicit Ship-To with project or contract addresses — those are fallbacks only.
+EXPLICIT SHIP-TO BLOCK â€” READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED. Do NOT override an explicit Ship-To with project or contract addresses â€” those are fallbacks only.
 
-CRITICAL — BILL-TO ADDRESS EXCLUSION: A "Bill To:", "Billing Address", "Accounts Payable", or any block labeled as a billing or payment-routing address (including Accenture's own billing address, e.g. 500 W Madison, Chicago) is NEVER a valid ship-to, even as a last resort. Bill-to addresses route invoice payment, not goods/services delivery. Detection: if a block is labeled "Bill To", "Billing", "Remit Payment To", "Accounts Payable", or "AP", reject it for shipTo.
+CRITICAL â€” BILL-TO ADDRESS EXCLUSION: A "Bill To:", "Billing Address", "Accounts Payable", or any block labeled as a billing or payment-routing address (including Accenture's own billing address, e.g. 500 W Madison, Chicago) is NEVER a valid ship-to, even as a last resort. Bill-to addresses route invoice payment, not goods/services delivery. Detection: if a block is labeled "Bill To", "Billing", "Remit Payment To", "Accounts Payable", or "AP", reject it for shipTo.
 
 Use the priority chain below ONLY when no labeled Ship-To block is present:
 - NON-CONSTRUCTION fallback: Project Address > Contract/Delivery Address
 - CONSTRUCTION fallback: Project Address > Contract/Delivery Address
 
-If NONE of the above valid blocks are present (only vendor address and/or bill-to/billing address exists): set shipToAddress/City/State/PostalCode each to "Manual Action Required — no valid delivery address found" and mark each FLAGGED. Do NOT use a bill-to or billing address as a fallback — it is not the delivery location.
+If NONE of the above valid blocks are present (only vendor address and/or bill-to/billing address exists): set shipToAddress/City/State/PostalCode each to "Manual Action Required â€” no valid delivery address found" and mark each FLAGGED. Do NOT use a bill-to or billing address as a fallback â€” it is not the delivery location.
 
 Identify ALL address blocks visible on the invoice (Ship-to, Project, Contract, Bill-To/Accenture, Vendor/Sender) and extract each one separately. The tax-jurisdiction fields (shipToAddress/City/State/PostalCode) must come from the winning block per the priority above.
 
 taxCritical = true for: shipToAddress, shipToCity, shipToState, shipToPostalCode, grossAmount, taxAmount, taxAmountHeader.
 taxCritical = false for all other fields.
 
-REQUIRED FIELDS — extract every one, in this order:
+REQUIRED FIELDS â€” extract every one, in this order:
 
 Core invoice header:
-  vendorName              — legal entity issuing the invoice (not a remit-to processor)
-  invoiceNumber           — invoice / document number
-  documentDate            — invoice date, MM/DD/YYYY
-  purchaseOrderNumber     — PO number (Accenture POs: 10-digit, start with 6)
-  ${schemaType === 'construction' ? `grossAmount             — CONSTRUCTION: the "Work Completed This Period" TOTAL, and only that. Source: Continuation Sheet Column E "THIS PERIOD" — the total row, by priority: (1) GRAND TOTAL/GRAND TOTALS row in Col A, else (2) TOTAL/TOTALS, else (3) SUBTOTALS; use the LAST such occurrence. If a Sworn Statement page is present, use the value printed in the "THIS PAYMENT" column on the "TOTAL LABOR & MATERIAL TO COMPLETE" row (or GRAND TOTAL/TOTAL row) — read that printed cell VERBATIM; NEVER re-sum individual contractor/subcontractor rows to derive or validate this total. NEVER source grossAmount from: Contract Price, Contract Amount, Total to Date, Amount Paid, Balance Due, Previous Payments, Current Payment Due, or Amount Certified — even if those are larger or more prominent. NEVER use an individual numbered line row — only the total/grand-total/subtotal row. NEVER recompute the total by summing rows — the printed total-row value is authoritative. 0.00 is valid. If no THIS PERIOD column exists, return NULL — never substitute another column.` : `grossAmount             — total amount due on the invoice (strip currency symbols)`}
-  netAmount               — subtotal before tax (strip currency symbols; empty string if not shown)
-  subTotal                — line items subtotal if printed separately (empty string if not shown)
-  taxAmount               — tax dollar amount from a header tax field; null if not present as a header
-  taxAmountHeader         — same as taxAmount if printed as a header-level field; null if absent
-  taxPercentage           — tax rate printed on the invoice as a percentage (e.g. "5.5"); null if absent
-  totalTaxableAmount      — taxable base amount if explicitly printed; null if absent
-  shippingCostHeader      — freight/shipping amount from a header field (not a line item); null if absent
-  workCompletedThisPeriodTotal — for construction invoices: current-period total from sworn statement or application; null if not a construction invoice or not present
+  vendorName              â€” legal entity issuing the invoice (not a remit-to processor)
+  invoiceNumber           â€” invoice / document number
+  documentDate            â€” invoice date, MM/DD/YYYY
+  purchaseOrderNumber     â€” PO number (Accenture POs: 10-digit, start with 6)
+  ${schemaType === 'construction' ? `grossAmount             â€” CONSTRUCTION: the "Work Completed This Period" TOTAL, and only that. Source: Continuation Sheet Column E "THIS PERIOD" â€” the total row, by priority: (1) GRAND TOTAL/GRAND TOTALS row in Col A, else (2) TOTAL/TOTALS, else (3) SUBTOTALS; use the LAST such occurrence. If a Sworn Statement page is present, use the value printed in the "THIS PAYMENT" column on the "TOTAL LABOR & MATERIAL TO COMPLETE" row (or GRAND TOTAL/TOTAL row) â€” read that printed cell VERBATIM; NEVER re-sum individual contractor/subcontractor rows to derive or validate this total. NEVER source grossAmount from: Contract Price, Contract Amount, Total to Date, Amount Paid, Balance Due, Previous Payments, Current Payment Due, or Amount Certified â€” even if those are larger or more prominent. NEVER use an individual numbered line row â€” only the total/grand-total/subtotal row. NEVER recompute the total by summing rows â€” the printed total-row value is authoritative. 0.00 is valid. If no THIS PERIOD column exists, return NULL â€” never substitute another column.` : `grossAmount             â€” total amount due on the invoice (strip currency symbols)`}
+  netAmount               â€” subtotal before tax (strip currency symbols; empty string if not shown)
+  subTotal                â€” line items subtotal if printed separately (empty string if not shown)
+  taxAmount               â€” tax dollar amount from a header tax field; null if not present as a header
+  taxAmountHeader         â€” same as taxAmount if printed as a header-level field; null if absent
+  taxPercentage           â€” tax rate printed on the invoice as a percentage (e.g. "5.5"); null if absent
+  totalTaxableAmount      â€” taxable base amount if explicitly printed; null if absent
+  shippingCostHeader      â€” freight/shipping amount from a header field (not a line item); null if absent
+  workCompletedThisPeriodTotal â€” for construction invoices: current-period total from sworn statement or application; null if not a construction invoice or not present
 
 Winning tax-jurisdiction address (per priority rule above):
-  shipToAddress           — street address of the winning block
-  shipToCity              — city of the winning block
-  shipToState             — two-letter state abbreviation
-  shipToPostalCode        — ZIP code
+  shipToAddress           â€” street address of the winning block
+  shipToCity              â€” city of the winning block
+  shipToState             â€” two-letter state abbreviation
+  shipToPostalCode        â€” ZIP code
 
-Project address block — valid ONLY if a dedicated block with BOTH street AND city is visible (ZIP optional, not required):
-  projectAddress          — street address of the project block; NULL if no street+city block exists
-  projectAddressCity      — derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
-  projectAddressState     — derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
-  projectAddressPostalCode — derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
-DERIVATION RULE: projectAddressCity / projectAddressState / projectAddressCounty / projectAddressPostalCode are NOT independent fields — they derive strictly from projectAddress. If projectAddress is NULL, ALL of these MUST be NULL. Never extract them from any other source.
-PROJECT NAME ≠ PROJECT ADDRESS: A project/contract/job name line that includes a location (e.g. "Accenture: Denver 999 18th Street Ste. 900S") is a PROJECT NAME, not an address block. Do NOT populate projectAddress* from it. Instead: route the location city (e.g. "Denver") to contractDetailsCity and the street (if any street follows) to contractDetails.
+Project address block â€” valid ONLY if a dedicated block with BOTH street AND city is visible (ZIP optional, not required):
+  projectAddress          â€” street address of the project block; NULL if no street+city block exists
+  projectAddressCity      â€” derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
+  projectAddressState     â€” derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
+  projectAddressPostalCode â€” derives ONLY from a valid projectAddress block; NULL if projectAddress is NULL
+DERIVATION RULE: projectAddressCity / projectAddressState / projectAddressCounty / projectAddressPostalCode are NOT independent fields â€” they derive strictly from projectAddress. If projectAddress is NULL, ALL of these MUST be NULL. Never extract them from any other source.
+PROJECT NAME â‰  PROJECT ADDRESS: A project/contract/job name line that includes a location (e.g. "Accenture: Denver 999 18th Street Ste. 900S") is a PROJECT NAME, not an address block. Do NOT populate projectAddress* from it. Instead: route the location city (e.g. "Denver") to contractDetailsCity and the street (if any street follows) to contractDetails.
 
 Contract/delivery address block (extract if visible):
-  contractDetails         — street address
-  contractDetailsCity     — city (also receives the location from a project name line when no valid projectAddress block exists)
-  contractDetailsPostalcode — ZIP (no state field for this block)
+  contractDetails         â€” street address
+  contractDetailsCity     â€” city (also receives the location from a project name line when no valid projectAddress block exists)
+  contractDetailsPostalcode â€” ZIP (no state field for this block)
 
-Bill-To / Accenture address block (extract if visible — for reference only, never the tax address):
-  accentureAddress        — street address
-  accentureAddressCity    — city
-  accentureAddressState   — state
-  accentureAddressPostalCode — ZIP
+Bill-To / Accenture address block (extract if visible â€” for reference only, never the tax address):
+  accentureAddress        â€” street address
+  accentureAddressCity    â€” city
+  accentureAddressState   â€” state
+  accentureAddressPostalCode â€” ZIP
 
 Other:
-  country                 — country of the delivery/project address (e.g. "US")
+  country                 â€” country of the delivery/project address (e.g. "US")
 
-LINE ITEMS — extract line items ONLY from the INVOICE LINE-ITEM TABLE (the structured grid of description/quantity/amount rows, typically in the body of the invoice). Continuation pages that have no column header keep the same columns as the first detail page; the current-period / rightmost money column still applies. Negative amounts: a leading "-" OR parentheses (e.g. "(500)") both mean negative.
+LINE ITEMS â€” extract line items ONLY from the INVOICE LINE-ITEM TABLE (the structured grid of description/quantity/amount rows, typically in the body of the invoice). Continuation pages that have no column header keep the same columns as the first detail page; the current-period / rightmost money column still applies. Negative amounts: a leading "-" OR parentheses (e.g. "(500)") both mean negative.
 
-CRITICAL — TOTALS SECTION EXCLUSION: Do NOT emit rows from the invoice TOTALS SECTION or SUMMARY AREA (the block at the bottom typically showing Subtotal, Shipping, Tax/GST/VAT, and Grand Total) as line items. These are header-level summary aggregates, not rows in the line-item table, and they are already captured as header fields (shippingCostHeader, taxAmount, grossAmount). If you output "Shipping $3,632.99" from the totals block as a line item, it will be wrongly suppressed as freight and permanently lost from the gross — so do NOT emit it. Extract only from the actual line-item table rows.
+CRITICAL â€” TOTALS SECTION EXCLUSION: Do NOT emit rows from the invoice TOTALS SECTION or SUMMARY AREA (the block at the bottom typically showing Subtotal, Shipping, Tax/GST/VAT, and Grand Total) as line items. These are header-level summary aggregates, not rows in the line-item table, and they are already captured as header fields (shippingCostHeader, taxAmount, grossAmount). If you output "Shipping $3,632.99" from the totals block as a line item, it will be wrongly suppressed as freight and permanently lost from the gross â€” so do NOT emit it. Extract only from the actual line-item table rows.
 
-SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE (identified by its description). Never suppress a line item because its amount matches a shippingCostHeader, a totals-section shipping figure, a tax total, or any header/aggregate value — those are captured elsewhere and must not drive line-item suppression.
+SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE (identified by its description). Never suppress a line item because its amount matches a shippingCostHeader, a totals-section shipping figure, a tax total, or any header/aggregate value â€” those are captured elsewhere and must not drive line-item suppression.
 
 For EACH line item include "page": <N> (1-based page number the row was read from) for auditability.
 
-NON-INVOICE PAGES — do NOT output any line items (not even with lineVerdict="SUPPRESSED") from the following page types. These pages contribute nothing to billable extraction:
+NON-INVOICE PAGES â€” do NOT output any line items (not even with lineVerdict="SUPPRESSED") from the following page types. These pages contribute nothing to billable extraction:
 - Email / cover-letter pages: pages whose content starts with or prominently contains From:, To:, Sent:, Cc:, Subject:, RE:, FW:, "Hello", "Thank you", or "please find attached / please see attached"
 - Purchase Order / Ariba / SAP / SAP Business Network / Buy Now pages
 - Waiver / Lien / Affidavit pages
 - SUMMARY / QUICK GLANCE / Breakdown / Backup / Subaccount / CHARGES & CREDITS / TAXES FEES & SURCHARGES pages
 
-ROW-LEVEL SUPPRESSION — within valid invoice pages, set lineVerdict="SUPPRESSED" for:
+ROW-LEVEL SUPPRESSION â€” within valid invoice pages, set lineVerdict="SUPPRESSED" for:
 - "Reimbursables Breakdown This Period" rows and their associated total row
 - Sub-rows labeled "Included in Total above" or equivalent
 - Subtotal / Total / Total This Phase / Total Reimbursables / Balance rows (any row that aggregates other rows)
-- FREIGHT LINES (isFreight=true, lineVerdict="SUPPRESSED", lineReason="Freight/shipping — distributed across line items") — set isFreight=true when the line's SUBJECT is transportation or delivery of goods. Classification follows the subject, not financial framing ("deposit", "prepayment", "credit" do not override the subject):
-  · DIRECT FREIGHT: description IS a freight service as its primary subject — "Shipping", "Freight", "Delivery", "Handling", "Cartage", "Courier", "Air Freight", "Shipping & Handling". Match these as primary/core descriptors, NOT naive substrings. "shipping dock installation" is NOT freight (subject is dock installation); "travel case for equipment" is NOT freight (subject is the case).
-  · DEPOSIT/PREPAYMENT FOR FREIGHT: when a line is a deposit or advance whose purpose (subject) is freight/shipping, classify by the subject. Examples: "Deposit for Estimated Travel and Shipping" → subject is Travel-and-Shipping → isFreight=true; "50% deposit for Estimated Shipping and Travel" → isFreight=true; "Deposit for Equipment" → subject is Equipment → isFreight=false.
-  · COMBINED TRAVEL-AND-SHIPPING: a description naming travel and shipping together as a unit ("Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight — isFreight=true. "Travel" or "Travel Expenses" ALONE (no freight keyword) is NOT freight.
-  · AMBIGUOUS: if genuinely uncertain whether the subject is freight or a billable service, set isFreight=false, lineVerdict="FLAGGED".
-  FREIGHT TAX DETECTION — when isFreight=true, ALSO report freightTaxed (true | false | null) by reading what the image shows:
-  · freightTaxed=true ONLY when the image OBSERVABLY shows tax applied to this shipping/freight charge: (1) a tax amount in a tax column on the freight line itself; (2) a separate tax line in the line-item table whose description explicitly covers freight (e.g. "Tax on Shipping", "Freight Tax", "GST on Freight"); (3) a visible invoice note or label on the page explicitly stating this freight charge is subject to tax.
-  · freightTaxed=false ONLY when the image OBSERVABLY shows no tax on the shipping charge — e.g. a note visible in the image states "Freight exempt" or "Shipping not taxable", or the tax line's stated base demonstrably excludes freight, or the freight line has no tax entry while goods lines do.
-  · freightTaxed=null when tax on freight CANNOT BE DETERMINED from what you can read in the image. Use null when the image shows a freight line and a tax total but no visible link; when you could only infer from arithmetic that freight might be included; or when the image simply does not address freight taxability.
-  HONESTY RULE: if only arithmetic (effective-rate arithmetic suggesting freight might be in the base) distinguishes the cases, return freightTaxed=null — that is inference, not an observable image fact. The downstream system will categorise it Uncertain. Never fabricate freightTaxed=true from totals patterns.
+- FREIGHT LINES (isFreight=true, lineVerdict="SUPPRESSED", lineReason="Freight/shipping â€” distributed across line items") â€” set isFreight=true when the line's SUBJECT is transportation or delivery of goods. Classification follows the subject, not financial framing ("deposit", "prepayment", "credit" do not override the subject):
+  Â· DIRECT FREIGHT: description IS a freight service as its primary subject â€” "Shipping", "Freight", "Delivery", "Handling", "Cartage", "Courier", "Air Freight", "Shipping & Handling". Match these as primary/core descriptors, NOT naive substrings. "shipping dock installation" is NOT freight (subject is dock installation); "travel case for equipment" is NOT freight (subject is the case).
+  Â· DEPOSIT/PREPAYMENT FOR FREIGHT: when a line is a deposit or advance whose purpose (subject) is freight/shipping, classify by the subject. Examples: "Deposit for Estimated Travel and Shipping" â†’ subject is Travel-and-Shipping â†’ isFreight=true; "50% deposit for Estimated Shipping and Travel" â†’ isFreight=true; "Deposit for Equipment" â†’ subject is Equipment â†’ isFreight=false.
+  Â· COMBINED TRAVEL-AND-SHIPPING: a description naming travel and shipping together as a unit ("Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight â€” isFreight=true. "Travel" or "Travel Expenses" ALONE (no freight keyword) is NOT freight.
+  Â· AMBIGUOUS: if genuinely uncertain whether the subject is freight or a billable service, set isFreight=false, lineVerdict="FLAGGED".
+  FREIGHT TAX DETECTION â€” when isFreight=true, ALSO report freightTaxed (true | false | null) by reading what the image shows:
+  Â· freightTaxed=true ONLY when the image OBSERVABLY shows tax applied to this shipping/freight charge: (1) a tax amount in a tax column on the freight line itself; (2) a separate tax line in the line-item table whose description explicitly covers freight (e.g. "Tax on Shipping", "Freight Tax", "GST on Freight"); (3) a visible invoice note or label on the page explicitly stating this freight charge is subject to tax.
+  Â· freightTaxed=false ONLY when the image OBSERVABLY shows no tax on the shipping charge â€” e.g. a note visible in the image states "Freight exempt" or "Shipping not taxable", or the tax line's stated base demonstrably excludes freight, or the freight line has no tax entry while goods lines do.
+  Â· freightTaxed=null when tax on freight CANNOT BE DETERMINED from what you can read in the image. Use null when the image shows a freight line and a tax total but no visible link; when you could only infer from arithmetic that freight might be included; or when the image simply does not address freight taxability.
+  HONESTY RULE: if only arithmetic (effective-rate arithmetic suggesting freight might be in the base) distinguishes the cases, return freightTaxed=null â€” that is inference, not an observable image fact. The downstream system will categorise it Uncertain. Never fabricate freightTaxed=true from totals patterns.
   freightTaxed is only meaningful on freight lines (isFreight=true). Set freightTaxed=null on every non-freight line.
-- Tax lines (Sales Tax / Tax / VAT / GST or similar) — isFreight=false, lineReason="Tax line — handled in tax layer". This applies even in Credit or reversal rows.
-- REIMBURSABLE BACKUP RECEIPTS: An expense invoice may show per-person/vendor reimbursable SUMMARY LINES (a person's name or consulting-firm name paired with a dollar total, e.g. "Sheehan, David $114.00", "THE ROCK BROOK CONSULTING GROUP PA $2,930.00", "Ivanoff $128.80") alongside individual backup-detail receipts for each person (subway fare, bus/transit ticket, taxi, Uber/Lyft, parking, hotel night, meal, mileage, gas, toll — often with a date prefix, e.g. "1/8/2025 Subway to Penn Station NYC $2.90"). KEEP the per-person/vendor SUMMARY LINES — they are real billable lines (lineVerdict="VERIFIED"). SUPPRESS the individual backup receipts only: lineVerdict="SUPPRESSED", lineReason="Backup receipt detail — rolls into reimbursable summary; suppressed to prevent double-counting". Emit a lineItemCorrections entry for each suppressed receipt: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt for [person/vendor name] — individual transaction rolled into summary total", oldValue=[amount as string], newValue="0". CRITICAL DISTINCTIONS — (a) Named person/vendor lines (Rock Brook, Sheehan, Ivanoff) are ALWAYS summary lines — NEVER suppress them as backup receipts. (b) "Total Reimbursables" / "Total Expenses" aggregate lines are already caught by the Subtotal rule above — do NOT use them as the summary-line anchor here. (c) Individual transit/expense receipts are NOT PO/PR references — do not classify them under the PO/PR rule. ONLY suppress when a matching named-person summary line exists for that person's expenses; if no clear summary exists, keep lines as VERIFIED.
-- PO / Ariba reference rows with no real billable amount — lineReason="PO/reference — not billable". NOTE: individual travel/expense receipts (subway fare, taxi, hotel, meal, transit) are NOT PO/PR references — classify them under REIMBURSABLE BACKUP RECEIPTS above.
-- Zero-amount lines (amount=0, blank, or $0.00) — lineReason="zero amount — not billable". Includes document/drawing/title rows and cover-sheet entries.
+- Tax lines (Sales Tax / Tax / VAT / GST or similar) â€” isFreight=false, lineReason="Tax line â€” handled in tax layer". This applies even in Credit or reversal rows.
+- REIMBURSABLE BACKUP RECEIPTS: An expense invoice may show per-person/vendor reimbursable SUMMARY LINES (a person's name or consulting-firm name paired with a dollar total, e.g. "Sheehan, David $114.00", "THE ROCK BROOK CONSULTING GROUP PA $2,930.00", "Ivanoff $128.80") alongside individual backup-detail receipts for each person (subway fare, bus/transit ticket, taxi, Uber/Lyft, parking, hotel night, meal, mileage, gas, toll â€” often with a date prefix, e.g. "1/8/2025 Subway to Penn Station NYC $2.90"). KEEP the per-person/vendor SUMMARY LINES â€” they are real billable lines (lineVerdict="VERIFIED"). SUPPRESS the individual backup receipts only: lineVerdict="SUPPRESSED", lineReason="Backup receipt detail â€” rolls into reimbursable summary; suppressed to prevent double-counting". Emit a lineItemCorrections entry for each suppressed receipt: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt for [person/vendor name] â€” individual transaction rolled into summary total", oldValue=[amount as string], newValue="0". CRITICAL DISTINCTIONS â€” (a) Named person/vendor lines (Rock Brook, Sheehan, Ivanoff) are ALWAYS summary lines â€” NEVER suppress them as backup receipts. (b) "Total Reimbursables" / "Total Expenses" aggregate lines are already caught by the Subtotal rule above â€” do NOT use them as the summary-line anchor here. (c) Individual transit/expense receipts are NOT PO/PR references â€” do not classify them under the PO/PR rule. ONLY suppress when a matching named-person summary line exists for that person's expenses; if no clear summary exists, keep lines as VERIFIED.
+- PO / Ariba reference rows with no real billable amount â€” lineReason="PO/reference â€” not billable". NOTE: individual travel/expense receipts (subway fare, taxi, hotel, meal, transit) are NOT PO/PR references â€” classify them under REIMBURSABLE BACKUP RECEIPTS above.
+- Zero-amount lines (amount=0, blank, or $0.00) â€” lineReason="zero amount â€” not billable". Includes document/drawing/title rows and cover-sheet entries.
 
-KEEP exceptions — these are billable and must NOT be suppressed:
+KEEP exceptions â€” these are billable and must NOT be suppressed:
 - Standalone "Travel" or "Travel Expenses" lines (no freight/shipping component)
-- A delivery-only service line (where the service IS the delivery, e.g. "Software Delivery Service") — keep if no freight keyword applies as the primary descriptor
+- A delivery-only service line (where the service IS the delivery, e.g. "Software Delivery Service") â€” keep if no freight keyword applies as the primary descriptor
 
-${schemaType === 'construction' ? `LINE ITEM OUTPUT MODE — CONSTRUCTION: Extract EACH individual current-period line item separately (PCO lines, cost codes, sworn statement lines, etc.). Do NOT consolidate into a single line — the backend code will sum and consolidate them. For each line output: description (from the description column), amount (from the current-period / "Work Completed This Period" column — use sworn statement amounts if a Sworn Statement page is present), lineVerdict="VERIFIED". Exclude freight, tax, subtotal/total, and zero-amount rows (suppress per rules above). Also extract workCompletedThisPeriodTotal as a header field.` : `Real billable lines (non-zero amount, not any suppression category above): lineVerdict="VERIFIED" (or FLAGGED if unreadable).`}
+${schemaType === 'construction' ? `LINE ITEM OUTPUT MODE â€” CONSTRUCTION: Extract EACH individual current-period line item separately (PCO lines, cost codes, sworn statement lines, etc.). Do NOT consolidate into a single line â€” the backend code will sum and consolidate them. For each line output: description (from the description column), amount (from the current-period / "Work Completed This Period" column â€” use sworn statement amounts if a Sworn Statement page is present), lineVerdict="VERIFIED". Exclude freight, tax, subtotal/total, and zero-amount rows (suppress per rules above). Also extract workCompletedThisPeriodTotal as a header field.` : `Real billable lines (non-zero amount, not any suppression category above): lineVerdict="VERIFIED" (or FLAGGED if unreadable).`}
 
-CONSISTENCY CHECKS — report these:
+CONSISTENCY CHECKS â€” report these:
 - Do line item amounts sum to the invoice subtotal/gross?
-- If tax rate and tax amount are both visible, does base × rate ≈ tax amount?
+- If tax rate and tax amount are both visible, does base Ã— rate â‰ˆ tax amount?
 - Is ship-to state consistent with city and ZIP?
 
-FIELD SOURCE ANCHOR (scoped fields only — grossAmount, taxAmount, shippingCostHeader, shipToAddress, shipToCity, shipToState, shipToPostalCode): add a "source" key — a short plain-text string naming the page and labeled element you observed to arrive at correctValue. Format: "Page N · [labeled element/column/row]" with " (visual estimate)" appended, since your input is image-based (e.g. "Page 1 · invoice header · Ship To block (visual estimate)", "Page 5 · Sworn Statement · THIS PAYMENT column · TOTAL LABOR row (visual estimate)"). HONESTY RULE: if you cannot confidently identify the specific page and element from the image, return source: null — NEVER fabricate a page number or row label. For all other fields, set source: null.
+FIELD SOURCE ANCHOR (scoped fields only â€” grossAmount, taxAmount, shippingCostHeader, shipToAddress, shipToCity, shipToState, shipToPostalCode): add a "source" key â€” a short plain-text string naming the page and labeled element you observed to arrive at correctValue. Format: "Page N Â· [labeled element/column/row]" with " (visual estimate)" appended, since your input is image-based (e.g. "Page 1 Â· invoice header Â· Ship To block (visual estimate)", "Page 5 Â· Sworn Statement Â· THIS PAYMENT column Â· TOTAL LABOR row (visual estimate)"). HONESTY RULE: if you cannot confidently identify the specific page and element from the image, return source: null â€” NEVER fabricate a page number or row label. For all other fields, set source: null.
 
-Return ONLY this JSON — no markdown fences, no prose before or after:
+Return ONLY this JSON â€” no markdown fences, no prose before or after:
 {
   "invoiceMode": "non_construction",
   "invoiceTaxRate": 0,
@@ -1719,58 +1779,58 @@ Return ONLY this JSON — no markdown fences, no prose before or after:
   _buildAuditPrompt(schemaType) {
     return `You are an invoice extraction intelligence auditor for US USE Tax processing. SAP Document AI extracted fields from an invoice at roughly 80-95% accuracy. Your job is to audit EVERY field and EVERY line item INDEPENDENTLY against the raw invoice text, correct errors, and provide a specific per-field verdict with explicit evidence.
 
-CORE INSTRUCTION — INDEPENDENT PER-FIELD AUDIT:
+CORE INSTRUCTION â€” INDEPENDENT PER-FIELD AUDIT:
 Process each header field one at a time, in isolation. For each field:
   1. Locate the relevant section(s) of the invoice text that contain that field's value.
   2. Compare Doc AI's extracted value against what is actually printed there.
-  3. Assign a verdict (VERIFIED / CORRECTED / FLAGGED) based on that field's own evidence alone — do NOT let another field's verdict influence this one.
+  3. Assign a verdict (VERIFIED / CORRECTED / FLAGGED) based on that field's own evidence alone â€” do NOT let another field's verdict influence this one.
   4. Write a reason that is SPECIFIC to this field: name (a) what Doc AI produced, (b) which block/section of the invoice you found the value in, and (c) what the correct value is and why.
      Good example: "Doc AI read 'Chicago' from the Bill-To block; per non-construction address priority, the tax jurisdiction is the Ship-To block which shows 'Houston TX 77002'."
-     Bad example: "Verified against invoice." — too vague, rejected.
+     Bad example: "Verified against invoice." â€” too vague, rejected.
   5. Set confidence (0-100) based on clarity: 95-100 = value printed unambiguously; 75-90 = clearly present but minor formatting variation; 50-74 = inferred or partially legible; <50 = guessed or contradictory.
 
 FIELD VERDICTS:
-- VERIFIED: Doc AI value is factually correct — matches the right source block and passes domain rules. Use VERIFIED even if the extracted text includes extra lines (name, attn, full address block) as long as the data itself is correct and from the right source.
-- CORRECTED: Doc AI value is factually WRONG — wrong source block (e.g. Bill-To used instead of Ship-To), wrong city/state/amount, misread characters, or missing when clearly present in the invoice. The error must be a FACTUAL mistake, not a formatting or completeness preference.
+- VERIFIED: Doc AI value is factually correct â€” matches the right source block and passes domain rules. Use VERIFIED even if the extracted text includes extra lines (name, attn, full address block) as long as the data itself is correct and from the right source.
+- CORRECTED: Doc AI value is factually WRONG â€” wrong source block (e.g. Bill-To used instead of Ship-To), wrong city/state/amount, misread characters, or missing when clearly present in the invoice. The error must be a FACTUAL mistake, not a formatting or completeness preference.
 - FLAGGED: value is ambiguous, contradictory, or unconfirmable; needs human review
 
-WHAT IS NOT A CORRECTION — do NOT set verdict=CORRECTED for any of these:
+WHAT IS NOT A CORRECTION â€” do NOT set verdict=CORRECTED for any of these:
 - Formatting differences: Doc AI returned a multi-line address block (including name, Attn, street, city/state/zip) and the data is from the right source block. Stripping it to just the street line is a formatting preference, not a correction. Mark VERIFIED.
 - Completeness preferences: Doc AI included more lines than the "minimum" needed. If the correct block was extracted, extra lines are not errors.
-- Abbreviation style: "CA" vs "California", "$1,234.56" vs "1234.56" — these are not corrections if the value is factually the same.
+- Abbreviation style: "CA" vs "California", "$1,234.56" vs "1234.56" â€” these are not corrections if the value is factually the same.
 - Date format normalization: if Doc AI returned a date in ISO format (e.g. "2025-01-15") or long form ("January 15, 2025") and it represents the SAME calendar date as MM/DD/YYYY ("01/15/2025"), set correctValue to MM/DD/YYYY and mark VERIFIED. Only mark CORRECTED if the actual day, month, or year is wrong.
 - Rewording correct descriptions: changing the phrasing of an accurate description is a preference, not a fix.
 Reserve CORRECTED strictly for: wrong source block, wrong jurisdiction, wrong/misread amount, factually incorrect data, wrong calendar date.
 
-ROUTED-TO (include on every field — indicates which layer is responsible for the final value):
+ROUTED-TO (include on every field â€” indicates which layer is responsible for the final value):
 - "docai": Doc AI extracted it correctly; you confirmed it (verdict=VERIFIED, confidence>=85). No Claude change was needed.
 - "claude-text": You verified it at low confidence (<85) OR you corrected or flagged it. Claude's text audit is authoritative for this field.
-- "claude-vision": Reserved for the future vision layer — do NOT assign this value in your response.
-Rule: if verdict=VERIFIED and confidence>=85 → routedTo="docai". All other cases → routedTo="claude-text".
+- "claude-vision": Reserved for the future vision layer â€” do NOT assign this value in your response.
+Rule: if verdict=VERIFIED and confidence>=85 â†’ routedTo="docai". All other cases â†’ routedTo="claude-text".
 
 DOMAIN RULES:
-1. ADDRESS PRIORITY (determines tax jurisdiction — critical):
-   CRITICAL — VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NEVER a valid ship-to. The vendor address appears in the letterhead, logo block, "From:", "Remit to:", or sender section at the top of the invoice — it is where the VENDOR is located, not where Accenture received or used the goods/services. If Doc AI placed a vendor/sender address into any ship-to field, that is a FACTUAL ERROR — mark CORRECTED. Detection: if the street/city in a Doc AI ship-to field matches the vendor's letterhead city or appears in the sender block, reject it.
-   EXPLICIT SHIP-TO BLOCK — READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED (provenance: extracted). Do NOT override an explicit Ship-To with a project or contract address — those are fallbacks only.
-   CRITICAL — BILL-TO ADDRESS EXCLUSION: A "Bill To:", "Billing Address", "Accounts Payable", or any block labeled as a billing or payment-routing address (including Accenture's own billing address, e.g. 500 W Madison, Chicago) is NEVER a valid ship-to, even as a last resort. Bill-to addresses route invoice payment, not goods/services delivery. If Doc AI placed a bill-to address into any ship-to field, that is a FACTUAL ERROR — mark CORRECTED. Detection: if a block is labeled "Bill To", "Billing", "Remit Payment To", "Accounts Payable", or "AP", reject it for shipTo.
+1. ADDRESS PRIORITY (determines tax jurisdiction â€” critical):
+   CRITICAL â€” VENDOR ADDRESS EXCLUSION: The vendor's/supplier's own address is NEVER a valid ship-to. The vendor address appears in the letterhead, logo block, "From:", "Remit to:", or sender section at the top of the invoice â€” it is where the VENDOR is located, not where Accenture received or used the goods/services. If Doc AI placed a vendor/sender address into any ship-to field, that is a FACTUAL ERROR â€” mark CORRECTED. Detection: if the street/city in a Doc AI ship-to field matches the vendor's letterhead city or appears in the sender block, reject it.
+   EXPLICIT SHIP-TO BLOCK â€” READ DIRECTLY (no inference needed): If the invoice has a labeled "Ship-To:", "Deliver To:", or equivalent address block, extract shipToAddress, shipToCity, shipToState, shipToCounty, and shipToPostalCode directly from it. Mark each field VERIFIED (provenance: extracted). Do NOT override an explicit Ship-To with a project or contract address â€” those are fallbacks only.
+   CRITICAL â€” BILL-TO ADDRESS EXCLUSION: A "Bill To:", "Billing Address", "Accounts Payable", or any block labeled as a billing or payment-routing address (including Accenture's own billing address, e.g. 500 W Madison, Chicago) is NEVER a valid ship-to, even as a last resort. Bill-to addresses route invoice payment, not goods/services delivery. If Doc AI placed a bill-to address into any ship-to field, that is a FACTUAL ERROR â€” mark CORRECTED. Detection: if a block is labeled "Bill To", "Billing", "Remit Payment To", "Accounts Payable", or "AP", reject it for shipTo.
    Use the priority chain below ONLY when no labeled Ship-To block is present:
    - CONSTRUCTION: Project Address > Contract Address
    - NON-CONSTRUCTION: Project Address > Contract Address
-   Once a fallback block wins, take all ship-to fields from that SAME block — never mix fields from different blocks. In the reason, state which block won and why Ship-To was absent. If Doc AI pulled fields from the vendor address, bill-to address, or from the wrong block, CORRECT them.
-   If NONE of the above valid blocks are present (only vendor address and/or bill-to/billing address exists, with no Project or Contract address): set correctValue to "Manual Action Required — no valid delivery address found" and mark FLAGGED for all ship-to fields. Do NOT use a bill-to or billing address as a fallback.
-   ADDRESS COMPLETENESS: If Doc AI extracted the correct block but included the recipient name, Attn line, or full multi-line address text, that is NOT an error — mark VERIFIED. Only CORRECT if the data came from the wrong block, the vendor address, or if city/state/zip are factually wrong.
-   PROJECT ADDRESS DERIVATION DISCIPLINE: projectAddress is valid ONLY if a dedicated block with BOTH street AND city is present on the invoice (ZIP is optional). A project/contract/job NAME line that contains a location (e.g. "Accenture: Denver 999 18th Street Ste. 900S") is a PROJECT NAME — it is NOT a project address block. Do NOT extract projectAddress* fields from a name line.
-   projectAddressCity, projectAddressState, projectAddressCounty, and projectAddressPostalCode derive ONLY from a valid projectAddress block. If projectAddress is null or blank (no valid street+city block exists), ALL of these MUST be null — never populate them independently from any other source.
+   Once a fallback block wins, take all ship-to fields from that SAME block â€” never mix fields from different blocks. In the reason, state which block won and why Ship-To was absent. If Doc AI pulled fields from the vendor address, bill-to address, or from the wrong block, CORRECT them.
+   If NONE of the above valid blocks are present (only vendor address and/or bill-to/billing address exists, with no Project or Contract address): set correctValue to "Manual Action Required â€” no valid delivery address found" and mark FLAGGED for all ship-to fields. Do NOT use a bill-to or billing address as a fallback.
+   ADDRESS COMPLETENESS: If Doc AI extracted the correct block but included the recipient name, Attn line, or full multi-line address text, that is NOT an error â€” mark VERIFIED. Only CORRECT if the data came from the wrong block, the vendor address, or if city/state/zip are factually wrong.
+   PROJECT ADDRESS DERIVATION DISCIPLINE: projectAddress is valid ONLY if a dedicated block with BOTH street AND city is present on the invoice (ZIP is optional). A project/contract/job NAME line that contains a location (e.g. "Accenture: Denver 999 18th Street Ste. 900S") is a PROJECT NAME â€” it is NOT a project address block. Do NOT extract projectAddress* fields from a name line.
+   projectAddressCity, projectAddressState, projectAddressCounty, and projectAddressPostalCode derive ONLY from a valid projectAddress block. If projectAddress is null or blank (no valid street+city block exists), ALL of these MUST be null â€” never populate them independently from any other source.
    When a project name line contains a location (e.g. "Accenture: Denver"), route the location city (e.g. "Denver") to contractDetailsCity and the street to contractDetails (if a street follows the name). If Doc AI incorrectly populated projectAddressCity/State from a name line rather than a valid block, mark those fields CORRECTED with correctValue="" and route the city to contractDetailsCity instead.
 2. VENDOR NAME: legal entity issuing the invoice, not the remit-to processor.
 3. PO NUMBER: 10-digit number starting with 6 for Accenture POs.
-4. DATES: The app is US-based; expected display format is MM/DD/YYYY. If Doc AI returned the same date in a different format (ISO, long-form, etc.), set correctValue to MM/DD/YYYY and mark VERIFIED — format-only normalization is NOT a correction. Only mark CORRECTED if the actual calendar date (day, month, or year) is factually wrong.
+4. DATES: The app is US-based; expected display format is MM/DD/YYYY. If Doc AI returned the same date in a different format (ISO, long-form, etc.), set correctValue to MM/DD/YYYY and mark VERIFIED â€” format-only normalization is NOT a correction. Only mark CORRECTED if the actual calendar date (day, month, or year) is factually wrong.
 5. AMOUNTS: strip currency symbols; use current-period/total-due, not cumulative.${schemaType === 'construction' ? `
-   CONSTRUCTION grossAmount — two sources depending on document type:
-   (A) SWORN STATEMENT PAGE PRESENT (any page whose content has "SWORN STATEMENT", "TOTAL LABOR & MATERIAL", "THIS PAYMENT" column headers, or line items with pageType="sworn"): grossAmount = the value printed in the "THIS PAYMENT" column on the "TOTAL LABOR & MATERIAL TO COMPLETE" row (or GRAND TOTAL/TOTAL row) of the Sworn Statement. Read that printed cell VERBATIM from the invoice text. CRITICAL: workCompletedThisPeriodTotal is extracted from the CONTINUATION SHEET and may differ from the Sworn Statement THIS PAYMENT total — do NOT use workCompletedThisPeriodTotal to override or correct grossAmount on sworn-statement invoices. If Doc AI's grossAmount matches the Sworn Statement THIS PAYMENT TOTAL row, mark it VERIFIED even if it differs from workCompletedThisPeriodTotal.
+   CONSTRUCTION grossAmount â€” two sources depending on document type:
+   (A) SWORN STATEMENT PAGE PRESENT (any page whose content has "SWORN STATEMENT", "TOTAL LABOR & MATERIAL", "THIS PAYMENT" column headers, or line items with pageType="sworn"): grossAmount = the value printed in the "THIS PAYMENT" column on the "TOTAL LABOR & MATERIAL TO COMPLETE" row (or GRAND TOTAL/TOTAL row) of the Sworn Statement. Read that printed cell VERBATIM from the invoice text. CRITICAL: workCompletedThisPeriodTotal is extracted from the CONTINUATION SHEET and may differ from the Sworn Statement THIS PAYMENT total â€” do NOT use workCompletedThisPeriodTotal to override or correct grossAmount on sworn-statement invoices. If Doc AI's grossAmount matches the Sworn Statement THIS PAYMENT TOTAL row, mark it VERIFIED even if it differs from workCompletedThisPeriodTotal.
    (B) NO SWORN STATEMENT (continuation sheet / schedule of values only): grossAmount = Continuation Sheet Column E "THIS PERIOD" total row, by priority: (1) GRAND TOTAL/GRAND TOTALS row in Col A, else (2) TOTAL/TOTALS, else (3) SUBTOTALS; use the LAST such occurrence.
-   UNIVERSAL RULES (both cases): NEVER re-sum individual contractor/subcontractor rows — the printed total-row value is authoritative. NEVER source grossAmount from: Contract Price, Contract Amount, Total to Date, Amount Paid, Balance Due, Previous Payments, Current Payment Due, or Amount Certified — even if those are larger or more prominent. NEVER use an individual numbered line row. 0.00 is valid; if the required column/row is absent, return NULL. Mark CORRECTED only when Doc AI sourced from a forbidden column (Contract Price, Total to Date, Amount Certified) — NOT when it sourced from the Sworn Statement THIS PAYMENT TOTAL row.` : ``}
-6. TAX AMOUNT RECOVERY: If the docAIValue for taxAmount/vendorTaxAmount is blank or null, scan the provided line items for any suppressed tax rows (description matching "sales tax", "tax", "VAT", "GST", or similar). If one or more are found, the correct taxAmount is the sum of those line amounts. Set verdict=CORRECTED, reason="Recovered from suppressed tax line '[exact description]' = [amount]" (list each line if more than one), routedTo="claude-text". This is a legitimate correction — Doc AI captured tax as a line row rather than a header field; the intelligence layer surfaces it as the vendor tax amount.
+   UNIVERSAL RULES (both cases): NEVER re-sum individual contractor/subcontractor rows â€” the printed total-row value is authoritative. NEVER source grossAmount from: Contract Price, Contract Amount, Total to Date, Amount Paid, Balance Due, Previous Payments, Current Payment Due, or Amount Certified â€” even if those are larger or more prominent. NEVER use an individual numbered line row. 0.00 is valid; if the required column/row is absent, return NULL. Mark CORRECTED only when Doc AI sourced from a forbidden column (Contract Price, Total to Date, Amount Certified) â€” NOT when it sourced from the Sworn Statement THIS PAYMENT TOTAL row.` : ``}
+6. TAX AMOUNT RECOVERY: If the docAIValue for taxAmount/vendorTaxAmount is blank or null, scan the provided line items for any suppressed tax rows (description matching "sales tax", "tax", "VAT", "GST", or similar). If one or more are found, the correct taxAmount is the sum of those line amounts. Set verdict=CORRECTED, reason="Recovered from suppressed tax line '[exact description]' = [amount]" (list each line if more than one), routedTo="claude-text". This is a legitimate correction â€” Doc AI captured tax as a line row rather than a header field; the intelligence layer surfaces it as the vendor tax amount.
    Conversely, if a header taxAmount field IS populated and it matches a suppressed tax line total, mark it VERIFIED (the header field and line agree).
 
 CROSS-FIELD CONSISTENCY CHECKS (report each pass/fail with detail):
@@ -1783,35 +1843,35 @@ LINE ITEMS - audit every line; classify freight; code does the math:
 - CORRECT page-2+ column drift using page-1 headers.
 - ${schemaType === 'construction' ? 'CONSTRUCTION: current-period column (Work Completed This Period > Current Bill > This Period); prefer Sworn Statement totals.' : 'NON-CONSTRUCTION: keep lines where amount != 0; use current-period/invoice column.'}
 - For EACH line output: unspsc, description, amount (raw, exactly as extracted), isFreight, lineVerdict, lineReason, lineConfidence.
-- isFreight classification follows the line's SUBJECT — what the line ultimately charges for — not its financial framing ("deposit", "prepayment", "credit" do not change the subject). Apply these rules in order:
-  (a) DIRECT FREIGHT LINE → isFreight=true: description IS a freight/shipping service as its primary subject: "Shipping", "Freight", "Delivery", "Handling", "Cartage", "Courier", "Air Freight", "Shipping & Handling". Match these as core/primary descriptors, NOT naive substrings — "shipping dock installation" is NOT freight (the subject is the dock installation).
-  (b) DEPOSIT/PREPAYMENT FOR FREIGHT → isFreight=true: when a line is a deposit or prepayment and its purpose is a freight/shipping subject, the subject determines classification. Examples: "Deposit for Estimated Travel and Shipping" → subject is Travel-and-Shipping → isFreight=true; "50% deposit for Estimated Shipping and Travel" → isFreight=true; "Deposit for Equipment" → subject is Equipment → isFreight=false.
-  (c) COMBINED TRAVEL-AND-SHIPPING → isFreight=true: a description naming both travel and shipping as a unit (e.g. "Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight. "Travel" or "Travel Expenses" ALONE (no freight/shipping keyword) is NOT freight.
-  (d) AMBIGUOUS → isFreight=false: if genuinely uncertain whether the subject is freight or a billable service, keep as billable and set lineVerdict="FLAGGED".
+- isFreight classification follows the line's SUBJECT â€” what the line ultimately charges for â€” not its financial framing ("deposit", "prepayment", "credit" do not change the subject). Apply these rules in order:
+  (a) DIRECT FREIGHT LINE â†’ isFreight=true: description IS a freight/shipping service as its primary subject: "Shipping", "Freight", "Delivery", "Handling", "Cartage", "Courier", "Air Freight", "Shipping & Handling". Match these as core/primary descriptors, NOT naive substrings â€” "shipping dock installation" is NOT freight (the subject is the dock installation).
+  (b) DEPOSIT/PREPAYMENT FOR FREIGHT â†’ isFreight=true: when a line is a deposit or prepayment and its purpose is a freight/shipping subject, the subject determines classification. Examples: "Deposit for Estimated Travel and Shipping" â†’ subject is Travel-and-Shipping â†’ isFreight=true; "50% deposit for Estimated Shipping and Travel" â†’ isFreight=true; "Deposit for Equipment" â†’ subject is Equipment â†’ isFreight=false.
+  (c) COMBINED TRAVEL-AND-SHIPPING â†’ isFreight=true: a description naming both travel and shipping as a unit (e.g. "Estimated Travel and Shipping", "Travel and Freight", "Shipping and Travel") is freight. "Travel" or "Travel Expenses" ALONE (no freight/shipping keyword) is NOT freight.
+  (d) AMBIGUOUS â†’ isFreight=false: if genuinely uncertain whether the subject is freight or a billable service, keep as billable and set lineVerdict="FLAGGED".
   NEVER set isFreight=true based solely on the dollar amount matching a shipping total.
-- FREIGHT TAX DETECTION — when isFreight=true, ALSO report freightTaxed (true | false | null):
-  · freightTaxed=true ONLY when the invoice OBSERVABLY shows tax applied to this shipping/freight charge. Observable evidence means one of: (1) a tax amount is printed on or in a tax column adjacent to the freight line itself; (2) a separate tax line in the line-item table explicitly covers freight (e.g. "Tax on Shipping", "Freight Tax", "GST on Freight", "Sales Tax on Freight Charges"); (3) an invoice note or label visible on the page explicitly states that freight/shipping is subject to tax for this invoice.
-  · freightTaxed=false ONLY when the invoice OBSERVABLY shows no tax on the shipping charge — e.g. a note explicitly states "Freight is not taxable" or "Shipping exempt from tax", or the tax line's stated base demonstrably excludes freight, or the freight line has no tax column while goods lines do.
-  · freightTaxed=null when tax on freight CANNOT BE DETERMINED by reading the invoice text. This IS the correct answer when: the invoice shows a freight line and a tax total but no clear link between them; when you can only infer from effective-rate arithmetic that freight might be in the taxable base; or when the invoice simply does not address taxability of freight.
-  HONESTY RULE — totals-based inference is NOT observation: if the only available signal is arithmetic (effective tax rate is slightly higher than the nominal rate, suggesting freight is probably included), that is inference, not an observable fact. Return freightTaxed=null. The downstream system will categorise it as Uncertain. Never set freightTaxed=true based solely on totals patterns.
+- FREIGHT TAX DETECTION â€” when isFreight=true, ALSO report freightTaxed (true | false | null):
+  Â· freightTaxed=true ONLY when the invoice OBSERVABLY shows tax applied to this shipping/freight charge. Observable evidence means one of: (1) a tax amount is printed on or in a tax column adjacent to the freight line itself; (2) a separate tax line in the line-item table explicitly covers freight (e.g. "Tax on Shipping", "Freight Tax", "GST on Freight", "Sales Tax on Freight Charges"); (3) an invoice note or label visible on the page explicitly states that freight/shipping is subject to tax for this invoice.
+  Â· freightTaxed=false ONLY when the invoice OBSERVABLY shows no tax on the shipping charge â€” e.g. a note explicitly states "Freight is not taxable" or "Shipping exempt from tax", or the tax line's stated base demonstrably excludes freight, or the freight line has no tax column while goods lines do.
+  Â· freightTaxed=null when tax on freight CANNOT BE DETERMINED by reading the invoice text. This IS the correct answer when: the invoice shows a freight line and a tax total but no clear link between them; when you can only infer from effective-rate arithmetic that freight might be in the taxable base; or when the invoice simply does not address taxability of freight.
+  HONESTY RULE â€” totals-based inference is NOT observation: if the only available signal is arithmetic (effective tax rate is slightly higher than the nominal rate, suggesting freight is probably included), that is inference, not an observable fact. Return freightTaxed=null. The downstream system will categorise it as Uncertain. Never set freightTaxed=true based solely on totals patterns.
   freightTaxed is only meaningful on freight lines (isFreight=true). Set freightTaxed=null on every non-freight line.
-- SOURCE CONSTRAINT: Only emit line items from the INVOICE LINE-ITEM TABLE (the structured grid of description/amount rows). Do NOT emit freight/shipping/tax amounts visible in the invoice TOTALS SECTION or SUMMARY AREA (e.g. a row "Shipping: $3,632.99" or "Tax: $700" in the totals block at the bottom of the invoice) as lineItems — those are header-level summary values already captured as fields (shippingCostHeader, taxAmount, grossAmount). Emitting totals-section rows as line items causes them to be suppressed and permanently lost from the gross.
-- SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE. Never suppress a line item because its amount matches shippingCostHeader, a subtotal row, or a totals-section value — those are header/aggregate figures and must not drive individual line-item suppression.
-- Credit, discount, or adjustment lines (e.g. "Credit", "Service Credit", "Rate Adjustment") are real billable line items — NEVER suppress them as freight or tax, even if their dollar amount equals a freight or tax figure shown elsewhere on the invoice.
-- Do NOT compute freightAmount, netAmount, or itemAmount — code handles freight distribution.
+- SOURCE CONSTRAINT: Only emit line items from the INVOICE LINE-ITEM TABLE (the structured grid of description/amount rows). Do NOT emit freight/shipping/tax amounts visible in the invoice TOTALS SECTION or SUMMARY AREA (e.g. a row "Shipping: $3,632.99" or "Tax: $700" in the totals block at the bottom of the invoice) as lineItems â€” those are header-level summary values already captured as fields (shippingCostHeader, taxAmount, grossAmount). Emitting totals-section rows as line items causes them to be suppressed and permanently lost from the gross.
+- SUPPRESSION SOURCE RULE: Suppress a line as freight or tax ONLY when that line IS ITSELF a freight/tax ROW IN THE LINE-ITEM TABLE. Never suppress a line item because its amount matches shippingCostHeader, a subtotal row, or a totals-section value â€” those are header/aggregate figures and must not drive individual line-item suppression.
+- Credit, discount, or adjustment lines (e.g. "Credit", "Service Credit", "Rate Adjustment") are real billable line items â€” NEVER suppress them as freight or tax, even if their dollar amount equals a freight or tax figure shown elsewhere on the invoice.
+- Do NOT compute freightAmount, netAmount, or itemAmount â€” code handles freight distribution.
 
 LINE ITEM VERDICT RULES (audit each line against the invoice text):
-- "VERIFIED" — amount and description match the source document; this is a real billable line.
-- "CORRECTED" — Doc AI misread the amount or description; output the corrected amount/description and explain in lineReason (e.g. "Doc AI read 3,930 as 39.30 — corrected to match invoice").
-- "SUPPRESSED" — this row must NOT be a billable line: PO/Ariba reference rows, subtotal/total rows, breakdown sub-rows labeled "included in total above", tax lines, or freight/shipping lines (use isFreight=true for freight; still set lineVerdict="SUPPRESSED" on freight lines). Do NOT classify travel/expense receipts (subway fare, taxi, hotel, meal, transit) as PO/PR — those are REIMBURSABLE BACKUP RECEIPTS handled below. Explain in lineReason.
-- "SUPPRESSED" (REIMBURSABLE BACKUP RECEIPTS): An expense invoice may show per-person/vendor reimbursable SUMMARY LINES (a person's name or consulting-firm name paired with a dollar total, e.g. "Sheehan, David $114.00", "THE ROCK BROOK CONSULTING GROUP PA $2,930.00", "Ivanoff $128.80") alongside individual backup-detail receipts for each person (subway fare, bus/transit ticket, taxi, Uber/Lyft, parking, hotel night, meal, mileage, gas, toll — often with a date prefix, e.g. "1/8/2025 Subway to Penn Station NYC $2.90"). KEEP the per-person/vendor SUMMARY LINES — they are real billable lines (lineVerdict="VERIFIED"). SUPPRESS the individual backup receipts only: lineVerdict="SUPPRESSED", lineReason="Backup receipt detail — rolls into reimbursable summary; suppressed to prevent double-counting". Emit a lineItemCorrections entry for each suppressed receipt: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt for [person/vendor name] — individual transaction rolled into summary total", oldValue=[amount as string], newValue="0". CRITICAL DISTINCTIONS — (a) Named person/vendor lines (Rock Brook, Sheehan, Ivanoff) are ALWAYS summary lines — NEVER suppress them as backup receipts. (b) "Total Reimbursables" / "Total Expenses" aggregate lines are already caught by the SUPPRESSED subtotal rule above — do NOT use them as the summary-line anchor here. (c) Individual transit/expense receipts are NOT PO/PR references. ONLY suppress backup receipts when a matching named-person summary line exists; if no clear summary exists, keep lines as VERIFIED/FLAGGED.
-- "FLAGGED" — ambiguous; needs human review.
+- "VERIFIED" â€” amount and description match the source document; this is a real billable line.
+- "CORRECTED" â€” Doc AI misread the amount or description; output the corrected amount/description and explain in lineReason (e.g. "Doc AI read 3,930 as 39.30 â€” corrected to match invoice").
+- "SUPPRESSED" â€” this row must NOT be a billable line: PO/Ariba reference rows, subtotal/total rows, breakdown sub-rows labeled "included in total above", tax lines, or freight/shipping lines (use isFreight=true for freight; still set lineVerdict="SUPPRESSED" on freight lines). Do NOT classify travel/expense receipts (subway fare, taxi, hotel, meal, transit) as PO/PR â€” those are REIMBURSABLE BACKUP RECEIPTS handled below. Explain in lineReason.
+- "SUPPRESSED" (REIMBURSABLE BACKUP RECEIPTS): An expense invoice may show per-person/vendor reimbursable SUMMARY LINES (a person's name or consulting-firm name paired with a dollar total, e.g. "Sheehan, David $114.00", "THE ROCK BROOK CONSULTING GROUP PA $2,930.00", "Ivanoff $128.80") alongside individual backup-detail receipts for each person (subway fare, bus/transit ticket, taxi, Uber/Lyft, parking, hotel night, meal, mileage, gas, toll â€” often with a date prefix, e.g. "1/8/2025 Subway to Penn Station NYC $2.90"). KEEP the per-person/vendor SUMMARY LINES â€” they are real billable lines (lineVerdict="VERIFIED"). SUPPRESS the individual backup receipts only: lineVerdict="SUPPRESSED", lineReason="Backup receipt detail â€” rolls into reimbursable summary; suppressed to prevent double-counting". Emit a lineItemCorrections entry for each suppressed receipt: action="SUPPRESSED_BREAKUP", description=[backup line description], reason="Backup receipt for [person/vendor name] â€” individual transaction rolled into summary total", oldValue=[amount as string], newValue="0". CRITICAL DISTINCTIONS â€” (a) Named person/vendor lines (Rock Brook, Sheehan, Ivanoff) are ALWAYS summary lines â€” NEVER suppress them as backup receipts. (b) "Total Reimbursables" / "Total Expenses" aggregate lines are already caught by the SUPPRESSED subtotal rule above â€” do NOT use them as the summary-line anchor here. (c) Individual transit/expense receipts are NOT PO/PR references. ONLY suppress backup receipts when a matching named-person summary line exists; if no clear summary exists, keep lines as VERIFIED/FLAGGED.
+- "FLAGGED" â€” ambiguous; needs human review.
 
 LINE ITEM OUTPUT MODE:
-- CONSTRUCTION invoice: output ONE consolidated line (isFreight=false, lineVerdict="VERIFIED"): description "Non-Residential building construction services", amount = the SAME value used for grossAmount per the construction grossAmount rule above — the printed TOTAL ROW value from the THIS PAYMENT column (Sworn Statement) or Column E THIS PERIOD (Continuation Sheet only). NEVER re-sum individual contractor/subcontractor rows to compute this amount — read the printed total-row cell VERBATIM. The consolidated line amount and the grossAmount field must be identical.
+- CONSTRUCTION invoice: output ONE consolidated line (isFreight=false, lineVerdict="VERIFIED"): description "Non-Residential building construction services", amount = the SAME value used for grossAmount per the construction grossAmount rule above â€” the printed TOTAL ROW value from the THIS PAYMENT column (Sworn Statement) or Column E THIS PERIOD (Continuation Sheet only). NEVER re-sum individual contractor/subcontractor rows to compute this amount â€” read the printed total-row cell VERBATIM. The consolidated line amount and the grossAmount field must be identical.
 - NON-CONSTRUCTION invoice: output ALL lines including freight (isFreight=true) and suppressed rows, each with their lineVerdict. Code will filter displayable lines.
 
-FIELD SOURCE ANCHOR — for these fields only (grossAmount, taxAmount, shippingCostHeader, shipToAddress, shipToCity, shipToState, shipToPostalCode) add a "source" key: a short plain-text string naming the page and labeled element you read to arrive at correctValue. Format: "Page N · [labeled element/column/row]" (e.g. "Page 5 · Sworn Statement · THIS PAYMENT column · TOTAL LABOR & MATERIAL row", "Page 1 · invoice header · Ship To block"). HONESTY RULE: if you cannot confidently name the specific page and element from the invoice text, return source: null — NEVER fabricate a page number or row label you did not observe. For all other fields, set source: null.
+FIELD SOURCE ANCHOR â€” for these fields only (grossAmount, taxAmount, shippingCostHeader, shipToAddress, shipToCity, shipToState, shipToPostalCode) add a "source" key: a short plain-text string naming the page and labeled element you read to arrive at correctValue. Format: "Page N Â· [labeled element/column/row]" (e.g. "Page 5 Â· Sworn Statement Â· THIS PAYMENT column Â· TOTAL LABOR & MATERIAL row", "Page 1 Â· invoice header Â· Ship To block"). HONESTY RULE: if you cannot confidently name the specific page and element from the invoice text, return source: null â€” NEVER fabricate a page number or row label you did not observe. For all other fields, set source: null.
 
 OUTPUT - return ONLY this JSON, no markdown:
 {
@@ -1819,7 +1879,7 @@ OUTPUT - return ONLY this JSON, no markdown:
   "invoiceTaxRate": 0,
   "vendorTaxAmount": null,
   "fields": [
-    { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED|CORRECTED|FLAGGED", "confidence": 0, "reason": "Specific evidence for THIS field only — e.g. 'Doc AI read X from the Y block; correct value per Z rule is W'", "taxCritical": true, "routedTo": "docai|claude-text", "source": null }
+    { "fieldName": "vendorName", "docAIValue": "", "correctValue": "", "verdict": "VERIFIED|CORRECTED|FLAGGED", "confidence": 0, "reason": "Specific evidence for THIS field only â€” e.g. 'Doc AI read X from the Y block; correct value per Z rule is W'", "taxCritical": true, "routedTo": "docai|claude-text", "source": null }
   ],
   "lineItems": [
     { "unspsc": "", "description": "", "amount": 0, "isFreight": false, "freightTaxed": null, "lineVerdict": "VERIFIED|CORRECTED|SUPPRESSED|FLAGGED", "lineReason": "", "lineConfidence": 95, "page": 1 }
@@ -1835,7 +1895,7 @@ OUTPUT - return ONLY this JSON, no markdown:
   "overallConfidence": 0
 }
 
-Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRESSED". Set invoiceTaxRate to the tax rate printed on the invoice (0 if absent). Set vendorTaxAmount to the total tax dollar amount from the invoice: use the printed header tax field if present; if that field is absent or null, scan your suppressed line items for any tax row (description matching "Sales Tax", "Tax", "VAT", "GST", or similar) and return their sum as vendorTaxAmount — this is a legitimate recovery, not an estimate, because tax printed only as a line item rather than a header field is still the vendor's stated tax amount. Set to null only if no tax amount appears anywhere on the invoice (neither as a header field nor as a suppressed line item). Audit at minimum these fields, each with its own independent verdict, confidence, and specific evidence-based reason: vendorName, invoiceNumber, documentDate, purchaseOrderNumber, grossAmount, taxAmount, shipToAddress, shipToCity, shipToState, shipToPostalCode. Mark shipTo*, grossAmount, taxAmount as taxCritical=true. A reason of "Verified against invoice" or "Matches extracted value" is not acceptable — every reason must state what the text actually shows and where.`;
+Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRESSED". Set invoiceTaxRate to the tax rate printed on the invoice (0 if absent). Set vendorTaxAmount to the total tax dollar amount from the invoice: use the printed header tax field if present; if that field is absent or null, scan your suppressed line items for any tax row (description matching "Sales Tax", "Tax", "VAT", "GST", or similar) and return their sum as vendorTaxAmount â€” this is a legitimate recovery, not an estimate, because tax printed only as a line item rather than a header field is still the vendor's stated tax amount. Set to null only if no tax amount appears anywhere on the invoice (neither as a header field nor as a suppressed line item). Audit at minimum these fields, each with its own independent verdict, confidence, and specific evidence-based reason: vendorName, invoiceNumber, documentDate, purchaseOrderNumber, grossAmount, taxAmount, shipToAddress, shipToCity, shipToState, shipToPostalCode. Mark shipTo*, grossAmount, taxAmount as taxCritical=true. A reason of "Verified against invoice" or "Matches extracted value" is not acceptable â€” every reason must state what the text actually shows and where.`;
   }
 
   _getMockAudit(docAIHeader, docAILineItems) {
@@ -1854,7 +1914,7 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
         amount: li.amount || 0, netAmount: li.amount || 0,
         itemAmount: li.itemAmount != null ? li.itemAmount : (li.amount || 0),
         freightAmount: li.freightAmount || 0,
-        lineVerdict: 'VERIFIED', lineReason: 'AI Core unavailable — Doc AI passthrough',
+        lineVerdict: 'VERIFIED', lineReason: 'AI Core unavailable â€” Doc AI passthrough',
         lineConfidence: 50, lineAction: li.lineAction || 'KEEP', page: li.page || 1
       })),
       lineItemCorrections: [], consistencyChecks: [], freightTotal: 0,
@@ -1875,7 +1935,7 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
     const modelName     = process.env.AI_CORE_MODEL || 'anthropic--claude-4.5-sonnet';
 
     if (!authUrl || !clientId || !deploymentUrl) {
-      LOG.warn('_classifyLineItemsUNSPSC: AI Core credentials not configured — skipping');
+      LOG.warn('_classifyLineItemsUNSPSC: AI Core credentials not configured â€” skipping');
       return lineItems;
     }
 
@@ -1889,7 +1949,7 @@ Set lineItemsTotal = sum of all lineItems[].amount where lineVerdict != "SUPPRES
       const { access_token } = await tokenRes.json();
 
       const itemList = billable.map((li, i) =>
-        `${i + 1}. "${li.description || ''}" — $${(+(li.itemAmount || li.amount || 0)).toFixed(2)}`
+        `${i + 1}. "${li.description || ''}" â€” $${(+(li.itemAmount || li.amount || 0)).toFixed(2)}`
       ).join('\n');
 
       const prompt = `You are a procurement taxonomy expert. Classify each invoice line item with a UNSPSC code at the FAMILY level (4 digits: segment + family, e.g. "4320" not "43201500").
@@ -1900,14 +1960,14 @@ Return ONLY a JSON array with exactly ${billable.length} object(s), one per inpu
 Confidence rules:
 - "high": clear product/service match to a known UNSPSC family
 - "medium": plausible but description is generic or spans categories
-- "low": vague description, unfamiliar product, or could reasonably be multiple families — mark low rather than guess
+- "low": vague description, unfamiliar product, or could reasonably be multiple families â€” mark low rather than guess
 
 Anchor examples (calibrate here):
-- "Cisco Catalyst 9300 48-Port Switch" → {"unspscCode":"4320","unspscDescription":"Computers and peripherals and components","confidence":"high"}
-- "Annual SonicWall Firewall Support Renewal" → {"unspscCode":"4323","unspscDescription":"Software","confidence":"high"}
-- "Professional Services - Implementation" → {"unspscCode":"8010","unspscDescription":"Management advisory services","confidence":"medium"}
-- "Non-Residential building construction services" → {"unspscCode":"7210","unspscDescription":"Building construction and support","confidence":"high"}
-- "Maintenance and repair" → {"unspscCode":"7219","unspscDescription":"Maintenance repair and operations","confidence":"medium"}
+- "Cisco Catalyst 9300 48-Port Switch" â†’ {"unspscCode":"4320","unspscDescription":"Computers and peripherals and components","confidence":"high"}
+- "Annual SonicWall Firewall Support Renewal" â†’ {"unspscCode":"4323","unspscDescription":"Software","confidence":"high"}
+- "Professional Services - Implementation" â†’ {"unspscCode":"8010","unspscDescription":"Management advisory services","confidence":"medium"}
+- "Non-Residential building construction services" â†’ {"unspscCode":"7210","unspscDescription":"Building construction and support","confidence":"high"}
+- "Maintenance and repair" â†’ {"unspscCode":"7219","unspscDescription":"Maintenance repair and operations","confidence":"medium"}
 
 Lines to classify:
 ${itemList}
@@ -1955,13 +2015,13 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
         });
       });
     } catch (err) {
-      LOG.warn('_classifyLineItemsUNSPSC failed — skipping UNSPSC classification: ' + err.message);
+      LOG.warn('_classifyLineItemsUNSPSC failed â€” skipping UNSPSC classification: ' + err.message);
       return lineItems;
     }
   }
 
   // Determines taxability (TAXABLE | EXEMPT | UNCERTAIN) per line item for the given jurisdiction.
-  // Uses AI reasoning over UNSPSC code + description — provisional, NOT authoritative tax law.
+  // Uses AI reasoning over UNSPSC code + description â€” provisional, NOT authoritative tax law.
   // Returns original lineItems unchanged on any failure.
   async _determineTaxability(lineItems, jurisdiction) {
     const billable = lineItems.filter(li => !li.isFreight && li.lineVerdict !== 'SUPPRESSED');
@@ -1975,7 +2035,7 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     const modelName     = process.env.AI_CORE_MODEL || 'anthropic--claude-4.5-sonnet';
 
     if (!authUrl || !clientId || !deploymentUrl) {
-      LOG.warn('_determineTaxability: AI Core credentials not configured — skipping');
+      LOG.warn('_determineTaxability: AI Core credentials not configured â€” skipping');
       return lineItems;
     }
 
@@ -1997,16 +2057,16 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
 
       const prompt = `You are a sales and use tax analyst. For each invoice line item, determine whether it is TAXABLE, EXEMPT, or UNCERTAIN under the general sales tax rules for ${state}${city ? ' (' + city + ')' : ''}.
 
-IMPORTANT RULES — READ CAREFULLY:
+IMPORTANT RULES â€” READ CAREFULLY:
 - Return "UNCERTAIN" whenever taxability is not clearly established. Uncertainty is expected and correct for many item types.
 - Do NOT force TAXABLE or EXEMPT when you are not highly confident. When in doubt, UNCERTAIN is always the right answer.
-- This is an AI estimate from training knowledge — NOT authoritative tax law. Be conservative and flag uncertainty liberally.
+- This is an AI estimate from training knowledge â€” NOT authoritative tax law. Be conservative and flag uncertainty liberally.
 - Common reasons to return UNCERTAIN: ambiguous service-vs-goods distinction, SaaS/software (varies widely by state), professional or managed services (often exempt but varies), mixed transactions, special-use equipment, items that depend on buyer type or exemption certificates.
 - EXEMPT requires a clear, well-established statutory exemption in ${state} (e.g. prescription drugs, qualifying resale, certain manufacturing equipment with clear basis).
 - TAXABLE requires the item to clearly be tangible personal property or a clearly taxable service in ${state}.
 
 Return ONLY a JSON array with exactly ${billable.length} object(s), one per input line, in the same order:
-{"taxability":"TAXABLE","taxabilityReason":"Networking hardware — tangible personal property, generally taxable in ${state}"}
+{"taxability":"TAXABLE","taxabilityReason":"Networking hardware â€” tangible personal property, generally taxable in ${state}"}
 
 Allowed values for taxability: "TAXABLE", "EXEMPT", "UNCERTAIN"
 taxabilityReason: one sentence explaining the determination; note key uncertainty when UNCERTAIN.
@@ -2058,12 +2118,12 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
         });
       });
     } catch (err) {
-      LOG.warn('_determineTaxability failed — skipping: ' + err.message);
+      LOG.warn('_determineTaxability failed â€” skipping: ' + err.message);
       return lineItems;
     }
   }
 
-  // AI freight taxability prediction — UNCERTAIN-leaning.
+  // AI freight taxability prediction â€” UNCERTAIN-leaning.
   // Freight taxability is the most state-specific, structure-dependent call; this leans hard toward UNCERTAIN.
   // Returns { taxability, taxabilityReason, source, separatelyStated, fobTerms } or null if no freight lines.
   async _determineFreightTaxability(freightLines, jurisdiction, freightSeparatelyStated, fobTerms) {
@@ -2078,7 +2138,7 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
     const modelName     = process.env.AI_CORE_MODEL || 'anthropic--claude-4.5-sonnet';
 
     if (!authUrl || !clientId || !deploymentUrl) {
-      return { taxability: 'UNCERTAIN', taxabilityReason: 'AI Core not configured — defaulting to UNCERTAIN', source: 'AI-fallback', separatelyStated: freightSeparatelyStated, fobTerms: fobTerms || null };
+      return { taxability: 'UNCERTAIN', taxabilityReason: 'AI Core not configured â€” defaulting to UNCERTAIN', source: 'AI-fallback', separatelyStated: freightSeparatelyStated, fobTerms: fobTerms || null };
     }
 
     const state = (jurisdiction.state || '').trim().toUpperCase();
@@ -2095,17 +2155,17 @@ Return ONLY the JSON array. No explanation, no markdown fences.`;
 
       const freightDesc = freight.map(li => `"${li.description || 'Freight'}" ($${parseFloat(li.amount || li.netAmount || 0).toFixed(2)})`).join(', ');
       const separatedNote = freightSeparatelyStated
-        ? 'Yes — freight is separately stated as a distinct line item on the invoice'
-        : 'No — freight appears as a bundled or header amount';
+        ? 'Yes â€” freight is separately stated as a distinct line item on the invoice'
+        : 'No â€” freight appears as a bundled or header amount';
       const fobNote = fobTerms ? `FOB terms: ${fobTerms}` : 'FOB terms: not specified on invoice';
 
       const prompt = `You are a sales and use tax analyst. Predict whether freight/shipping charges on this invoice are subject to sales tax under the general rules for ${state}${city ? ' (' + city + ')' : ''}.
 
-CRITICAL RULES — READ CAREFULLY:
-- Default to "UNCERTAIN" in almost all cases. Freight taxability is the most state-specific, structure-dependent call in sales tax — more so than goods or services.
+CRITICAL RULES â€” READ CAREFULLY:
+- Default to "UNCERTAIN" in almost all cases. Freight taxability is the most state-specific, structure-dependent call in sales tax â€” more so than goods or services.
 - Return "TAXABLE" ONLY when: (1) the state clearly taxes delivery charges as a general rule AND (2) freight is separately stated AND (3) no structural ambiguity remains (no S&H bundling, no FOB-origin argument).
-- Return "EXEMPT" ONLY when: the state has a well-established exemption for separately-stated delivery charges that is broadly settled law — not an obscure ruling.
-- If you have any doubt at all, return "UNCERTAIN". This is an internal AI estimate used for preliminary review — not authoritative tax advice.
+- Return "EXEMPT" ONLY when: the state has a well-established exemption for separately-stated delivery charges that is broadly settled law â€” not an obscure ruling.
+- If you have any doubt at all, return "UNCERTAIN". This is an internal AI estimate used for preliminary review â€” not authoritative tax advice.
 - Common reasons to return UNCERTAIN: shipping-and-handling (S&H) bundles (service vs. freight), state rules unclear or recently changed, FOB-origin vs. destination argument possible, combined freight+other charges, state with mixed treatment by jurisdiction.
 
 Freight details for this invoice:
@@ -2115,7 +2175,7 @@ Freight details for this invoice:
 - Jurisdiction: ${state}${city ? ', ' + city : ''}
 
 Return ONLY a JSON object (no markdown, no code fences, no explanation outside the JSON):
-{"taxability":"TAXABLE"|"EXEMPT"|"UNCERTAIN","taxabilityReason":"one sentence — identify the key factor and acknowledge uncertainty where present"}`;
+{"taxability":"TAXABLE"|"EXEMPT"|"UNCERTAIN","taxabilityReason":"one sentence â€” identify the key factor and acknowledge uncertainty where present"}`;
 
       const orchBody = {
         orchestration_config: {
@@ -2153,12 +2213,12 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       };
     } catch (err) {
       cds.log('intelligence').warn('_determineFreightTaxability failed: ' + err.message);
-      return { taxability: 'UNCERTAIN', taxabilityReason: 'AI freight taxability prediction unavailable — defaulting to UNCERTAIN', source: 'AI-fallback', separatelyStated: freightSeparatelyStated, fobTerms: fobTerms || null };
+      return { taxability: 'UNCERTAIN', taxabilityReason: 'AI freight taxability prediction unavailable â€” defaulting to UNCERTAIN', source: 'AI-fallback', separatelyStated: freightSeparatelyStated, fobTerms: fobTerms || null };
     }
   }
 
   // Builds the freight reconciliation object:
-  // vendorFreightTax (factual) vs estimatedFreightTax (STZ rate × freight, gated by AI taxability) → variance → verdict.
+  // vendorFreightTax (factual) vs estimatedFreightTax (STZ rate Ã— freight, gated by AI taxability) â†’ variance â†’ verdict.
   _buildFreightReconciliation(shippingTaxedByVendor, freightTaxabilityPrediction, invoiceFreightTotal, taxEngineResults) {
     const stzResult = taxEngineResults && taxEngineResults.salestaxzip;
     const stzAvail  = stzResult && stzResult.available && stzResult.combinedRate != null;
@@ -2170,14 +2230,14 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     // Rate completeness: detect state-only rate (no county/local tiers returned non-zero by STZ API).
     // When only the STATE tier has rate > 0, the estimate may understate tax if county/local applies.
     // Note: some states (e.g. VA Northern Virginia) fold regional levies into the state figure, so
-    // "state-only" does not always mean incomplete — but we cannot confirm completeness from the API
+    // "state-only" does not always mean incomplete â€” but we cannot confirm completeness from the API
     // response alone, so we flag it for disclosure.
     const _jurs = stzAvail && stzResult.jurisdictions ? stzResult.jurisdictions : [];
     const hasLocalTier = _jurs.some(j => j.type !== 'STATE' && (j.rate || 0) > 0);
     const rateIncomplete = stzAvail && _jurs.length > 0 && !hasLocalTier;
     const rateSource = stzAvail ? (stzResult.rateSource || 'SalesTaxZip') : null;
 
-    // Estimated freight tax — gated by AI taxability prediction (UNCERTAIN → conservative: apply rate)
+    // Estimated freight tax â€” gated by AI taxability prediction (UNCERTAIN â†’ conservative: apply rate)
     let estimatedFreightTax = null;
     if (stzAvail && freightAmt > 0 && freightTaxabilityPrediction) {
       estimatedFreightTax = freightTaxabilityPrediction.taxability === 'EXEMPT'
@@ -2185,7 +2245,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         : +(freightAmt * combinedRate / 100).toFixed(2);
     }
 
-    // Vendor actual freight tax amount — factual from invoice (null if amount not extractable)
+    // Vendor actual freight tax amount â€” factual from invoice (null if amount not extractable)
     const vendorFreightTax = (shippingTaxedByVendor && shippingTaxedByVendor.state === 'YES')
       ? shippingTaxedByVendor.amount  // may be null even when state=YES (amount not extracted)
       : null;
@@ -2202,14 +2262,14 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     } else if (!stzAvail) {
       verdict = 'NO_RATE';
     } else if (stvState === 'NO') {
-      // Vendor charged $0 freight tax — compare against estimate
+      // Vendor charged $0 freight tax â€” compare against estimate
       variance = estimatedFreightTax != null ? +(0 - estimatedFreightTax).toFixed(2) : null;
       verdict  = estimatedFreightTax != null
         ? (estimatedFreightTax <= FREIGHT_TAX_TOLERANCE ? 'ACCURATELY_TAXED' : 'UNDER_TAXED')
         : 'UNAVAILABLE';
     } else if (stvState === 'YES') {
       if (vendorFreightTax == null) {
-        // State YES but amount not extracted — can confirm vendor taxed freight but can't reconcile
+        // State YES but amount not extracted â€” can confirm vendor taxed freight but can't reconcile
         verdict = 'VENDOR_AMOUNT_UNKNOWN';
       } else if (estimatedFreightTax == null) {
         verdict = 'NO_RATE';
@@ -2238,14 +2298,14 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       variance,
       verdict,
       tolerance:   FREIGHT_TAX_TOLERANCE,
-      note: 'Freight tax reconciliation — illustrative: STZ rate + AI freight-taxability prediction (UNCERTAIN-leaning). ' +
-            'Vendor freight tax: factual from invoice. Estimated freight tax: single destination-ZIP rate — situs not modeled. ' +
-            'Vertex-authoritative pending. Non-authoritative AI estimate — not compliance-grade.'
+      note: 'Freight tax reconciliation â€” illustrative: STZ rate + AI freight-taxability prediction (UNCERTAIN-leaning). ' +
+            'Vendor freight tax: factual from invoice. Estimated freight tax: single destination-ZIP rate â€” situs not modeled. ' +
+            'Vertex-authoritative pending. Non-authoritative AI estimate â€” not compliance-grade.'
     };
   }
 
-  // Reconciliation verdict only: estimatedTax (STZ) − vendorTax → UNDERCHARGED / OVERCHARGED /
-  // ACCURATELY_CHARGED. Separate from the FD §5.8 processing status (_buildTaxabilityStatus).
+  // Reconciliation verdict only: estimatedTax (STZ) âˆ’ vendorTax â†’ UNDERCHARGED / OVERCHARGED /
+  // ACCURATELY_CHARGED. Separate from the FD Â§5.8 processing status (_buildTaxabilityStatus).
   // Always illustrative while STZ+GenAI is the stand-in; flips to authoritative when Vertex connects.
   _buildChargeabilityStatus(taxEngineResults, vendorTaxAmount) {
     const TOLERANCE = 1.00;
@@ -2261,7 +2321,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         vendorTax: vendorTaxAmount,
         tolerance: TOLERANCE,
         illustrative: true,
-        note: 'reconciliation verdict (Vertex pending) — no rate available for this jurisdiction'
+        note: 'reconciliation verdict (Vertex pending) â€” no rate available for this jurisdiction'
       };
     }
 
@@ -2274,7 +2334,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         vendorTax: null,
         tolerance: TOLERANCE,
         illustrative: true,
-        note: 'reconciliation verdict (Vertex pending) — vendor tax amount not found on invoice'
+        note: 'reconciliation verdict (Vertex pending) â€” vendor tax amount not found on invoice'
       };
     }
 
@@ -2295,21 +2355,21 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       vendorTax: vendorTaxAmount,
       tolerance: TOLERANCE,
       illustrative: true,
-      note: 'reconciliation verdict (Vertex pending) — SalesTaxZip+AI stand-in; authoritative when Vertex connects'
+      note: 'reconciliation verdict (Vertex pending) â€” SalesTaxZip+AI stand-in; authoritative when Vertex connects'
     };
   }
 
-  // FD fields 41–50: Self-Assessed Use Tax Accrual
-  // Formalizes Tax Amount Difference as the proposed accrual — not a new calculation.
-  // UNDERCHARGED → accrue the difference to G/L 714000.
-  // OVERCHARGED / ACCURATELY_CHARGED → $0 with reason noted.
+  // FD fields 41â€“50: Self-Assessed Use Tax Accrual
+  // Formalizes Tax Amount Difference as the proposed accrual â€” not a new calculation.
+  // UNDERCHARGED â†’ accrue the difference to G/L 714000.
+  // OVERCHARGED / ACCURATELY_CHARGED â†’ $0 with reason noted.
   // Always illustrative while STZ+GenAI stands in for Vertex.
   _buildAccrualResult(chargeabilityResult, taxEngineResults, invoiceNetTotal) {
     const GL_ACCOUNT = '714000';
     const cr = chargeabilityResult;
     const stz = taxEngineResults && taxEngineResults.salestaxzip;
     const stzAvail = !!(stz && stz.available);
-    const ILLUSTRATIVE_LABEL = 'Proposed accrual (illustrative — STZ+AI estimate, Vertex authoritative pending)';
+    const ILLUSTRATIVE_LABEL = 'Proposed accrual (illustrative â€” STZ+AI estimate, Vertex authoritative pending)';
 
     if (!cr || cr.chargeabilityStatus === 'UNAVAILABLE' || cr.chargeabilityStatus === 'VENDOR_TAX_UNKNOWN') {
       return {
@@ -2319,7 +2379,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         jurisdictionBreakdown: [],
         illustrative: true,
         illustrativeLabel: ILLUSTRATIVE_LABEL,
-        note: cr ? cr.note : 'Charge status unavailable — accrual cannot be determined'
+        note: cr ? cr.note : 'Charge status unavailable â€” accrual cannot be determined'
       };
     }
 
@@ -2333,16 +2393,16 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     } else if (status === 'OVERCHARGED') {
       proposedAccrualAmount = 0;
       accrualStatus = 'NO_ACCRUAL';
-      accrualNote = 'Vendor overcharged by $' + Math.abs(cr.taxAmountDifference).toFixed(2) + '; no accrual — overpayment noted';
+      accrualNote = 'Vendor overcharged by $' + Math.abs(cr.taxAmountDifference).toFixed(2) + '; no accrual â€” overpayment noted';
     } else {
       proposedAccrualAmount = 0;
       accrualStatus = 'NO_ACCRUAL';
       accrualNote = 'Accurately charged within $' + (cr.tolerance || 1).toFixed(2) + ' tolerance; no accrual required';
     }
 
-    // FD fields 33–40: jurisdiction breakdown per tier (State / County / City / District)
+    // FD fields 33â€“40: jurisdiction breakdown per tier (State / County / City / District)
     // accrualShare = tier's proportional slice of the accrual (= taxAmountDifference, not totalTax).
-    // Proportioning: tier_accrual = (tier_taxAmount / totalTax) × accrual.
+    // Proportioning: tier_accrual = (tier_taxAmount / totalTax) Ã— accrual.
     // This makes tier accrual shares sum to the accrual amount, not to totalTax.
     const totalTax = cr.estimatedTax || 0;
     const jurisdictionBreakdown = (stzAvail && Array.isArray(stz.jurisdictions) && stz.jurisdictions.length > 0)
@@ -2358,10 +2418,10 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         }))
       : [];
 
-    // FD field 44: Invoice Tax Rate — denominator must match the system-rate base.
+    // FD field 44: Invoice Tax Rate â€” denominator must match the system-rate base.
     // The system rate (STZ combinedRate) applies to taxable lines only; exempt lines are zeroed
     // in STZ's per-line calculation. stz.jurisdictions[i].taxableAmount is the sum of non-exempt
-    // taxable amounts — all non-zero tiers share the same base, so take the first non-zero one.
+    // taxable amounts â€” all non-zero tiers share the same base, so take the first non-zero one.
     // Using invoiceNetTotal (full base) would produce a false rate when exempt lines exist.
     const systemRate = stzAvail ? (stz.combinedRate || null) : null;
     const stzTaxableBase = (stzAvail && Array.isArray(stz.jurisdictions) && stz.jurisdictions.length > 0)
@@ -2376,20 +2436,20 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       : (cr.vendorTax != null && stzTaxableBase != null && stzTaxableBase > 0)
         ? +((cr.vendorTax / stzTaxableBase) * 100).toFixed(4)
         : null;
-    // FD field 45: Rate difference only valid when no exempt lines —
+    // FD field 45: Rate difference only valid when no exempt lines â€”
     // if exempt lines exist we cannot verify the vendor's taxable base, making comparison unreliable
     const taxRateDifference = (!exemptLinesPresent && systemRate != null && invoiceEffectiveRate != null)
       ? +((systemRate - invoiceEffectiveRate).toFixed(4))
       : null;
     const rateComparisonNote = exemptLinesPresent
-      ? 'not comparable — exempt lines present; vendor taxable base unknown'
+      ? 'not comparable â€” exempt lines present; vendor taxable base unknown'
       : null;
 
     // Audit trail: taxable base source, taxability determination method, rate source
     const auditTrail = {
       taxableBase: {
         amount: stzTaxableBase,     // taxable-only base (exempt lines excluded); null when STZ unavailable
-        fullBase: invoiceNetTotal,  // full invoice base (all kept lines incl. exempt) — for reference
+        fullBase: invoiceNetTotal,  // full invoice base (all kept lines incl. exempt) â€” for reference
         source: 'Document AI extraction + Claude reconciliation',
         detail: exemptLinesPresent
           ? 'taxable-only base (exempt lines excluded by GenAI classification)'
@@ -2414,13 +2474,13 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     return {
       // FD field 41: Total Vertex Tax Amount (stand-in: STZ+GenAI estimate)
       totalVertexTaxAmount: cr.estimatedTax,
-      // FD field 43: Tax Amount – Invoice (vendor-charged)
+      // FD field 43: Tax Amount â€“ Invoice (vendor-charged)
       taxAmountInvoice: cr.vendorTax,
-      // FD field 44: Invoice Tax Rate (vendorTax / taxable base — exempt lines excluded)
+      // FD field 44: Invoice Tax Rate (vendorTax / taxable base â€” exempt lines excluded)
       invoiceEffectiveRate,
       stzTaxableBase,           // the denominator used; null when STZ unavailable
-      exemptLinesPresent,       // true when GenAI exempted ≥1 line (bases diverge)
-      // FD field 45: Tax Rate Difference (null when exempt lines present — not comparable)
+      exemptLinesPresent,       // true when GenAI exempted â‰¥1 line (bases diverge)
+      // FD field 45: Tax Rate Difference (null when exempt lines present â€” not comparable)
       taxRateDifference,
       rateComparisonNote,       // explanation when taxRateDifference is suppressed
       systemRate,
@@ -2430,9 +2490,9 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       accrualStatus,
       chargeabilityStatus: status,
       chargeabilityStatusLabel: cr.chargeabilityStatusLabel,
-      // Proposed accrual: UNDERCHARGED → taxAmountDifference; else $0
+      // Proposed accrual: UNDERCHARGED â†’ taxAmountDifference; else $0
       proposedAccrualAmount,
-      // FD fields 33–40: per-tier jurisdiction breakdown
+      // FD fields 33â€“40: per-tier jurisdiction breakdown
       jurisdictionBreakdown,
       // FD field 50: G/L account tag
       glAccount: GL_ACCOUNT,
@@ -2443,17 +2503,17 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     };
   }
 
-  // FD §5.8 processing status — three values, independent of the reconciliation verdict:
-  //   NO_ACTION_REQUIRED  — APC End value is zero (no use tax liability)
-  //   MANUAL_ACTION_REQUIRED — one or more FD triggers: (a) missing invoice/SCN, (b) missing
+  // FD Â§5.8 processing status â€” three values, independent of the reconciliation verdict:
+  //   NO_ACTION_REQUIRED  â€” APC End value is zero (no use tax liability)
+  //   MANUAL_ACTION_REQUIRED â€” one or more FD triggers: (a) missing invoice/SCN, (b) missing
   //                            mandatory inputs (ship-to, UNSPSC, amounts), (c) Vertex failure
-  //   CALCULATED          — stand-in: SalesTaxZip+GenAI; label notes Vertex-pending status
+  //   CALCULATED          â€” stand-in: SalesTaxZip+GenAI; label notes Vertex-pending status
   _buildTaxabilityStatus(apcEnd, manualAction) {
     if (apcEnd != null && apcEnd === 0) {
       return {
         taxabilityStatus: 'NO_ACTION_REQUIRED',
         taxabilityStatusLabel: 'No Action Required',
-        taxabilityStatusDetail: 'APC End value is zero — no use tax liability',
+        taxabilityStatusDetail: 'APC End value is zero â€” no use tax liability',
         manualActionCategories: []
       };
     }
@@ -2461,15 +2521,15 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     if (manualAction && manualAction.required) {
       const reasons = manualAction.reasons || [];
       const cats = [];
-      // (a) Missing Invoice PDF — SCNID absent or unknown
+      // (a) Missing Invoice PDF â€” SCNID absent or unknown
       if (reasons.some(r => /SCNID/i.test(r))) {
-        cats.push({ code: 'a', label: 'Missing Invoice PDF', detail: 'No SCN/URN — DFM fetch cannot proceed' });
+        cats.push({ code: 'a', label: 'Missing Invoice PDF', detail: 'No SCN/URN â€” DFM fetch cannot proceed' });
       }
-      // (b) Vertex Mandatory Inputs Missing — ship-to, postal, UNSPSC, or amount issues
+      // (b) Vertex Mandatory Inputs Missing â€” ship-to, postal, UNSPSC, or amount issues
       if (reasons.some(r => /ship.to|postal|UNSPSC|amount|confidence|Consistency/i.test(r))) {
         cats.push({ code: 'b', label: 'Vertex Mandatory Inputs Missing', detail: 'Ship-To, Postal Code, UNSPSC, or amount data unavailable' });
       }
-      // (c) Vertex Response Missing — technical failure (not yet wired; placeholder)
+      // (c) Vertex Response Missing â€” technical failure (not yet wired; placeholder)
       if (reasons.some(r => /vertex.*fail|technical.*fail/i.test(r))) {
         cats.push({ code: 'c', label: 'Vertex Response Missing', detail: 'UNSPSC not in Vertex or Vertex technical failure' });
       }
@@ -2486,7 +2546,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
 
     return {
       taxabilityStatus: 'CALCULATED',
-      taxabilityStatusLabel: 'Calculated — illustrative, Vertex pending',
+      taxabilityStatusLabel: 'Calculated â€” illustrative, Vertex pending',
       taxabilityStatusDetail: 'Tax calculated using SalesTaxZip+GenAI stand-in; authoritative when Vertex connects',
       manualActionCategories: []
     };
@@ -2512,7 +2572,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
   // extras: optional { fobTerms: string|null }
   _buildTaxPayload(lineItems, jurisdiction, invoiceMode, totals, extras) {
     const billable = lineItems.filter(li => !li.isFreight && li.lineVerdict !== 'SUPPRESSED');
-    // Five-factor freight taxability inputs — passed to the tax engine; app makes no taxability decision.
+    // Five-factor freight taxability inputs â€” passed to the tax engine; app makes no taxability decision.
     const freightSeparatelyStated = (totals && (totals.freight || 0) > 0) ? true : false;
     const fobTerms = (extras && extras.fobTerms) || null;
     return {
@@ -2723,7 +2783,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     const vMap = new Map((visionFields || []).map(f => [f.fieldName, f]));
     const norm = s => s != null ? String(s).toLowerCase().replace(/[\s,.$]/g, '') : '';
 
-    // Header comparison — one row per schema field
+    // Header comparison â€” one row per schema field
     const header = hFields.map(name => {
       const f  = fMap.get(name);
       const vf = vMap.get(name);
@@ -2740,16 +2800,16 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         if (cvAgree && !dcAgree) {
           bestValue = cv; bestLayer = 'claude'; // Claude+Vision agree, DocAI is the outlier
         } else if (dvAgree && !dcAgree) {
-          /* DocAI+Vision agree, Claude is the outlier — bestValue stays dv */ bestLayer = 'docai';
+          /* DocAI+Vision agree, Claude is the outlier â€” bestValue stays dv */ bestLayer = 'docai';
         } else if (dcAgree && !dvAgree) {
-          /* DocAI+Claude agree, Vision is the outlier — bestValue stays dv */ bestLayer = 'docai';
+          /* DocAI+Claude agree, Vision is the outlier â€” bestValue stays dv */ bestLayer = 'docai';
         } else {
-          // All agree or 3-way split — last-writer wins
+          // All agree or 3-way split â€” last-writer wins
           if (cNorm !== dNorm) { bestValue = cv; bestLayer = 'claude'; }
           if (vNorm !== norm(cv)) { bestValue = vv; bestLayer = 'vision'; }
         }
       } else {
-        // 1 or 2 layers — last-writer wins (original logic)
+        // 1 or 2 layers â€” last-writer wins (original logic)
         if (claudeRan && cv != null && norm(cv) !== norm(dv)) { bestValue = cv; bestLayer = 'claude'; }
         if (visionRan && vv != null && norm(vv) !== norm(cv != null ? cv : dv)) { bestValue = vv; bestLayer = 'vision'; }
       }
@@ -2765,7 +2825,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       };
     });
 
-    // Line-item comparison — one entry per docAI line, fields matched across layers
+    // Line-item comparison â€” one entry per docAI line, fields matched across layers
     const getAmt    = li => parseFloat(li.itemAmount != null ? li.itemAmount : (li.amount || li.netPrice || 0)) || 0;
     const AMT_TOL   = 0.01;
     const matchLine = (pool, ref) => pool && pool.length
@@ -2828,7 +2888,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       const da = getAmt(dl);
       const dd = dl.description || '';
 
-      // Amount is the strong key — find any unused Vision line within ±0.01
+      // Amount is the strong key â€” find any unused Vision line within Â±0.01
       let amtIdx = -1;
       for (const i of unused) {
         if (amtClose(da, getAmt(vLines[i]))) { amtIdx = i; break; }
@@ -2851,7 +2911,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         return;
       }
 
-      // No amount match — try description match
+      // No amount match â€” try description match
       let bestIdx = -1, bestSim = 0;
       for (const i of unused) {
         const sim = jaccard(dd, vLines[i].description || '');
@@ -2870,7 +2930,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
           docAI: { desc: dd, amount: da },
           vision: { desc: vl.description || '', amount: va },
           note: nearMiss
-            ? `Likely OCR single-digit misread: Doc AI ${da.toFixed(2)} vs Vision ${va.toFixed(2)} — diff ${diff >= 0 ? '+' : ''}${diff.toFixed(2)}. Verify by reading the invoice image.`
+            ? `Likely OCR single-digit misread: Doc AI ${da.toFixed(2)} vs Vision ${va.toFixed(2)} â€” diff ${diff >= 0 ? '+' : ''}${diff.toFixed(2)}. Verify by reading the invoice image.`
             : `Doc AI: ${da.toFixed(2)}, Vision: ${va.toFixed(2)}, diff: ${(da - va).toFixed(2)}`
         });
         return;
@@ -2899,7 +2959,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
 
   _runConsistencyChecks(result) {
     const checks = [];
-    const fmt = n => n != null ? (+n).toFixed(2) : '—';
+    const fmt = n => n != null ? (+n).toFixed(2) : 'â€”';
 
     // 1. lineItemsSumToNet
     const lineItems = result.lineItems || [];
@@ -2911,7 +2971,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       checks.push({
         name: 'lineItemsSumToNet', passed, severity: 'error',
         message: passed
-          ? `Line items sum to ${fmt(lineSum)} ≈ invoice net ${fmt(netTotal)}.`
+          ? `Line items sum to ${fmt(lineSum)} â‰ˆ invoice net ${fmt(netTotal)}.`
           : `Line items sum to ${fmt(lineSum)} but invoice net is ${fmt(netTotal)} (diff ${diff >= 0 ? '+' : ''}${fmt(diff)}).`,
         values: { lineSum, netTotal, diff }, provenance: 'inferred'
       });
@@ -2928,7 +2988,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         name: 'grossEqualsNetPlusTax', passed, severity: 'error',
         message: passed
           ? `Gross ${fmt(gross)} = net ${fmt(netTotal)} + tax ${fmt(vendorTax)}.`
-          : `Gross ${fmt(gross)} ≠ net ${fmt(netTotal)} + tax ${fmt(vendorTax)} = ${fmt(expected)} (diff ${diff2 >= 0 ? '+' : ''}${fmt(diff2)}).`,
+          : `Gross ${fmt(gross)} â‰  net ${fmt(netTotal)} + tax ${fmt(vendorTax)} = ${fmt(expected)} (diff ${diff2 >= 0 ? '+' : ''}${fmt(diff2)}).`,
         values: { gross, netTotal, vendorTax, expected, diff: diff2 }, provenance: 'inferred'
       });
     }
@@ -2942,7 +3002,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       checks.push({
         name: 'freightReconciles', passed, severity: 'error',
         message: passed
-          ? `Distributed freight ${fmt(freightSum)} ≈ freight source ${fmt(freightTotal)}.`
+          ? `Distributed freight ${fmt(freightSum)} â‰ˆ freight source ${fmt(freightTotal)}.`
           : `Distributed freight ${fmt(freightSum)} != freight source ${fmt(freightTotal)}.`,
         values: { freightSum, freightTotal, diff: diff3 }, provenance: 'inferred'
       });
@@ -2973,7 +3033,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       values: { shipToCity, shipToPostalCode }, provenance: 'inferred'
     });
 
-    // 6. retainageSelfConsistency — catch within-invoice OCR near-misses on retainage rows
+    // 6. retainageSelfConsistency â€” catch within-invoice OCR near-misses on retainage rows
     // Uses rawLineItems (pre-consolidation) when available so construction schedules of values are checked
     const getLineAmt = li => parseFloat(li.netAmount != null ? li.netAmount : (li.amount != null ? li.amount : 0)) || 0;
     const checkLines = result.rawLineItems || result.lineItems || [];
@@ -2985,8 +3045,26 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       if (maxDiff >= 0.02) {
         checks.push({
           name: 'retainageSelfConsistency', passed: false, severity: 'warning',
-          message: `Retainage values on ${retainageLines.length} rows disagree: [${amounts.map(fmt).join(', ')}] — max diff ${fmt(maxDiff)}. Possible single-digit OCR misread; verify against invoice image.`,
+          message: `Retainage values on ${retainageLines.length} rows disagree: [${amounts.map(fmt).join(', ')}] â€” max diff ${fmt(maxDiff)}. Possible single-digit OCR misread; verify against invoice image.`,
           values: { amounts, maxDiff, descriptions: retainageLines.map(li => li.description) },
+          provenance: 'inferred'
+        });
+      }
+    }
+
+// 7. amountSourceConflict — flags when the same amount was extracted from two
+    //    sources (line-item sum and header field) and they disagree materially.
+    //    resolveAmount already chose the winning value; this check surfaces the
+    //    discrepancy for human review.
+    const amountSources = result.amountSources || [];
+    for (const src of amountSources) {
+      if (src && src.conflict) {
+        checks.push({
+          name: 'amountSourceConflict', passed: false, severity: 'warning',
+          message: src.label + ': line-item total (' + fmt(src.lineTotal) + ') and header field (' +
+                   fmt(src.headerAmt) + ') disagree by ' + fmt(src.diff) +
+                   '. Resolved using ' + src.source + '-item value. Possible page-scope duplication — verify against invoice image.',
+          values: { label: src.label, lineTotal: src.lineTotal, headerAmt: src.headerAmt, diff: src.diff, resolvedUsing: src.source },
           provenance: 'inferred'
         });
       }
@@ -3015,7 +3093,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     if (!result.shipToCity || !result.shipToPostalCode) {
       const alreadyListed = (checks || []).some(c => c.name === 'shipToCompleteForVertex' && !c.passed);
       if (!alreadyListed) {
-        reasons.push('Ship-to city or postal code missing — cannot determine jurisdiction.');
+        reasons.push('Ship-to city or postal code missing â€” cannot determine jurisdiction.');
       }
     }
 
@@ -3026,7 +3104,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       }
     });
 
-    // Vertex fail — uncomment when Vertex is wired:
+    // Vertex fail â€” uncomment when Vertex is wired:
     // if (result.vertexFailed) reasons.push('Vertex tax lookup failed.');
 
     return { required: reasons.length > 0, reasons };
@@ -3046,7 +3124,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     const parseAddrParts = addr => {
       if (!addr) return {};
       // Use the first match whose 2-letter code is a real US state abbreviation,
-      // falling back to the last match — prevents "AP 13737" (attention + street number) false hits.
+      // falling back to the last match â€” prevents "AP 13737" (attention + street number) false hits.
       const US_STATES = new Set(['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
         'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND',
         'OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC','PR','GU','VI','AS','MP']);
@@ -3061,7 +3139,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
         // stop at digit-leading tokens (street numbers) or alphanumeric suite tokens like "B2", "A1"
         if (/^\d/.test(words[i]) || /^[A-Z][0-9]/.test(words[i])) break;
         // "CITY" appearing before already-collected city words is an address label (e.g. "GEEK SQUAD CITY BROOKS"),
-        // not part of the city name — stop to avoid "SQUAD CITY BROOKS" instead of "BROOKS".
+        // not part of the city name â€” stop to avoid "SQUAD CITY BROOKS" instead of "BROOKS".
         // When "CITY" appears first (no words collected yet), it may be part of the name (e.g. "OKLAHOMA CITY"), so continue.
         if (words[i] === 'CITY' && cityWords.length > 0) break;
         cityWords.unshift(words[i]);
@@ -3090,14 +3168,14 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       }
 
       if (!city && !postal) {
-        console.log('_resolveShipTo: SKIP %s — no city/postal (addr: "%s")', name, (b.addr || '').substring(0, 60));
+        console.log('_resolveShipTo: SKIP %s â€” no city/postal (addr: "%s")', name, (b.addr || '').substring(0, 60));
         continue;
       }
 
       const priorityNum = order.indexOf(name) + 1;
       const caption = `Resolved from: ${LABELS[name]} (priority ${priorityNum} for ${modeLabel}: ${priorityStr})`;
       const note = name === 'accenture'
-        ? 'Accenture billing address used — no higher-priority address available on the invoice; this is an approximation, not the delivery location.'
+        ? 'Accenture billing address used â€” no higher-priority address available on the invoice; this is an approximation, not the delivery location.'
         : null;
       const isExplicit = name === 'shipto';
       console.log('_resolveShipTo: winner=%s city=%s state=%s postal=%s explicit=%s', name, city, state, postal, isExplicit);
@@ -3109,11 +3187,11 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       };
     }
 
-    console.log('_resolveShipTo: no block won — returning nulls');
+    console.log('_resolveShipTo: no block won â€” returning nulls');
     return {
       shipToAddress: null, shipToCity: null, shipToState: null, shipToPostalCode: null, shipToCounty: null,
       resolvedFrom: 'none', resolvedFromCaption: null, resolvedFromNote: null,
-      provenance: 'inferred', provenanceDetail: 'no address block resolved — all priority blocks empty'
+      provenance: 'inferred', provenanceDetail: 'no address block resolved â€” all priority blocks empty'
     };
   }
 
@@ -3143,9 +3221,9 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     };
   }
 
-  // ── Vendor canonicalization ──────────────────────────────────────────────────
+  // â”€â”€ Vendor canonicalization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // SAP supplierName (from asset-report) is the primary identity.
-  // Normalize: uppercase, strip legal suffixes (LLC/INC/…) and punctuation → compact key.
+  // Normalize: uppercase, strip legal suffixes (LLC/INC/â€¦) and punctuation â†’ compact key.
   // "DWP AV LLC" and "DWP-AV LLC" both normalize to "DWPAV".
   _buildCanonicalVendorKey(asset, rawVendorName) {
     const _norm = name => String(name || '').toUpperCase()
@@ -3165,11 +3243,11 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       canonicalVendorKey: _norm(invoiceName),
       canonicalVendorName: invoiceName || null,
       vendorKeySource: 'unverified-invoice',
-      vendorKeyNote: 'No SAP asset record — vendor identity unverified; name from invoice extraction only'
+      vendorKeyNote: 'No SAP asset record â€” vendor identity unverified; name from invoice extraction only'
     };
   }
 
-  // ── Persistence record assembly ───────────────────────────────────────────────
+  // â”€â”€ Persistence record assembly â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Extracts the signals needed for vendor-intelligence aggregation from a processed
   // invoice result. Schema mirrors the vendor-store structure for easy HANA swap.
   _buildPersistenceRecord({ stage, documentId, invoiceMode, canonicalVendorKey, canonicalVendorName,
@@ -3329,7 +3407,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     return rows;
   }
 
-  // Cross-layer resolution of per-line freightTaxed signals → invoice-level shippingTaxedByVendor.
+  // Cross-layer resolution of per-line freightTaxed signals â†’ invoice-level shippingTaxedByVendor.
   // Each layer array contains that layer's suppressed lines (which carry freightTaxed on freight lines).
   // Pass [] for layers that have not run.
   _resolveShippingTaxed(docaiSuppressed, claudeSuppressed, visionSuppressed) {
@@ -3352,7 +3430,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       return null;
     };
 
-    // Collect only observed (non-null, non-undefined) signals — nulls mean "didn't determine," not "No"
+    // Collect only observed (non-null, non-undefined) signals â€” nulls mean "didn't determine," not "No"
     const activeSignals = [layerSignal(dFreight), layerSignal(cFreight), layerSignal(vFreight)]
       .filter(s => s === true || s === false);
 
@@ -3364,7 +3442,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
     const hasFalse = activeSignals.some(s => s === false);
 
     if (hasTrue && hasFalse) {
-      return { state: 'UNCERTAIN', label: 'Uncertain', reason: 'Layers disagree — review required', amount: null };
+      return { state: 'UNCERTAIN', label: 'Uncertain', reason: 'Layers disagree â€” review required', amount: null };
     }
 
     if (hasTrue) {
@@ -3379,7 +3457,7 @@ Return ONLY a JSON object (no markdown, no code fences, no explanation outside t
       };
     }
 
-    // hasFalse only — observed no tax on shipping
-    return { state: 'NO', label: 'No', reason: 'Observed on invoice — no tax on shipping', amount: null };
+    // hasFalse only â€” observed no tax on shipping
+    return { state: 'NO', label: 'No', reason: 'Observed on invoice â€” no tax on shipping', amount: null };
   }
 };
